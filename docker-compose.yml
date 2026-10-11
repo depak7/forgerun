@@ -1,0 +1,19 @@
+# Local development database. Start with: docker compose up -d
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: forgerun
+      POSTGRES_PASSWORD: forgerun
+      POSTGRES_DB: forgerun
+    ports:
+      - "127.0.0.1:5433:5432" # 5433 on the host so it never clashes with a local Postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "forgerun"]
+      interval: 2s
+      retries: 15
+
+volumes:
+  pgdata:
