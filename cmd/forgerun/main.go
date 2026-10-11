@@ -20,23 +20,32 @@ func main() {
 	if len(os.Args) < 2 {
 		usage()
 	}
+	var err error
 	switch os.Args[1] {
 	case "run":
-		if err := runCmd(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			var exitErr *sandbox.ExitError
-			if errors.As(err, &exitErr) {
-				os.Exit(2) // a command inside the sandbox failed
-			}
-			os.Exit(1)
-		}
+		err = runCmd(os.Args[2:])
+	case "serve":
+		err = serveCmd(os.Args[2:])
 	default:
 		usage()
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		var exitErr *sandbox.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(2) // a command inside the sandbox failed
+		}
+		os.Exit(1)
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: forgerun run -repo <git-url> -prompt <task> [-timeout 15m] [-out out]")
+	fmt.Fprint(os.Stderr, `usage:
+  forgerun serve [-addr 127.0.0.1:8080] [-workers 2] [-timeout 15m] [-out out] [-db url]
+  forgerun run   -repo <git-url> -prompt <task> [-timeout 15m] [-out out]
+
+The database URL defaults to $FORGERUN_DATABASE_URL, then the docker-compose dev database.
+`)
 	os.Exit(64)
 }
 
@@ -82,4 +91,15 @@ func runCmd(args []string) error {
 		fmt.Println("result:", res.PatchPath)
 	}
 	return nil
+}
+
+const defaultDatabaseURL = "postgres://forgerun:forgerun@localhost:5433/forgerun?sslmode=disable"
+
+// dbFlag registers -db on fs. Precedence: flag, then env, then default.
+func dbFlag(fs *flag.FlagSet) *string {
+	def := os.Getenv("FORGERUN_DATABASE_URL")
+	if def == "" {
+		def = defaultDatabaseURL
+	}
+	return fs.String("db", def, "Postgres URL (env FORGERUN_DATABASE_URL)")
 }

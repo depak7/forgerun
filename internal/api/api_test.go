@@ -215,8 +215,8 @@ func TestCancel(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, apiErr := decode(t, do(h, "POST", "/api/tasks/"+tk.ID+"/cancel", ""), http.StatusConflict)
-		if apiErr.Code != "conflict" {
-			t.Errorf("code = %q", apiErr.Code)
+		if apiErr.Code != "conflict" || apiErr.Message != "task is already succeeded" {
+			t.Errorf("error = %+v", apiErr)
 		}
 	})
 
@@ -256,6 +256,14 @@ func TestLogAndPatch(t *testing.T) {
 		t.Errorf("patch on queued task: %q", apiErr.Message)
 	}
 	decode(t, do(h, "GET", "/api/tasks/"+queued.ID+"/log", ""), http.StatusNotFound)
+
+	failed := createTask(t, h)
+	s.Start(ctx, failed.ID)
+	s.Finish(ctx, failed.ID, store.Outcome{State: task.Failed, Error: "boom"})
+	_, apiErr = decode(t, do(h, "GET", "/api/tasks/"+failed.ID+"/patch", ""), http.StatusNotFound)
+	if apiErr.Message != "task did not finish successfully" {
+		t.Errorf("patch on failed task: %q", apiErr.Message)
+	}
 	decode(t, do(h, "GET", "/api/tasks/bogus/log", ""), http.StatusNotFound)
 }
 
@@ -288,10 +296,25 @@ func TestTaskJSONShape(t *testing.T) {
 			t.Errorf("task JSON missing %q", k)
 		}
 	}
+	if !strings.HasSuffix(string(fields["created_at"]), `Z"`) {
+		t.Errorf("created_at = %s, want UTC (…Z)", fields["created_at"])
+	}
 	if string(fields["started_at"]) != "null" || string(fields["state"]) != `"queued"` {
 		t.Errorf("started_at=%s state=%s", fields["started_at"], fields["state"])
 	}
 	if _, ok := fields["log_path"]; ok {
 		t.Error("server file paths must not be exposed")
+	}
+}
+
+func TestLogRequests(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	h := LogRequests(log, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusTeapot, "short and stout")
+	}))
+	do(h, "GET", "/x", "")
+	if !strings.Contains(buf.String(), "status=418") || !strings.Contains(buf.String(), "path=/x") {
+		t.Errorf("log line: %s", buf.String())
 	}
 }

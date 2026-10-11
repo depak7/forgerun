@@ -63,8 +63,18 @@ type taskJSON struct {
 func toJSON(r store.Record) taskJSON {
 	return taskJSON{
 		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.Agent, State: r.State, Error: r.Error,
-		HasPatch: r.PatchPath != "", CreatedAt: r.CreatedAt, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+		HasPatch: r.PatchPath != "", CreatedAt: r.CreatedAt.UTC(), StartedAt: utc(r.StartedAt), FinishedAt: utc(r.FinishedAt),
 	}
+}
+
+// utc returns t in UTC, so clients always get "…Z" timestamps regardless of
+// the server's time zone.
+func utc(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	u := t.UTC()
+	return &u
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -131,13 +141,33 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !s.pool.Cancel(id) { // not running here: maybe still queued
-		if err := s.store.Cancel(r.Context(), id); err != nil {
-			s.storeError(w, r, err) // 404 not found, 409 already finished
+		err := s.store.Cancel(r.Context(), id)
+		if errors.Is(err, task.ErrInvalidTransition) {
+			s.cancelConflict(w, r, id)
+			return
+		}
+		if err != nil {
+			s.storeError(w, r, err)
 			return
 		}
 	}
 	// 202: a running task stops asynchronously; its state changes shortly.
 	s.writeTask(w, r, id, http.StatusAccepted)
+}
+
+// cancelConflict explains why a task can't be cancelled, in the user's terms.
+func (s *Server) cancelConflict(w http.ResponseWriter, r *http.Request, id string) {
+	rec, err := s.store.Get(r.Context(), id)
+	if err != nil {
+		s.storeError(w, r, err)
+		return
+	}
+	if rec.State.Terminal() {
+		writeError(w, http.StatusConflict, "task is already "+string(rec.State))
+		return
+	}
+	// Claimed by a worker but not yet registered with the pool: a brief window.
+	writeError(w, http.StatusConflict, "task is starting; retry the cancel")
 }
 
 func (s *Server) taskLog(w http.ResponseWriter, r *http.Request) {
@@ -159,8 +189,11 @@ func (s *Server) taskPatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if rec.PatchPath == "" {
 		msg := "task made no changes"
-		if !rec.State.Terminal() {
+		switch {
+		case !rec.State.Terminal():
 			msg = "task has not finished"
+		case rec.State != task.Succeeded:
+			msg = "task did not finish successfully"
 		}
 		writeError(w, http.StatusNotFound, msg)
 		return
