@@ -4,6 +4,6 @@ out/
 # built binaries
 /forgerun
 /run-task
-/sandbox-hello
+/sandbox-demo
 
 .DS_Store
