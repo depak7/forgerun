@@ -1,0 +1,9 @@
+# generated task output (patches, logs)
+out/
+
+# built binaries
+/forgerun
+/run-task
+/sandbox-hello
+
+.DS_Store
