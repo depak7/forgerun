@@ -25,6 +25,8 @@ func New() *Store { return &Store{tasks: map[string]*store.Record{}} }
 
 func (s *Store) Close() {}
 
+func (s *Store) Ping(context.Context) error { return nil }
+
 func (s *Store) Create(_ context.Context, t task.Task, agent string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -54,5 +54,7 @@ type Store interface {
 	Get(ctx context.Context, id string) (Record, error)
 	// List returns the most recent tasks first.
 	List(ctx context.Context, limit int) ([]Record, error)
+	// Ping reports whether the store is reachable.
+	Ping(ctx context.Context) error
 	Close()
 }

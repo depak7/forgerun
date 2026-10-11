@@ -41,6 +41,8 @@ func Open(ctx context.Context, url string) (*Store, error) {
 
 func (s *Store) Close() { s.pool.Close() }
 
+func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
 func (s *Store) Create(ctx context.Context, t task.Task, agent string) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO tasks (id, repo, prompt, agent, state) VALUES ($1, $2, $3, $4, $5)`,
