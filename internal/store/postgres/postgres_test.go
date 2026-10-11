@@ -164,3 +164,124 @@ func idsOf(recs []store.Record) []string {
 	}
 	return ids
 }
+
+func TestClaimOldestFirstAndEmpty(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	if _, ok, err := s.Claim(ctx); err != nil || ok {
+		t.Fatalf("Claim on empty queue: ok=%v err=%v", ok, err)
+	}
+
+	first, second := task.New("r", "first"), task.New("r", "second")
+	for _, tk := range []task.Task{first, second} {
+		if err := s.Create(ctx, tk, "cursor"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	rec, ok, err := s.Claim(ctx)
+	if err != nil || !ok {
+		t.Fatalf("Claim: ok=%v err=%v", ok, err)
+	}
+	if rec.ID != first.ID || rec.State != task.Running || rec.StartedAt == nil {
+		t.Errorf("Claim returned %+v, want %s running", rec, first.ID)
+	}
+}
+
+// Many workers claim at once: every task is claimed exactly once.
+func TestClaimIsExclusive(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	const tasks, workers = 5, 10
+	for range tasks {
+		if err := s.Create(ctx, task.New("r", "p"), "cursor"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var (
+		mu      sync.Mutex
+		claimed = map[string]int{}
+		wg      sync.WaitGroup
+	)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				rec, ok, err := s.Claim(ctx)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if !ok {
+					return // queue empty
+				}
+				mu.Lock()
+				claimed[rec.ID]++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if len(claimed) != tasks {
+		t.Errorf("%d distinct tasks claimed, want %d", len(claimed), tasks)
+	}
+	for id, n := range claimed {
+		if n != 1 {
+			t.Errorf("task %s claimed %d times", id, n)
+		}
+	}
+}
+
+func TestCancel(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	queued, running := task.New("r", "p"), task.New("r", "p")
+	for _, tk := range []task.Task{queued, running} {
+		if err := s.Create(ctx, tk, "cursor"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Start(ctx, running.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Cancel(ctx, queued.ID); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := s.Get(ctx, queued.ID)
+	if rec.State != task.Cancelled || rec.FinishedAt == nil {
+		t.Errorf("after Cancel: %+v", rec)
+	}
+
+	// Running tasks are cancelled by their worker, not by the store.
+	if err := s.Cancel(ctx, running.ID); !errors.Is(err, task.ErrInvalidTransition) {
+		t.Errorf("Cancel on running task: got %v, want ErrInvalidTransition", err)
+	}
+}
+
+func TestFailRunning(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	queued, running := task.New("r", "p"), task.New("r", "p")
+	for _, tk := range []task.Task{queued, running} {
+		if err := s.Create(ctx, tk, "cursor"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Start(ctx, running.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.FailRunning(ctx, "server restarted")
+	if err != nil || n != 1 {
+		t.Fatalf("FailRunning = %d, %v; want 1, nil", n, err)
+	}
+	rec, _ := s.Get(ctx, running.ID)
+	if rec.State != task.Failed || rec.Error != "server restarted" {
+		t.Errorf("running task after FailRunning: %+v", rec)
+	}
+	rec, _ = s.Get(ctx, queued.ID)
+	if rec.State != task.Queued {
+		t.Errorf("queued task must be untouched, got %s", rec.State)
+	}
+}

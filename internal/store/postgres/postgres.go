@@ -63,6 +63,42 @@ func (s *Store) Finish(ctx context.Context, id string, o store.Outcome) error {
 		nullable(o.Error), nullable(o.LogPath), nullable(o.PatchPath))
 }
 
+func (s *Store) Claim(ctx context.Context) (store.Record, bool, error) {
+	// SKIP LOCKED: rows another worker is claiming right now are skipped
+	// instead of waited on, so concurrent workers each get a different task.
+	row := s.pool.QueryRow(ctx, `
+		UPDATE tasks SET state = 'running', started_at = now()
+		WHERE state = 'queued' AND id = (
+			SELECT id FROM tasks WHERE state = 'queued'
+			ORDER BY created_at, id
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1)
+		RETURNING `+selectColumns)
+	rec, err := scanRecord(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Record{}, false, nil
+	}
+	if err != nil {
+		return store.Record{}, false, fmt.Errorf("claiming task: %w", err)
+	}
+	return rec, true, nil
+}
+
+func (s *Store) Cancel(ctx context.Context, id string) error {
+	return s.transition(ctx, id, task.Queued, task.Cancelled,
+		`UPDATE tasks SET state = $3, error = $4, finished_at = now() WHERE id = $1 AND state = $2`,
+		"cancelled by user")
+}
+
+func (s *Store) FailRunning(ctx context.Context, reason string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE tasks SET state = 'failed', error = $1, finished_at = now() WHERE state = 'running'`, reason)
+	if err != nil {
+		return 0, fmt.Errorf("failing running tasks: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // transition runs an UPDATE guarded by "AND state = from" (compare-and-swap),
 // so two processes can never both move the same task.
 // SQL args: $1 = id, $2 = from, $3 = to, then extra.

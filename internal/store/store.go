@@ -42,6 +42,15 @@ type Store interface {
 	Start(ctx context.Context, id string) error
 	// Finish moves a task from Running to a terminal state.
 	Finish(ctx context.Context, id string, o Outcome) error
+	// Claim atomically moves the oldest Queued task to Running and returns it.
+	// ok is false when the queue is empty. Safe to call from many workers.
+	Claim(ctx context.Context) (rec Record, ok bool, err error)
+	// Cancel moves a Queued task to Cancelled. Running tasks are cancelled by
+	// their worker instead, which then calls Finish.
+	Cancel(ctx context.Context, id string) error
+	// FailRunning marks every Running task as Failed with reason. Used at
+	// startup to recover tasks orphaned by a crash (single-instance only).
+	FailRunning(ctx context.Context, reason string) (int64, error)
 	Get(ctx context.Context, id string) (Record, error)
 	// List returns the most recent tasks first.
 	List(ctx context.Context, limit int) ([]Record, error)
