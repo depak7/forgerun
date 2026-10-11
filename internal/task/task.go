@@ -74,6 +74,7 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 		CPUs:        r.CPUs,
 		MemoryMiB:   r.MemMiB,
 		MaxLifetime: r.Timeout + 2*time.Minute, // backstop if we crash
+		Secrets:     r.Agent.Secrets(),
 	})
 	if err != nil {
 		return res, err

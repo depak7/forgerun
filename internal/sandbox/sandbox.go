@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,6 +21,15 @@ type Config struct {
 	// MaxLifetime is a VM-side kill switch: the runtime stops the VM after this
 	// long even if our process crashed and never called Destroy.
 	MaxLifetime time.Duration
+	Secrets     []Secret
+}
+
+// Secret is a credential the VM never sees. Inside the VM, EnvVar holds a
+// placeholder; the network proxy swaps in Value only for requests to AllowHosts.
+type Secret struct {
+	EnvVar     string
+	Value      string
+	AllowHosts []string // exact ("api2.cursor.sh") or wildcard ("*.cursor.sh")
 }
 
 // Cmd is a command to run in the sandbox. No shell is involved: Args are
@@ -60,13 +70,22 @@ func EnsureRuntime(ctx context.Context) error {
 
 // New boots a VM. The caller must call Destroy when done.
 func New(ctx context.Context, name string, cfg Config) (*Sandbox, error) {
-	vm, err := microsandbox.CreateSandbox(ctx, name,
+	opts := []microsandbox.SandboxOption{
 		microsandbox.WithImage(cfg.Image),
 		microsandbox.WithCPUs(cfg.CPUs),
 		microsandbox.WithMemory(cfg.MemoryMiB),
 		microsandbox.WithEphemeral(true),
 		microsandbox.WithMaxDuration(cfg.MaxLifetime),
-	)
+	}
+	if len(cfg.Secrets) > 0 {
+		entries := make([]microsandbox.SecretEntry, 0, len(cfg.Secrets))
+		for _, s := range cfg.Secrets {
+			entries = append(entries, microsandbox.Secret.Env(s.EnvVar, s.Value,
+				microsandbox.SecretEnvOptions{Allow: s.AllowHosts}))
+		}
+		opts = append(opts, microsandbox.WithSecrets(entries...))
+	}
+	vm, err := microsandbox.CreateSandbox(ctx, name, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating sandbox %s: %w", name, err)
 	}
@@ -127,6 +146,17 @@ func (s *Sandbox) Stream(ctx context.Context, c Cmd, w io.Writer) error {
 			return nil
 		}
 	}
+}
+
+// WriteFile writes data to path inside the VM, creating parent directories.
+func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte) error {
+	if _, err := s.Run(ctx, Cmd{Name: "mkdir", Args: []string{"-p", filepath.Dir(path)}}); err != nil {
+		return err
+	}
+	if err := s.vm.FS().Write(ctx, path, data); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
 }
 
 // Destroy stops and removes the VM. It deliberately ignores the caller's

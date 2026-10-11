@@ -13,6 +13,7 @@ import (
 // from the working tree.
 type Agent interface {
 	Name() string
-	Image() string // guest image that has this agent's CLI installed
+	Image() string             // guest image that has this agent's CLI installed
+	Secrets() []sandbox.Secret // credentials to inject via the proxy, never as plain env
 	Run(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string, logs io.Writer) error
 }
