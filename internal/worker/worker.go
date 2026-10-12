@@ -103,7 +103,7 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	p.setRunning(rec.ID, cancel)
 
 	log.Info("task started", "id", rec.ID, "repo", rec.Repo)
-	res, err := p.exec.Run(taskCtx, task.Task{ID: rec.ID, Repo: rec.Repo, Prompt: rec.Prompt})
+	res, err := p.exec.Run(taskCtx, task.Task{ID: rec.ID, Repo: rec.Repo, Prompt: rec.Prompt, ModelID: rec.Model.ID})
 	// Untrack before saving: once the store says the task is finished,
 	// Cancel must already report false.
 	p.setRunning(rec.ID, nil)

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/depak7/forgerun/internal/agent"
 	"github.com/depak7/forgerun/internal/sandbox"
 )
 
@@ -27,8 +28,8 @@ type fakeAgent struct{}
 func (fakeAgent) Name() string              { return "fake" }
 func (fakeAgent) Image() string             { return "depak7/forgerun-agent-cursor:dev" } // has git
 func (fakeAgent) Secrets() []sandbox.Secret { return nil }
-func (fakeAgent) Run(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string, logs io.Writer) error {
-	return sb.Stream(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c", "echo hello from forgerun >> README"}, Dir: dir}, logs)
+func (fakeAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
+	return sb.Stream(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c", "echo hello from forgerun >> README"}, Dir: req.Dir}, logs)
 }
 
 func TestRunEndToEnd(t *testing.T) {
@@ -46,5 +47,9 @@ func TestRunEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(string(patch), "+hello from forgerun") {
 		t.Errorf("patch missing our change:\n%s", patch)
+	}
+	log, _ := os.ReadFile(res.LogPath)
+	if !strings.Contains(string(log), "running fake agent (model: auto)") {
+		t.Errorf("log does not record the model:\n%s", log)
 	}
 }

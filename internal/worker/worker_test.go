@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/memory"
 	"github.com/depak7/forgerun/internal/task"
@@ -205,5 +206,29 @@ func TestOutcome(t *testing.T) {
 				t.Errorf("got (%s, %q), want (%s, %q)", o.State, o.Error, tc.wantState, tc.wantError)
 			}
 		})
+	}
+}
+
+func TestPassesModelToExecutor(t *testing.T) {
+	v := models.Variant{ID: "m-high", Family: "m", Effort: "high", IsDefault: true, ZDR: true}
+	s := memory.New(v)
+	tk := task.New("https://example.com/r.git", "p")
+	tk.ModelID = "m-high"
+	if err := s.Create(context.Background(), tk, "fake"); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 1)
+	startPool(t, s, fakeExec(func(_ context.Context, tk task.Task) (task.Result, error) {
+		got <- tk.ModelID
+		return task.Result{}, nil
+	}), 1, 10*time.Millisecond)
+
+	select {
+	case id := <-got:
+		if id != "m-high" {
+			t.Errorf("executor got model %q, want m-high", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("task never ran")
 	}
 }

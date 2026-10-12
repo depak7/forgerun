@@ -39,14 +39,24 @@ func (c *Cursor) Secrets() []sandbox.Secret {
 	}}
 }
 
-func (c *Cursor) Run(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string, logs io.Writer) error {
+func (c *Cursor) Run(ctx context.Context, sb *sandbox.Sandbox, req Request, logs io.Writer) error {
 	if err := sb.WriteFile(ctx, "/root/.cursor/cli-config.json", []byte(cliConfig)); err != nil {
 		return fmt.Errorf("writing cursor config: %w", err)
 	}
 	return sb.Stream(ctx, sandbox.Cmd{
 		Name: "agent",
-		Args: []string{"-p", prompt, "--force", "--trust", "--output-format", "text"},
-		Dir:  dir,
+		Args: cursorArgs(req),
+		Dir:  req.Dir,
 		Env:  map[string]string{"HOME": "/root"}, // CURSOR_API_KEY comes from the VM as a placeholder
 	}, logs)
+}
+
+// cursorArgs builds the CLI arguments. "auto" is Cursor's default, so it
+// is left implicit rather than passed as --model auto.
+func cursorArgs(req Request) []string {
+	args := []string{"-p", req.Prompt, "--force", "--trust", "--output-format", "text"}
+	if req.ModelID != "" && req.ModelID != "auto" {
+		args = append(args, "--model", req.ModelID)
+	}
+	return args
 }

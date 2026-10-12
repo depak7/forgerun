@@ -2,6 +2,7 @@
 package task
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -92,8 +93,8 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 		return res, fmt.Errorf("clone: %w", err)
 	}
 
-	step("running %s agent", r.Agent.Name())
-	if err := r.Agent.Run(ctx, sb, repoDir, t.Prompt, logs); err != nil {
+	step("running %s agent (model: %s)", r.Agent.Name(), cmp.Or(t.ModelID, "auto"))
+	if err := r.Agent.Run(ctx, sb, agent.Request{Dir: repoDir, Prompt: t.Prompt, ModelID: t.ModelID}, logs); err != nil {
 		return res, fmt.Errorf("agent: %w", err)
 	}
 

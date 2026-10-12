@@ -53,6 +53,7 @@ func runCmd(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	repo := fs.String("repo", "", "git URL of the repo to work on")
 	prompt := fs.String("prompt", "", "task for the agent")
+	model := fs.String("model", "", "exact agent model id, e.g. claude-opus-5-5-high (default: the agent's own choice)")
 	timeout := fs.Duration("timeout", 15*time.Minute, "max time for the whole task")
 	out := fs.String("out", "out", "directory for task results")
 	fs.Parse(args)
@@ -78,6 +79,7 @@ func runCmd(args []string) error {
 
 	r := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: os.Stdout}
 	t := task.New(*repo, *prompt)
+	t.ModelID = *model
 	res, err := r.Run(ctx, t)
 	if res.LogPath != "" {
 		fmt.Println("log:", res.LogPath)
