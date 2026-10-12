@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,17 @@ import (
 var _ Pool = (*worker.Pool)(nil)
 
 // cursorDefault is the default model of the "cursor" agent the API serves.
-var cursorDefault = models.Variant{ID: "auto", AgentID: "cursor", Family: "auto", IsDefault: true, AgentDefault: true, ZDR: true}
+var cursorDefault = models.Variant{ID: "auto", AgentID: "cursor", Family: "auto", Name: "Auto", IsDefault: true, AgentDefault: true, ZDR: true}
+
+// testModels are shaped like real seed rows, plus one of another agent.
+var testModels = []models.Variant{
+	cursorDefault,
+	{ID: "claude-opus-5-5-medium", AgentID: "cursor", Family: "claude-opus-5-5", Name: "Claude Opus 5.5 1M", Effort: "medium", IsDefault: true, ZDR: true},
+	{ID: "claude-opus-5-5-high", AgentID: "cursor", Family: "claude-opus-5-5", Name: "Claude Opus 5.5 1M High", Effort: "high", ZDR: true},
+	{ID: "claude-opus-5-5-high-fast", AgentID: "cursor", Family: "claude-opus-5-5", Name: "Claude Opus 5.5 1M High Fast", Effort: "high", Fast: true, ZDR: true},
+	{ID: "claude-fable-5-1-high", AgentID: "cursor", Family: "claude-fable-5-1", Name: "Claude Fable 5.1 1M (NO ZDR)", Effort: "high", IsDefault: true},
+	{ID: "other-x", AgentID: "other-agent", Family: "other-x", Name: "Other", IsDefault: true, AgentDefault: true, ZDR: true},
+}
 
 type fakePool struct {
 	nudges    int
@@ -41,10 +52,15 @@ func (p *fakePool) Cancel(id string) bool {
 	return false
 }
 
-func setup(t *testing.T) (http.Handler, *memory.Store, *fakePool) {
+// setup builds the API on a memory store; opts adjust the config.
+func setup(t *testing.T, opts ...func(*Config)) (http.Handler, *memory.Store, *fakePool) {
 	t.Helper()
-	s, p := memory.New(cursorDefault), &fakePool{running: map[string]bool{}}
-	return New(s, p, "cursor", slog.New(slog.DiscardHandler)), s, p
+	s, p := memory.New(testModels...), &fakePool{running: map[string]bool{}}
+	cfg := Config{Store: s, Pool: p, Agent: "cursor", Log: slog.New(slog.DiscardHandler)}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return New(cfg), s, p
 }
 
 func do(h http.Handler, method, path, body string, header ...string) *httptest.ResponseRecorder {
@@ -280,7 +296,7 @@ func TestHealth(t *testing.T) {
 	h, _, _ := setup(t)
 	decode(t, do(h, "GET", "/healthz", ""), http.StatusOK)
 
-	down := New(downStore{memory.New(cursorDefault)}, &fakePool{}, "cursor", slog.New(slog.DiscardHandler))
+	down := New(Config{Store: downStore{memory.New(cursorDefault)}, Pool: &fakePool{}, Agent: "cursor", Log: slog.New(slog.DiscardHandler)})
 	_, apiErr := decode(t, do(down, "GET", "/healthz", ""), http.StatusServiceUnavailable)
 	if apiErr.Code != "unavailable" || strings.Contains(apiErr.Message, "refused") {
 		t.Errorf("error = %+v (must not leak internal details)", apiErr)
@@ -295,13 +311,17 @@ func TestTaskJSONShape(t *testing.T) {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"id", "repo", "prompt", "agent", "state", "error", "has_patch", "created_at", "started_at", "finished_at"} {
+	for _, k := range []string{"id", "repo", "prompt", "agent", "model", "effort", "thinking", "fast", "model_id",
+		"state", "error", "has_patch", "created_at", "started_at", "finished_at"} {
 		if _, ok := fields[k]; !ok {
 			t.Errorf("task JSON missing %q", k)
 		}
 	}
 	if !strings.HasSuffix(string(fields["created_at"]), `Z"`) {
 		t.Errorf("created_at = %s, want UTC (…Z)", fields["created_at"])
+	}
+	if string(fields["model"]) != `"auto"` || string(fields["model_id"]) != `"auto"` {
+		t.Errorf("model=%s model_id=%s, want the agent default auto", fields["model"], fields["model_id"])
 	}
 	if string(fields["started_at"]) != "null" || string(fields["state"]) != `"queued"` {
 		t.Errorf("started_at=%s state=%s", fields["started_at"], fields["state"])
@@ -321,4 +341,91 @@ func TestLogRequests(t *testing.T) {
 	if !strings.Contains(buf.String(), "status=418") || !strings.Contains(buf.String(), "path=/x") {
 		t.Errorf("log line: %s", buf.String())
 	}
+}
+
+func TestCreateWithModel(t *testing.T) {
+	h, _, _ := setup(t)
+	data, _ := decode(t, do(h, "POST", "/api/tasks",
+		`{"repo":"https://x.com/r","prompt":"p","model":"claude-opus-5-5","effort":"high","fast":true}`), http.StatusCreated)
+	tj := decodeTask(t, data)
+	if tj.ModelID != "claude-opus-5-5-high-fast" || tj.Model != "claude-opus-5-5" || tj.Effort != "high" || !tj.Fast || tj.Thinking {
+		t.Errorf("task = %+v", tj)
+	}
+}
+
+func TestCreateDefaults(t *testing.T) {
+	h, _, _ := setup(t)
+	if tj := createTask(t, h); tj.ModelID != "auto" {
+		t.Errorf("no model, no server default: model_id = %q, want the agent default auto", tj.ModelID)
+	}
+	h, _, _ = setup(t, func(c *Config) { c.DefaultModel = "claude-opus-5-5" })
+	if tj := createTask(t, h); tj.ModelID != "claude-opus-5-5-medium" {
+		t.Errorf("server default: model_id = %q, want the family's default variant", tj.ModelID)
+	}
+}
+
+func TestCreateRejectsBadModelChoice(t *testing.T) {
+	tests := []struct{ name, fields, wantText string }{
+		{"unknown model", `"model":"gpt-9"`, "unknown model"},
+		{"other agent's model", `"model":"other-x"`, "unknown model"},
+		{"bad effort", `"model":"claude-opus-5-5","effort":"ultra"`, "valid:"},
+		{"no such combination", `"model":"claude-opus-5-5","effort":"medium","fast":true`, "valid:"},
+		{"auto takes no options", `"effort":"high"`, "valid: default"},
+		{"thinking not a bool", `"thinking":"yes"`, "invalid JSON"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, s, _ := setup(t)
+			body := `{"repo":"https://x.com/r","prompt":"p",` + tc.fields + `}`
+			_, apiErr := decode(t, do(h, "POST", "/api/tasks", body), http.StatusBadRequest)
+			if apiErr.Code != "invalid_request" || !strings.Contains(apiErr.Message, tc.wantText) {
+				t.Errorf("error = %+v, want message containing %q", apiErr, tc.wantText)
+			}
+			if recs, _ := s.List(context.Background(), 10); len(recs) != 0 {
+				t.Errorf("a rejected request created %d task(s)", len(recs))
+			}
+		})
+	}
+}
+
+func TestListModels(t *testing.T) {
+	h, _, _ := setup(t)
+	data, _ := decode(t, do(h, "GET", "/api/models", ""), http.StatusOK)
+	var got struct {
+		Default string       `json:"default"`
+		Models  []familyJSON `json:"models"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, m := range got.Models {
+		ids = append(ids, m.ID)
+	}
+	if got.Default != "auto" || !slices.Equal(ids, []string{"auto", "claude-fable-5-1", "claude-opus-5-5"}) {
+		t.Fatalf("default=%q models=%v (another agent's model must not appear)", got.Default, ids)
+	}
+	if !strings.Contains(string(data), `"efforts":[]`) {
+		t.Error("auto's efforts must encode as [], not null")
+	}
+	opus := got.Models[2]
+	if !slices.Equal(opus.Efforts, []string{"medium", "high"}) || opus.DefaultEffort != "medium" || !opus.Fast || !opus.ZDR {
+		t.Errorf("claude-opus-5-5 = %+v", opus)
+	}
+
+	h, _, _ = setup(t, func(c *Config) { c.DefaultModel = "claude-opus-5-5" })
+	data, _ = decode(t, do(h, "GET", "/api/models", ""), http.StatusOK)
+	if !strings.Contains(string(data), `"default":"claude-opus-5-5"`) {
+		t.Errorf("server default not reported: %s", data)
+	}
+}
+
+func TestRequireZDR(t *testing.T) {
+	h, _, _ := setup(t, func(c *Config) { c.RequireZDR = true })
+	decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://x.com/r","prompt":"p","model":"claude-fable-5-1"}`), http.StatusBadRequest)
+	data, _ := decode(t, do(h, "GET", "/api/models", ""), http.StatusOK)
+	if strings.Contains(string(data), "claude-fable-5-1") {
+		t.Error("non-ZDR model listed despite RequireZDR")
+	}
+	createTask(t, h) // ZDR models (auto) still work
 }

@@ -78,7 +78,7 @@ func serveCmd(args []string) error {
 	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: io.Discard}
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
-		Handler:           api.LogRequests(log, api.New(db, pool, ag.ID(), log)),
+		Handler:           api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agent: ag.ID(), Log: log})),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

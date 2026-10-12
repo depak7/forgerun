@@ -2,6 +2,8 @@
 package api
 
 import (
+	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -9,10 +11,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/task"
 )
@@ -23,16 +27,29 @@ type Pool interface {
 	Cancel(id string) bool
 }
 
+// Config is everything the API needs.
+type Config struct {
+	Store        store.Store
+	Pool         Pool
+	Agent        string // id of the agent new tasks run on, e.g. "cursor"; only its models are offered
+	DefaultModel string // model family used when a request names none; "" = the agent's own default
+	RequireZDR   bool   // offer only models with zero data retention
+	Log          *slog.Logger
+}
+
 type Server struct {
-	store store.Store
-	pool  Pool
-	agent string // agent name recorded on new tasks
-	log   *slog.Logger
+	store        store.Store
+	pool         Pool
+	agent        string
+	defaultModel string
+	requireZDR   bool
+	log          *slog.Logger
 }
 
 // New returns the HTTP handler serving the API.
-func New(s store.Store, p Pool, agent string, log *slog.Logger) http.Handler {
-	srv := &Server{store: s, pool: p, agent: agent, log: log}
+func New(cfg Config) http.Handler {
+	srv := &Server{store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
@@ -40,6 +57,7 @@ func New(s store.Store, p Pool, agent string, log *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", srv.cancelTask)
 	mux.HandleFunc("GET /api/tasks/{id}/log", srv.taskLog)
 	mux.HandleFunc("GET /api/tasks/{id}/patch", srv.taskPatch)
+	mux.HandleFunc("GET /api/models", srv.listModels)
 	mux.HandleFunc("GET /healthz", srv.health)
 	return mux
 }
@@ -52,6 +70,11 @@ type taskJSON struct {
 	Repo       string     `json:"repo"`
 	Prompt     string     `json:"prompt"`
 	Agent      string     `json:"agent"`
+	Model      string     `json:"model"`  // family, e.g. "claude-opus-5-5" or "auto"
+	Effort     string     `json:"effort"` // "" for plain variants
+	Thinking   bool       `json:"thinking"`
+	Fast       bool       `json:"fast"`
+	ModelID    string     `json:"model_id"` // exact id passed to the agent
 	State      task.State `json:"state"`
 	Error      string     `json:"error"`
 	HasPatch   bool       `json:"has_patch"`
@@ -62,8 +85,10 @@ type taskJSON struct {
 
 func toJSON(r store.Record) taskJSON {
 	return taskJSON{
-		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.AgentID, State: r.State, Error: r.Error,
-		HasPatch: r.PatchPath != "", CreatedAt: r.CreatedAt.UTC(), StartedAt: utc(r.StartedAt), FinishedAt: utc(r.FinishedAt),
+		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.AgentID,
+		Model: r.Model.Family, Effort: r.Model.Effort, Thinking: r.Model.Thinking, Fast: r.Model.Fast, ModelID: r.Model.ID,
+		State: r.State, Error: r.Error, HasPatch: r.PatchPath != "",
+		CreatedAt: r.CreatedAt.UTC(), StartedAt: utc(r.StartedAt), FinishedAt: utc(r.FinishedAt),
 	}
 }
 
@@ -79,8 +104,12 @@ func utc(t *time.Time) *time.Time {
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Repo   string `json:"repo"`
-		Prompt string `json:"prompt"`
+		Repo     string `json:"repo"`
+		Prompt   string `json:"prompt"`
+		Model    string `json:"model"`
+		Effort   string `json:"effort"`
+		Thinking *bool  `json:"thinking"` // nil = not sent
+		Fast     *bool  `json:"fast"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	dec.DisallowUnknownFields()
@@ -102,7 +131,23 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cat, err := s.catalog(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	v, err := cat.Resolve(models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast}, s.defaultModel)
+	if errors.Is(err, models.ErrInvalidChoice) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+
 	t := task.New(req.Repo, req.Prompt)
+	t.ModelID = v.ID
 	if err := s.store.Create(r.Context(), t, s.agent); err != nil {
 		s.internalError(w, r, err)
 		return
@@ -199,6 +244,53 @@ func (s *Server) taskPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.serveFile(w, r, rec.PatchPath, "text/x-diff; charset=utf-8")
+}
+
+// catalog loads the models a request may choose from: this server's agent's
+// enabled models, minus those without zero data retention if required. It
+// is read from the store on every call, so a newly inserted model is usable
+// at once.
+func (s *Server) catalog(ctx context.Context) (*models.Catalog, error) {
+	vs, err := s.store.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s.requireZDR {
+		vs = slices.DeleteFunc(vs, func(v models.Variant) bool { return !v.ZDR })
+	}
+	return models.NewCatalog(s.agent, vs), nil
+}
+
+type familyJSON struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Efforts       []string `json:"efforts"`        // [] when the family has none
+	DefaultEffort string   `json:"default_effort"` // "" = the plain variant
+	Thinking      bool     `json:"thinking"`
+	Fast          bool     `json:"fast"`
+	ZDR           bool     `json:"zdr"`
+}
+
+func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
+	cat, err := s.catalog(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	fams := cat.Families()
+	out := make([]familyJSON, 0, len(fams))
+	for _, f := range fams {
+		efforts := f.Efforts
+		if efforts == nil {
+			efforts = []string{} // encode as [], never null
+		}
+		out = append(out, familyJSON{ID: f.ID, Name: f.Name, Efforts: efforts, DefaultEffort: f.DefaultEffort,
+			Thinking: f.Thinking, Fast: f.Fast, ZDR: f.ZDR})
+	}
+	writeData(w, http.StatusOK, struct {
+		Default string       `json:"default"`
+		Models  []familyJSON `json:"models"`
+	}{cmp.Or(s.defaultModel, cat.DefaultFamily()), out})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
