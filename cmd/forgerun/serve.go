@@ -17,6 +17,7 @@ import (
 	"github.com/depak7/forgerun/internal/agent"
 	"github.com/depak7/forgerun/internal/api"
 	"github.com/depak7/forgerun/internal/sandbox"
+	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/postgres"
 	"github.com/depak7/forgerun/internal/task"
 	"github.com/depak7/forgerun/internal/worker"
@@ -50,6 +51,9 @@ func serveCmd(args []string) error {
 		return err
 	}
 	defer db.Close()
+	if err := checkAgent(ctx, db, ag.ID()); err != nil {
+		return err
+	}
 	if err := sandbox.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
@@ -74,7 +78,7 @@ func serveCmd(args []string) error {
 	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: io.Discard}
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
-		Handler:           api.LogRequests(log, api.New(db, pool, ag.Name(), log)),
+		Handler:           api.LogRequests(log, api.New(db, pool, ag.ID(), log)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -104,6 +108,23 @@ func serveCmd(args []string) error {
 	<-poolDone // every running task has recorded its outcome and destroyed its VM
 	log.Info("stopped")
 	return runErr
+}
+
+// checkAgent makes sure the database knows the agent this server runs and
+// that it is enabled, so a misconfiguration stops startup instead of failing
+// every task.
+func checkAgent(ctx context.Context, db store.Store, id string) error {
+	a, err := db.GetAgent(ctx, id)
+	if errors.Is(err, store.ErrAgentNotFound) {
+		return fmt.Errorf("agent %q is not in the agents table; add it with a migration", id)
+	}
+	if err != nil {
+		return err
+	}
+	if !a.Enabled {
+		return fmt.Errorf("agent %q is disabled in the agents table", id)
+	}
+	return nil
 }
 
 // isLoopback reports whether addr only accepts connections from this machine.

@@ -62,7 +62,7 @@ type taskJSON struct {
 
 func toJSON(r store.Record) taskJSON {
 	return taskJSON{
-		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.Agent, State: r.State, Error: r.Error,
+		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.AgentID, State: r.State, Error: r.Error,
 		HasPatch: r.PatchPath != "", CreatedAt: r.CreatedAt.UTC(), StartedAt: utc(r.StartedAt), FinishedAt: utc(r.FinishedAt),
 	}
 }

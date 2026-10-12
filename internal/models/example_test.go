@@ -7,10 +7,10 @@ import (
 )
 
 func ExampleCatalog_Resolve() {
-	c := models.NewCatalog([]models.Variant{
-		{ID: "claude-opus-5-high", Family: "claude-opus-5", Effort: "high", IsDefault: true},
-		{ID: "claude-opus-5-high-fast", Family: "claude-opus-5", Effort: "high", Fast: true},
-		{ID: "claude-opus-5-thinking-max", Family: "claude-opus-5", Effort: "max", Thinking: true},
+	c := models.NewCatalog("cursor", []models.Variant{
+		{ID: "claude-opus-5-high", AgentID: "cursor", Family: "claude-opus-5", Effort: "high", IsDefault: true},
+		{ID: "claude-opus-5-high-fast", AgentID: "cursor", Family: "claude-opus-5", Effort: "high", Fast: true},
+		{ID: "claude-opus-5-thinking-max", AgentID: "cursor", Family: "claude-opus-5", Effort: "max", Thinking: true},
 	})
 	fast := true
 

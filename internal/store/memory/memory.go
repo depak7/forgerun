@@ -17,22 +17,25 @@ import (
 	"github.com/depak7/forgerun/internal/task"
 )
 
+// modelKey mirrors the models table's primary key (agent, id).
+type modelKey struct{ agent, id string }
+
 // Store is safe for concurrent use.
 type Store struct {
 	mu     sync.Mutex
 	tasks  map[string]*store.Record
-	models map[string]models.Variant
+	models map[modelKey]models.Variant
 }
 
 var _ store.Store = (*Store)(nil)
 
-var autoModel = models.Variant{ID: "auto", Agent: "cursor", Family: "auto", Name: "Auto", IsDefault: true, ZDR: true}
-
-// New returns an empty store that knows auto plus vs.
+// New returns an empty store that knows the models vs (no built-in models).
+// Agents are implied by their models: an agent exists if any of vs belongs
+// to it, and its default is the variant marked AgentDefault.
 func New(vs ...models.Variant) *Store {
-	s := &Store{tasks: map[string]*store.Record{}, models: map[string]models.Variant{"auto": autoModel}}
+	s := &Store{tasks: map[string]*store.Record{}, models: map[modelKey]models.Variant{}}
 	for _, v := range vs {
-		s.models[v.ID] = v
+		s.models[modelKey{v.AgentID, v.ID}] = v
 	}
 	return s
 }
@@ -41,26 +44,62 @@ func (s *Store) Close() {}
 
 func (s *Store) Ping(context.Context) error { return nil }
 
-func (s *Store) Create(_ context.Context, t task.Task, agent string) error {
+func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.tasks[t.ID]; ok {
 		return fmt.Errorf("creating task %s: already exists", t.ID)
 	}
-	m, ok := s.models[cmp.Or(t.ModelID, "auto")]
-	if !ok { // mirrors the Postgres foreign key
-		return fmt.Errorf("creating task %s: unknown model %q", t.ID, t.ModelID)
+	m, ok := s.model(agentID, t.ModelID)
+	if !ok { // mirrors the Postgres foreign keys / missing agent default
+		return fmt.Errorf("creating task %s: no model %q for agent %s", t.ID, t.ModelID, agentID)
 	}
-	s.tasks[t.ID] = &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, Agent: agent,
+	s.tasks[t.ID] = &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, AgentID: agentID,
 		Model: m, State: task.Queued, CreatedAt: time.Now()}
 	return nil
+}
+
+// model finds agent's model id, or the agent's default when id is "".
+// The caller holds s.mu.
+func (s *Store) model(agent, id string) (models.Variant, bool) {
+	if id != "" {
+		v, ok := s.models[modelKey{agent, id}]
+		return v, ok
+	}
+	for _, v := range s.models {
+		if v.AgentID == agent && v.AgentDefault {
+			return v, true
+		}
+	}
+	return models.Variant{}, false
+}
+
+func (s *Store) GetAgent(_ context.Context, id string) (store.Agent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, found := store.Agent{ID: id, Name: id, Enabled: true}, false
+	for _, v := range s.models {
+		if v.AgentID != id {
+			continue
+		}
+		found = true
+		if v.AgentDefault {
+			a.DefaultModelID = v.ID
+		}
+	}
+	if !found {
+		return store.Agent{}, fmt.Errorf("%w: %s", store.ErrAgentNotFound, id)
+	}
+	return a, nil
 }
 
 func (s *Store) ListModels(context.Context) ([]models.Variant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	vs := slices.Collect(maps.Values(s.models))
-	slices.SortFunc(vs, func(a, b models.Variant) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(vs, func(a, b models.Variant) int {
+		return cmp.Or(strings.Compare(a.AgentID, b.AgentID), strings.Compare(a.ID, b.ID))
+	})
 	return vs, nil
 }
 

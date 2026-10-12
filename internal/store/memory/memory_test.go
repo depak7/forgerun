@@ -10,8 +10,10 @@ import (
 	"github.com/depak7/forgerun/internal/task"
 )
 
+var fakeDefault = models.Variant{ID: "auto", AgentID: "fake", Family: "auto", IsDefault: true, AgentDefault: true, ZDR: true}
+
 func TestLifecycleAndRules(t *testing.T) {
-	s, ctx := New(), context.Background()
+	s, ctx := New(fakeDefault), context.Background()
 	tk := task.New("r", "p")
 	if err := s.Create(ctx, tk, "fake"); err != nil {
 		t.Fatal(err)
@@ -41,8 +43,8 @@ func TestLifecycleAndRules(t *testing.T) {
 }
 
 func TestModels(t *testing.T) {
-	v := models.Variant{ID: "m-high", Family: "m", Effort: "high", IsDefault: true, ZDR: true}
-	s, ctx := New(v), context.Background()
+	v := models.Variant{ID: "m-high", AgentID: "fake", Family: "m", Effort: "high", IsDefault: true, ZDR: true}
+	s, ctx := New(fakeDefault, v), context.Background()
 
 	tk := task.New("r", "p")
 	tk.ModelID = "m-high"
@@ -57,8 +59,29 @@ func TestModels(t *testing.T) {
 	if err := s.Create(ctx, bad, "fake"); err == nil {
 		t.Error("unknown model accepted")
 	}
+	if err := s.Create(ctx, task.New("r", "p"), "other-agent"); err == nil {
+		t.Error("task created for an agent with no default model")
+	}
+	plain := task.New("r", "p")
+	if err := s.Create(ctx, plain, "fake"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, plain.ID); rec.Model.ID != "auto" {
+		t.Errorf("no model: got %q, want the agent default auto", rec.Model.ID)
+	}
 	vs, _ := s.ListModels(ctx)
 	if len(vs) != 2 || vs[0].ID != "auto" || vs[1].ID != "m-high" {
 		t.Errorf("ListModels = %+v", vs)
+	}
+}
+
+func TestGetAgent(t *testing.T) {
+	s, ctx := New(fakeDefault), context.Background()
+	a, err := s.GetAgent(ctx, "fake")
+	if err != nil || !a.Enabled || a.DefaultModelID != "auto" {
+		t.Errorf("fake = %+v, %v", a, err)
+	}
+	if _, err := s.GetAgent(ctx, "nope"); !errors.Is(err, store.ErrAgentNotFound) {
+		t.Errorf("unknown agent: got %v, want ErrAgentNotFound", err)
 	}
 }

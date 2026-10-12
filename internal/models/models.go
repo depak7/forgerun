@@ -4,6 +4,7 @@
 package models
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -13,15 +14,16 @@ import (
 
 // Variant is one row of the models table: a single exact model id.
 type Variant struct {
-	ID        string // e.g. "claude-opus-5-5-high-fast"
-	Agent     string
-	Family    string // e.g. "claude-opus-5-5"
-	Name      string
-	Effort    string // "" = the family's plain variant
-	Thinking  bool
-	Fast      bool
-	IsDefault bool // used when a request omits effort
-	ZDR       bool
+	ID           string // e.g. "claude-opus-5-5-high-fast"
+	AgentID      string // the agent this model belongs to (agents.id)
+	Family       string // e.g. "claude-opus-5-5"
+	Name         string
+	Effort       string // "" = the family's plain variant
+	Thinking     bool
+	Fast         bool
+	IsDefault    bool // used when a request omits effort
+	AgentDefault bool // the variant used when nothing names a model (one per agent)
+	ZDR          bool
 }
 
 // Choice is what a request asks for. Empty strings and nil pointers mean
@@ -61,16 +63,25 @@ type family struct {
 	defaults map[bool]string // thinking → default effort
 }
 
-// Catalog answers questions about a fixed set of variants.
+// Catalog answers questions about one agent's variants.
 type Catalog struct {
-	families map[string]*family
-	byID     map[string]Variant
+	agent         string
+	defaultFamily string // family of the AgentDefault variant; "" if none
+	families      map[string]*family
+	byID          map[string]Variant
 }
 
-// NewCatalog groups variants into families.
-func NewCatalog(vs []Variant) *Catalog {
-	c := &Catalog{families: map[string]*family{}, byID: map[string]Variant{}}
+// NewCatalog groups the variants of the agent with id agent into families. Variants of other
+// agents are ignored, so one catalog never mixes agents.
+func NewCatalog(agent string, vs []Variant) *Catalog {
+	c := &Catalog{agent: agent, families: map[string]*family{}, byID: map[string]Variant{}}
 	for _, v := range vs {
+		if v.AgentID != agent {
+			continue
+		}
+		if v.AgentDefault {
+			c.defaultFamily = v.Family
+		}
 		f, ok := c.families[v.Family]
 		if !ok {
 			f = &family{
@@ -131,6 +142,9 @@ func (f *family) finish() {
 	}
 }
 
+// DefaultFamily is the agent's own default model family ("" if none).
+func (c *Catalog) DefaultFamily() string { return c.defaultFamily }
+
 // Families returns every family, sorted by id.
 func (c *Catalog) Families() []Family {
 	out := make([]Family, 0, len(c.families))
@@ -146,13 +160,14 @@ func (c *Catalog) Variant(id string) (Variant, bool) {
 	return v, ok
 }
 
-// Resolve picks the variant ch asks for. An empty ch.Model means
-// defaultModel. Omitted thinking prefers a non-thinking variant; omitted
-// effort uses the family default; omitted fast means not fast.
+// Resolve picks the variant ch asks for. The model is ch.Model, else
+// defaultModel (a server setting), else the agent's own default family.
+// Omitted thinking prefers a non-thinking variant; omitted effort uses the
+// family default; omitted fast means not fast.
 func (c *Catalog) Resolve(ch Choice, defaultModel string) (Variant, error) {
-	name := ch.Model
+	name := cmp.Or(ch.Model, defaultModel, c.defaultFamily)
 	if name == "" {
-		name = defaultModel
+		return Variant{}, fmt.Errorf("%w: no model given and %s has no default model", ErrInvalidChoice, c.agent)
 	}
 	f, ok := c.families[name]
 	if !ok {

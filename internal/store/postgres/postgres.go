@@ -2,7 +2,6 @@
 package postgres
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -45,10 +44,14 @@ func (s *Store) Close() { s.pool.Close() }
 
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
-func (s *Store) Create(ctx context.Context, t task.Task, agent string) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO tasks (id, repo, prompt, agent, state, model_id) VALUES ($1, $2, $3, $4, $5, $6)`,
-		t.ID, t.Repo, t.Prompt, agent, string(task.Queued), cmp.Or(t.ModelID, "auto"))
+func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
+	// An empty model id means the agent's default_model_id. If the agent has
+	// none (or doesn't exist), model_id is NULL and the insert fails.
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id)
+		VALUES ($1, $2, $3, $4, $5, COALESCE(NULLIF($6, ''),
+			(SELECT default_model_id FROM agents WHERE id = $4)))`,
+		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID)
 	if err != nil {
 		return fmt.Errorf("creating task %s: %w", t.ID, err) // includes the FK error for an unknown model
 	}
@@ -72,8 +75,9 @@ func (s *Store) Claim(ctx context.Context) (store.Record, bool, error) {
 	// instead of waited on. FROM models joins the model so RETURNING has it.
 	row := s.pool.QueryRow(ctx, `
 		UPDATE tasks AS t SET state = 'running', started_at = now()
-		FROM models m
-		WHERE m.id = t.model_id AND t.state = 'queued' AND t.id = (
+		FROM models m, agents a
+		WHERE m.agent_id = t.agent_id AND m.id = t.model_id AND a.id = t.agent_id
+			AND t.state = 'queued' AND t.id = (
 			SELECT id FROM tasks WHERE state = 'queued'
 			ORDER BY created_at, id
 			FOR UPDATE SKIP LOCKED
@@ -126,12 +130,18 @@ func (s *Store) transition(ctx context.Context, id string, from, to task.State, 
 	return nil
 }
 
-// selectColumns is the task plus its model; queries alias tasks as t, models as m.
-const selectColumns = `t.id, t.repo, t.prompt, t.agent, t.state, t.error, t.log_path, t.patch_path,
-	t.created_at, t.started_at, t.finished_at,
-	m.id, m.agent, m.family, m.name, m.effort, m.thinking, m.fast, m.is_default, m.zdr`
+// modelColumns is a model row; agent_default is derived from its agent's
+// default_model_id. Queries alias models as m and agents as a.
+const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, m.fast, m.is_default,
+	COALESCE(m.id = a.default_model_id, false), m.zdr`
 
-const fromTasks = ` FROM tasks t JOIN models m ON m.id = t.model_id`
+// selectColumns is the task (aliased t) plus its model.
+const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.patch_path,
+	t.created_at, t.started_at, t.finished_at, ` + modelColumns
+
+const fromTasks = ` FROM tasks t
+	JOIN models m ON m.agent_id = t.agent_id AND m.id = t.model_id
+	JOIN agents a ON a.id = t.agent_id`
 
 func (s *Store) Get(ctx context.Context, id string) (store.Record, error) {
 	row := s.pool.QueryRow(ctx, `SELECT `+selectColumns+fromTasks+` WHERE t.id = $1`, id)
@@ -163,16 +173,32 @@ func (s *Store) List(ctx context.Context, limit int) ([]store.Record, error) {
 	return recs, nil
 }
 
+func (s *Store) GetAgent(ctx context.Context, id string) (store.Agent, error) {
+	var a store.Agent
+	var defaultModel *string
+	err := s.pool.QueryRow(ctx, `SELECT id, name, enabled, default_model_id FROM agents WHERE id = $1`, id).
+		Scan(&a.ID, &a.Name, &a.Enabled, &defaultModel)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Agent{}, fmt.Errorf("%w: %s", store.ErrAgentNotFound, id)
+	}
+	if err != nil {
+		return store.Agent{}, fmt.Errorf("getting agent %s: %w", id, err)
+	}
+	a.DefaultModelID = deref(defaultModel)
+	return a, nil
+}
+
 func (s *Store) ListModels(ctx context.Context) ([]models.Variant, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, agent, family, name, effort, thinking, fast, is_default, zdr
-		FROM models WHERE enabled ORDER BY family, id`)
+	rows, err := s.pool.Query(ctx, `SELECT `+modelColumns+`
+		FROM models m JOIN agents a ON a.id = m.agent_id
+		WHERE m.enabled AND a.enabled
+		ORDER BY m.agent_id, m.family, m.id`)
 	if err != nil {
 		return nil, fmt.Errorf("listing models: %w", err)
 	}
 	vs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (models.Variant, error) {
 		var v models.Variant
-		err := row.Scan(&v.ID, &v.Agent, &v.Family, &v.Name, &v.Effort, &v.Thinking, &v.Fast, &v.IsDefault, &v.ZDR)
+		err := row.Scan(&v.ID, &v.AgentID, &v.Family, &v.Name, &v.Effort, &v.Thinking, &v.Fast, &v.IsDefault, &v.AgentDefault, &v.ZDR)
 		return v, err
 	})
 	if err != nil {
@@ -190,10 +216,10 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		errMsg, logPath, patchPath *string // nil = NULL
 		startedAt, finishedAt      *time.Time
 	)
-	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.Agent, &state,
+	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
 		&errMsg, &logPath, &patchPath, &rec.CreatedAt, &startedAt, &finishedAt,
-		&rec.Model.ID, &rec.Model.Agent, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
-		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.ZDR)
+		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
+		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR)
 	if err != nil {
 		return store.Record{}, err
 	}

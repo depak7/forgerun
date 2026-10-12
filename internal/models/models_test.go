@@ -8,8 +8,8 @@ import (
 )
 
 // Rows copied from the real seed, covering the shapes that matter.
-var fixture = []Variant{
-	{ID: "auto", Family: "auto", Name: "Auto", IsDefault: true, ZDR: true},
+var fixture = forAgent("cursor", []Variant{
+	{ID: "auto", Family: "auto", Name: "Auto", IsDefault: true, AgentDefault: true, ZDR: true},
 
 	// Both thinking and non-thinking, with fast; default high for both.
 	{ID: "claude-opus-5-low", Family: "claude-opus-5", Name: "Claude Opus 5 1M Low", Effort: "low", ZDR: true},
@@ -30,18 +30,26 @@ var fixture = []Variant{
 	// Added by hand without is_default: falls back to medium.
 	{ID: "new-model-low", Family: "new-model", Name: "New Low", Effort: "low", ZDR: true},
 	{ID: "new-model-medium", Family: "new-model", Name: "New Medium", Effort: "medium", ZDR: true},
+})
+
+// forAgent sets Agent on every row.
+func forAgent(agent string, vs []Variant) []Variant {
+	for i := range vs {
+		vs[i].AgentID = agent
+	}
+	return vs
 }
 
 func ptr(b bool) *bool { return &b }
 
 func TestResolve(t *testing.T) {
-	c := NewCatalog(fixture)
+	c := NewCatalog("cursor", fixture)
 	tests := []struct {
 		name   string
 		choice Choice
 		want   string
 	}{
-		{"empty uses default model", Choice{}, "auto"},
+		{"empty uses server default", Choice{}, "auto"},
 		{"auto", Choice{Model: "auto"}, "auto"},
 		{"family default effort", Choice{Model: "claude-opus-5"}, "claude-opus-5-high"},
 		{"explicit effort", Choice{Model: "claude-opus-5", Effort: "low"}, "claude-opus-5-low"},
@@ -65,8 +73,40 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+func TestResolveUsesAgentDefault(t *testing.T) {
+	c := NewCatalog("cursor", fixture)
+	if v, err := c.Resolve(Choice{}, ""); err != nil || v.ID != "auto" {
+		t.Errorf("no model, no server default: got %q, %v; want the agent default auto", v.ID, err)
+	}
+	if v, err := c.Resolve(Choice{}, "gpt-5.2"); err != nil || v.ID != "gpt-5.2" {
+		t.Errorf("server default must beat the agent default: got %q, %v", v.ID, err)
+	}
+
+	noDefault := NewCatalog("cursor", forAgent("cursor", []Variant{{ID: "m", Family: "m", IsDefault: true}}))
+	_, err := noDefault.Resolve(Choice{}, "")
+	if !errors.Is(err, ErrInvalidChoice) || !strings.Contains(err.Error(), "cursor has no default model") {
+		t.Errorf("agent without default: got %v", err)
+	}
+}
+
+func TestCatalogIgnoresOtherAgents(t *testing.T) {
+	other := Variant{ID: "x", AgentID: "claude-code", Family: "x", IsDefault: true, AgentDefault: true}
+	c := NewCatalog("cursor", append(slices.Clone(fixture), other))
+	if _, err := c.Resolve(Choice{Model: "x"}, ""); !errors.Is(err, ErrInvalidChoice) {
+		t.Error("another agent's model resolved in the cursor catalog")
+	}
+	if c.DefaultFamily() != "auto" {
+		t.Errorf("default family = %q; another agent's default leaked in", c.DefaultFamily())
+	}
+	for _, f := range c.Families() {
+		if f.ID == "x" {
+			t.Error("another agent's family listed")
+		}
+	}
+}
+
 func TestResolveRejects(t *testing.T) {
-	c := NewCatalog(fixture)
+	c := NewCatalog("cursor", fixture)
 	tests := []struct {
 		name     string
 		choice   Choice
@@ -92,7 +132,7 @@ func TestResolveRejects(t *testing.T) {
 }
 
 func TestFamilies(t *testing.T) {
-	fams := NewCatalog(fixture).Families()
+	fams := NewCatalog("cursor", fixture).Families()
 	var ids []string
 	for _, f := range fams {
 		ids = append(ids, f.ID)
@@ -118,7 +158,7 @@ func TestFamilies(t *testing.T) {
 
 // Every variant must be reachable: resolving its own options gives it back.
 func TestEveryVariantIsReachable(t *testing.T) {
-	c := NewCatalog(fixture)
+	c := NewCatalog("cursor", fixture)
 	for _, v := range fixture {
 		got, err := c.Resolve(Choice{Model: v.Family, Effort: v.Effort, Thinking: ptr(v.Thinking), Fast: ptr(v.Fast)}, "auto")
 		if err != nil || got.ID != v.ID {

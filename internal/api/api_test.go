@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/memory"
 	"github.com/depak7/forgerun/internal/task"
@@ -21,6 +22,9 @@ import (
 
 // The real worker pool must satisfy the API's Pool interface.
 var _ Pool = (*worker.Pool)(nil)
+
+// cursorDefault is the default model of the "cursor" agent the API serves.
+var cursorDefault = models.Variant{ID: "auto", AgentID: "cursor", Family: "auto", IsDefault: true, AgentDefault: true, ZDR: true}
 
 type fakePool struct {
 	nudges    int
@@ -39,7 +43,7 @@ func (p *fakePool) Cancel(id string) bool {
 
 func setup(t *testing.T) (http.Handler, *memory.Store, *fakePool) {
 	t.Helper()
-	s, p := memory.New(), &fakePool{running: map[string]bool{}}
+	s, p := memory.New(cursorDefault), &fakePool{running: map[string]bool{}}
 	return New(s, p, "cursor", slog.New(slog.DiscardHandler)), s, p
 }
 
@@ -276,7 +280,7 @@ func TestHealth(t *testing.T) {
 	h, _, _ := setup(t)
 	decode(t, do(h, "GET", "/healthz", ""), http.StatusOK)
 
-	down := New(downStore{memory.New()}, &fakePool{}, "cursor", slog.New(slog.DiscardHandler))
+	down := New(downStore{memory.New(cursorDefault)}, &fakePool{}, "cursor", slog.New(slog.DiscardHandler))
 	_, apiErr := decode(t, do(down, "GET", "/healthz", ""), http.StatusServiceUnavailable)
 	if apiErr.Code != "unavailable" || strings.Contains(apiErr.Message, "refused") {
 		t.Errorf("error = %+v (must not leak internal details)", apiErr)

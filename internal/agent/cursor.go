@@ -28,7 +28,7 @@ func NewCursor(apiKey string) (*Cursor, error) {
 	return &Cursor{apiKey: apiKey}, nil
 }
 
-func (c *Cursor) Name() string  { return "cursor" }
+func (c *Cursor) ID() string    { return "cursor" }
 func (c *Cursor) Image() string { return "depak7/forgerun-agent-cursor:dev" }
 
 func (c *Cursor) Secrets() []sandbox.Secret {

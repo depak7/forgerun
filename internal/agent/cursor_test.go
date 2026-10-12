@@ -13,8 +13,8 @@ func TestNewCursorRequiresKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Name() != "cursor" {
-		t.Errorf("Name() = %q", c.Name())
+	if c.ID() != "cursor" {
+		t.Errorf("ID() = %q", c.ID())
 	}
 }
 

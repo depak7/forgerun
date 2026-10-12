@@ -298,7 +298,10 @@ func TestSeededModelsAreReachable(t *testing.T) {
 	if len(vs) < 200 {
 		t.Fatalf("only %d models; is the seed migration applied?", len(vs))
 	}
-	cat := models.NewCatalog(vs)
+	cat := models.NewCatalog("cursor", vs)
+	if cat.DefaultFamily() != "auto" {
+		t.Errorf("cursor default family = %q, want auto (agents.default_model_id)", cat.DefaultFamily())
+	}
 	for _, v := range vs {
 		got, err := cat.Resolve(models.Choice{Model: v.Family, Effort: v.Effort, Thinking: &v.Thinking, Fast: &v.Fast}, "auto")
 		if err != nil || got.ID != v.ID {
@@ -361,5 +364,95 @@ func TestDisabledModelStillShownOnTasks(t *testing.T) {
 	}
 	if rec, _ := s.Get(ctx, tk.ID); rec.Model.ID != id {
 		t.Errorf("task's model = %q, want %s", rec.Model.ID, id)
+	}
+}
+
+// addAgent inserts a test agent and removes it, with its rows, afterwards.
+func addAgent(t *testing.T, s *Store, id string) {
+	t.Helper()
+	if _, err := s.pool.Exec(context.Background(), `INSERT INTO agents (id, name) VALUES ($1, $1)`, id); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		s.pool.Exec(ctx, `UPDATE agents SET default_model_id = NULL WHERE id = $1`, id)
+		s.pool.Exec(ctx, `DELETE FROM tasks WHERE agent_id = $1`, id)
+		s.pool.Exec(ctx, `DELETE FROM models WHERE agent_id = $1`, id)
+		s.pool.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id)
+	})
+}
+
+func TestModelBelongsToAgent(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	addAgent(t, s, "claude-code")
+
+	tk := task.New("r", "p")
+	tk.ModelID = "auto" // Cursor's auto
+	if err := s.Create(ctx, tk, "claude-code"); err == nil {
+		t.Error("task used another agent's model")
+	}
+	if err := s.Create(ctx, task.New("r", "p"), "claude-code"); err == nil {
+		t.Error("task created without a model for an agent with no default")
+	}
+	if err := s.Create(ctx, task.New("r", "p"), "no-such-agent"); err == nil {
+		t.Error("task created for an unknown agent")
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO models (id, agent_id, family, name) VALUES ('x', 'no-such-agent', 'x', 'x')`); err == nil {
+		t.Error("model added for an unknown agent")
+	}
+}
+
+func TestAgentDefaultMustBeOwnModel(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	addAgent(t, s, "claude-code")
+
+	if _, err := s.pool.Exec(ctx, `UPDATE agents SET default_model_id = 'auto' WHERE id = 'claude-code'`); err == nil {
+		t.Fatal("agent default pointed at another agent's model")
+	}
+
+	// With its own model as default, tasks without a model use it.
+	if _, err := s.pool.Exec(ctx, `INSERT INTO models (id, agent_id, family, name, is_default) VALUES ('sonnet', 'claude-code', 'sonnet', 'Sonnet', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE agents SET default_model_id = 'sonnet' WHERE id = 'claude-code'`); err != nil {
+		t.Fatal(err)
+	}
+	tk := task.New("r", "p")
+	if err := s.Create(ctx, tk, "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := s.Get(ctx, tk.ID)
+	if rec.AgentID != "claude-code" || rec.Model.ID != "sonnet" || !rec.Model.AgentDefault {
+		t.Errorf("task = agent %q model %+v", rec.AgentID, rec.Model)
+	}
+}
+
+func TestGetAgent(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	a, err := s.GetAgent(ctx, "cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Name != "Cursor" || !a.Enabled || a.DefaultModelID != "auto" {
+		t.Errorf("cursor = %+v", a)
+	}
+	if _, err := s.GetAgent(ctx, "nope"); !errors.Is(err, store.ErrAgentNotFound) {
+		t.Errorf("unknown agent: got %v, want ErrAgentNotFound", err)
+	}
+}
+
+func TestDisabledAgentHidesModels(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	if _, err := s.pool.Exec(ctx, `UPDATE agents SET enabled = false WHERE id = 'cursor'`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.pool.Exec(context.Background(), `UPDATE agents SET enabled = true WHERE id = 'cursor'`) })
+
+	vs, err := s.ListModels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(vs, func(v models.Variant) bool { return v.AgentID == "cursor" }) {
+		t.Error("models of a disabled agent are still listed")
 	}
 }

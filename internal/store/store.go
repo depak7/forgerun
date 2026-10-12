@@ -13,12 +13,23 @@ import (
 // ErrNotFound is returned when no task has the given ID.
 var ErrNotFound = errors.New("task not found")
 
+// ErrAgentNotFound is returned when no agent has the given ID.
+var ErrAgentNotFound = errors.New("agent not found")
+
+// Agent is a coding agent forgerun can run (a row of the agents table).
+type Agent struct {
+	ID             string // e.g. "cursor"
+	Name           string // e.g. "Cursor"
+	Enabled        bool
+	DefaultModelID string // used when a request names no model; "" if none
+}
+
 // Record is a task as stored: what was asked, and what happened.
 type Record struct {
 	ID         string
 	Repo       string
 	Prompt     string
-	Agent      string
+	AgentID    string
 	Model      models.Variant // the model the task runs on (from the models table)
 	State      task.State
 	Error      string // "" unless Failed
@@ -38,9 +49,9 @@ type Outcome struct {
 }
 
 type Store interface {
-	// Create saves a new task in the Queued state. t.ModelID must name a
-	// known model ("" means auto).
-	Create(ctx context.Context, t task.Task, agent string) error
+	// Create saves a new task in the Queued state for agentID. An empty
+	// t.ModelID means the agent's default model.
+	Create(ctx context.Context, t task.Task, agentID string) error
 	// Start moves a task from Queued to Running.
 	Start(ctx context.Context, id string) error
 	// Finish moves a task from Running to a terminal state.
@@ -57,7 +68,9 @@ type Store interface {
 	Get(ctx context.Context, id string) (Record, error)
 	// List returns the most recent tasks first.
 	List(ctx context.Context, limit int) ([]Record, error)
-	// ListModels returns every enabled model.
+	// GetAgent returns one agent, or ErrAgentNotFound.
+	GetAgent(ctx context.Context, id string) (Agent, error)
+	// ListModels returns every enabled model of every enabled agent.
 	ListModels(ctx context.Context) ([]models.Variant, error)
 	// Ping reports whether the store is reachable.
 	Ping(ctx context.Context) error

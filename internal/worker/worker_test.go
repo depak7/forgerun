@@ -14,6 +14,9 @@ import (
 	"github.com/depak7/forgerun/internal/task"
 )
 
+// fakeDefault is the default model of the "fake" agent the tests create tasks for.
+var fakeDefault = models.Variant{ID: "auto", AgentID: "fake", Family: "auto", IsDefault: true, AgentDefault: true, ZDR: true}
+
 // fakeExec lets each test define Run inline.
 type fakeExec func(ctx context.Context, t task.Task) (task.Result, error)
 
@@ -77,7 +80,7 @@ func waitState(t *testing.T, s store.Store, id string, want task.State) store.Re
 }
 
 func TestSuccess(t *testing.T) {
-	s := memory.New()
+	s := memory.New(fakeDefault)
 	tk := create(t, s)
 	startPool(t, s, fakeExec(func(context.Context, task.Task) (task.Result, error) {
 		return task.Result{LogPath: "a.log", PatchPath: "a.patch"}, nil
@@ -90,7 +93,7 @@ func TestSuccess(t *testing.T) {
 }
 
 func TestFailure(t *testing.T) {
-	s := memory.New()
+	s := memory.New(fakeDefault)
 	tk := create(t, s)
 	startPool(t, s, fakeExec(func(context.Context, task.Task) (task.Result, error) {
 		return task.Result{}, errors.New("clone: exit code 128")
@@ -103,7 +106,7 @@ func TestFailure(t *testing.T) {
 }
 
 func TestUserCancel(t *testing.T) {
-	s := memory.New()
+	s := memory.New(fakeDefault)
 	tk := create(t, s)
 	p, _ := startPool(t, s, fakeExec(blockUntilCancelled), 1, 10*time.Millisecond)
 
@@ -121,7 +124,7 @@ func TestUserCancel(t *testing.T) {
 }
 
 func TestShutdownFailsRunningTask(t *testing.T) {
-	s := memory.New()
+	s := memory.New(fakeDefault)
 	tk := create(t, s)
 	_, stop := startPool(t, s, fakeExec(blockUntilCancelled), 1, 10*time.Millisecond)
 
@@ -134,7 +137,7 @@ func TestShutdownFailsRunningTask(t *testing.T) {
 }
 
 func TestConcurrencyLimit(t *testing.T) {
-	s := memory.New()
+	s := memory.New(fakeDefault)
 	release := make(chan struct{})
 	startPool(t, s, fakeExec(func(ctx context.Context, _ task.Task) (task.Result, error) {
 		select {
@@ -164,7 +167,7 @@ func TestConcurrencyLimit(t *testing.T) {
 }
 
 func TestNudgeWakesIdleWorker(t *testing.T) {
-	s := memory.New()
+	s := memory.New(fakeDefault)
 	p, _ := startPool(t, s, fakeExec(func(context.Context, task.Task) (task.Result, error) {
 		return task.Result{}, nil
 	}), 1, time.Hour) // without a nudge, the worker would sleep for an hour
@@ -210,7 +213,7 @@ func TestOutcome(t *testing.T) {
 }
 
 func TestPassesModelToExecutor(t *testing.T) {
-	v := models.Variant{ID: "m-high", Family: "m", Effort: "high", IsDefault: true, ZDR: true}
+	v := models.Variant{ID: "m-high", AgentID: "fake", Family: "m", Effort: "high", IsDefault: true, ZDR: true}
 	s := memory.New(v)
 	tk := task.New("https://example.com/r.git", "p")
 	tk.ModelID = "m-high"
