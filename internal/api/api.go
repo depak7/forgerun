@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -265,7 +264,7 @@ func (s *Server) models(ctx context.Context) ([]models.Variant, error) {
 		return nil, err
 	}
 	if s.requireZDR {
-		vs = slices.DeleteFunc(vs, func(v models.Variant) bool { return !v.ZDR })
+		vs = models.OnlyZDR(vs)
 	}
 	return vs, nil
 }

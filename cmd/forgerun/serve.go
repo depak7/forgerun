@@ -16,6 +16,7 @@ import (
 
 	"github.com/depak7/forgerun/internal/agent"
 	"github.com/depak7/forgerun/internal/api"
+	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/postgres"
@@ -29,6 +30,8 @@ func serveCmd(args []string) error {
 	workers := fs.Int("workers", 2, "how many tasks may run at once")
 	timeout := fs.Duration("timeout", 15*time.Minute, "max time per task")
 	out := fs.String("out", "out", "directory for task results")
+	defaultModel := fs.String("model", "", "default model family for requests that name none (default: the agent's own)")
+	requireZDR := fs.Bool("require-zdr", false, "offer only models with zero data retention")
 	dbURL := dbFlag(fs)
 	fs.Parse(args)
 
@@ -54,6 +57,11 @@ func serveCmd(args []string) error {
 	if err := checkAgent(ctx, db, ag.ID()); err != nil {
 		return err
 	}
+	effective, families, err := checkModels(ctx, db, ag.ID(), *defaultModel, *requireZDR)
+	if err != nil {
+		return err
+	}
+	log.Info("models loaded", "agent", ag.ID(), "families", families, "default", effective, "require_zdr", *requireZDR)
 	if err := sandbox.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
@@ -78,7 +86,8 @@ func serveCmd(args []string) error {
 	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: io.Discard}
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
-		Handler:           api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agent: ag.ID(), Log: log})),
+		Handler: api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agent: ag.ID(),
+			DefaultModel: *defaultModel, RequireZDR: *requireZDR, Log: log})),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -125,6 +134,29 @@ func checkAgent(ctx context.Context, db store.Store, id string) error {
 		return fmt.Errorf("agent %q is disabled in the agents table", id)
 	}
 	return nil
+}
+
+// checkModels makes sure requests that name no model will resolve: the
+// -model family (or the agent's own default) must exist among the agent's
+// enabled models, after the ZDR filter if required. It returns the
+// effective default model id and how many model families the agent offers.
+func checkModels(ctx context.Context, db store.Store, agentID, defaultModel string, requireZDR bool) (string, int, error) {
+	vs, err := db.ListModels(ctx)
+	if err != nil {
+		return "", 0, err
+	}
+	if requireZDR {
+		vs = models.OnlyZDR(vs)
+	}
+	cat := models.NewCatalog(agentID, vs)
+	v, err := cat.Resolve(models.Choice{Model: defaultModel}, "")
+	if err != nil {
+		if defaultModel != "" {
+			return "", 0, fmt.Errorf("-model %q: %w", defaultModel, err)
+		}
+		return "", 0, fmt.Errorf("agent %q has no usable default model: %w", agentID, err)
+	}
+	return v.ID, len(cat.Families()), nil
 }
 
 // isLoopback reports whether addr only accepts connections from this machine.

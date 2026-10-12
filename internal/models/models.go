@@ -145,6 +145,11 @@ func (f *family) finish() {
 // DefaultFamily is the agent's own default model family ("" if none).
 func (c *Catalog) DefaultFamily() string { return c.defaultFamily }
 
+// OnlyZDR removes variants without zero data retention. It modifies vs in place.
+func OnlyZDR(vs []Variant) []Variant {
+	return slices.DeleteFunc(vs, func(v Variant) bool { return !v.ZDR })
+}
+
 // Families returns every family, sorted by id.
 func (c *Catalog) Families() []Family {
 	out := make([]Family, 0, len(c.families))

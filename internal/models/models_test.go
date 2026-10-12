@@ -166,3 +166,10 @@ func TestEveryVariantIsReachable(t *testing.T) {
 		}
 	}
 }
+
+func TestOnlyZDR(t *testing.T) {
+	got := OnlyZDR([]Variant{{ID: "a", ZDR: true}, {ID: "b"}, {ID: "c", ZDR: true}})
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "c" {
+		t.Errorf("OnlyZDR = %+v", got)
+	}
+}
