@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/task"
 )
@@ -36,5 +37,28 @@ func TestLifecycleAndRules(t *testing.T) {
 	}
 	if _, err := s.Get(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("Get missing: got %v, want ErrNotFound", err)
+	}
+}
+
+func TestModels(t *testing.T) {
+	v := models.Variant{ID: "m-high", Family: "m", Effort: "high", IsDefault: true, ZDR: true}
+	s, ctx := New(v), context.Background()
+
+	tk := task.New("r", "p")
+	tk.ModelID = "m-high"
+	if err := s.Create(ctx, tk, "fake"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, tk.ID); rec.Model.ID != "m-high" {
+		t.Errorf("model = %+v", rec.Model)
+	}
+	bad := task.New("r", "p")
+	bad.ModelID = "nope"
+	if err := s.Create(ctx, bad, "fake"); err == nil {
+		t.Error("unknown model accepted")
+	}
+	vs, _ := s.ListModels(ctx)
+	if len(vs) != 2 || vs[0].ID != "auto" || vs[1].ID != "m-high" {
+		t.Errorf("ListModels = %+v", vs)
 	}
 }

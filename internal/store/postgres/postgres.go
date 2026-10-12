@@ -2,6 +2,7 @@
 package postgres
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/task"
 )
@@ -45,10 +47,10 @@ func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
 func (s *Store) Create(ctx context.Context, t task.Task, agent string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO tasks (id, repo, prompt, agent, state) VALUES ($1, $2, $3, $4, $5)`,
-		t.ID, t.Repo, t.Prompt, agent, string(task.Queued))
+		`INSERT INTO tasks (id, repo, prompt, agent, state, model_id) VALUES ($1, $2, $3, $4, $5, $6)`,
+		t.ID, t.Repo, t.Prompt, agent, string(task.Queued), cmp.Or(t.ModelID, "auto"))
 	if err != nil {
-		return fmt.Errorf("creating task %s: %w", t.ID, err)
+		return fmt.Errorf("creating task %s: %w", t.ID, err) // includes the FK error for an unknown model
 	}
 	return nil
 }
@@ -67,10 +69,11 @@ func (s *Store) Finish(ctx context.Context, id string, o store.Outcome) error {
 
 func (s *Store) Claim(ctx context.Context) (store.Record, bool, error) {
 	// SKIP LOCKED: rows another worker is claiming right now are skipped
-	// instead of waited on, so concurrent workers each get a different task.
+	// instead of waited on. FROM models joins the model so RETURNING has it.
 	row := s.pool.QueryRow(ctx, `
-		UPDATE tasks SET state = 'running', started_at = now()
-		WHERE state = 'queued' AND id = (
+		UPDATE tasks AS t SET state = 'running', started_at = now()
+		FROM models m
+		WHERE m.id = t.model_id AND t.state = 'queued' AND t.id = (
 			SELECT id FROM tasks WHERE state = 'queued'
 			ORDER BY created_at, id
 			FOR UPDATE SKIP LOCKED
@@ -123,10 +126,15 @@ func (s *Store) transition(ctx context.Context, id string, from, to task.State, 
 	return nil
 }
 
-const selectColumns = `id, repo, prompt, agent, state, error, log_path, patch_path, created_at, started_at, finished_at`
+// selectColumns is the task plus its model; queries alias tasks as t, models as m.
+const selectColumns = `t.id, t.repo, t.prompt, t.agent, t.state, t.error, t.log_path, t.patch_path,
+	t.created_at, t.started_at, t.finished_at,
+	m.id, m.agent, m.family, m.name, m.effort, m.thinking, m.fast, m.is_default, m.zdr`
+
+const fromTasks = ` FROM tasks t JOIN models m ON m.id = t.model_id`
 
 func (s *Store) Get(ctx context.Context, id string) (store.Record, error) {
-	row := s.pool.QueryRow(ctx, `SELECT `+selectColumns+` FROM tasks WHERE id = $1`, id)
+	row := s.pool.QueryRow(ctx, `SELECT `+selectColumns+fromTasks+` WHERE t.id = $1`, id)
 	rec, err := scanRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Record{}, fmt.Errorf("%w: %s", store.ErrNotFound, id)
@@ -135,7 +143,7 @@ func (s *Store) Get(ctx context.Context, id string) (store.Record, error) {
 }
 
 func (s *Store) List(ctx context.Context, limit int) ([]store.Record, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+selectColumns+` FROM tasks ORDER BY created_at DESC, id DESC LIMIT $1`, limit)
+	rows, err := s.pool.Query(ctx, `SELECT `+selectColumns+fromTasks+` ORDER BY t.created_at DESC, t.id DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
 	}
@@ -155,6 +163,24 @@ func (s *Store) List(ctx context.Context, limit int) ([]store.Record, error) {
 	return recs, nil
 }
 
+func (s *Store) ListModels(ctx context.Context) ([]models.Variant, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, agent, family, name, effort, thinking, fast, is_default, zdr
+		FROM models WHERE enabled ORDER BY family, id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing models: %w", err)
+	}
+	vs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (models.Variant, error) {
+		var v models.Variant
+		err := row.Scan(&v.ID, &v.Agent, &v.Family, &v.Name, &v.Effort, &v.Thinking, &v.Fast, &v.IsDefault, &v.ZDR)
+		return v, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing models: %w", err)
+	}
+	return vs, nil
+}
+
 // scanRecord reads one row in selectColumns order. pgx.Row is satisfied by
 // both QueryRow's result and pgx.Rows, so Get and List share this.
 func scanRecord(row pgx.Row) (store.Record, error) {
@@ -165,7 +191,9 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		startedAt, finishedAt      *time.Time
 	)
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.Agent, &state,
-		&errMsg, &logPath, &patchPath, &rec.CreatedAt, &startedAt, &finishedAt)
+		&errMsg, &logPath, &patchPath, &rec.CreatedAt, &startedAt, &finishedAt,
+		&rec.Model.ID, &rec.Model.Agent, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
+		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.ZDR)
 	if err != nil {
 		return store.Record{}, err
 	}

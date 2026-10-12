@@ -19,9 +19,10 @@ const repoDir = "/work/repo"
 
 // Task is what the user asked for.
 type Task struct {
-	ID     string
-	Repo   string // git URL
-	Prompt string
+	ID      string
+	Repo    string // git URL
+	Prompt  string
+	ModelID string // exact agent model id; "" or "auto" lets the agent choose
 }
 
 // New creates a task with a unique, sortable ID like "t-20261011-142233-a1b2c3".

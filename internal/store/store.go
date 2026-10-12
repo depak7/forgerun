@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/task"
 )
 
@@ -18,6 +19,7 @@ type Record struct {
 	Repo       string
 	Prompt     string
 	Agent      string
+	Model      models.Variant // the model the task runs on (from the models table)
 	State      task.State
 	Error      string // "" unless Failed
 	LogPath    string
@@ -36,7 +38,8 @@ type Outcome struct {
 }
 
 type Store interface {
-	// Create saves a new task in the Queued state.
+	// Create saves a new task in the Queued state. t.ModelID must name a
+	// known model ("" means auto).
 	Create(ctx context.Context, t task.Task, agent string) error
 	// Start moves a task from Queued to Running.
 	Start(ctx context.Context, id string) error
@@ -54,6 +57,8 @@ type Store interface {
 	Get(ctx context.Context, id string) (Record, error)
 	// List returns the most recent tasks first.
 	List(ctx context.Context, limit int) ([]Record, error)
+	// ListModels returns every enabled model.
+	ListModels(ctx context.Context) ([]models.Variant, error)
 	// Ping reports whether the store is reachable.
 	Ping(ctx context.Context) error
 	Close()

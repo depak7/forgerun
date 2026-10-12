@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/task"
 )
@@ -283,5 +285,81 @@ func TestFailRunning(t *testing.T) {
 	rec, _ = s.Get(ctx, queued.ID)
 	if rec.State != task.Queued {
 		t.Errorf("queued task must be untouched, got %s", rec.State)
+	}
+}
+
+// The real seed: every enabled model must be reachable by its own options.
+func TestSeededModelsAreReachable(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	vs, err := s.ListModels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vs) < 200 {
+		t.Fatalf("only %d models; is the seed migration applied?", len(vs))
+	}
+	cat := models.NewCatalog(vs)
+	for _, v := range vs {
+		got, err := cat.Resolve(models.Choice{Model: v.Family, Effort: v.Effort, Thinking: &v.Thinking, Fast: &v.Fast}, "auto")
+		if err != nil || got.ID != v.ID {
+			t.Errorf("%s: resolved to %q, %v", v.ID, got.ID, err)
+		}
+	}
+}
+
+func TestTaskCarriesModel(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	tk := task.New("r", "p")
+	tk.ModelID = "claude-opus-5-5-high-fast"
+	if err := s.Create(ctx, tk, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok, err := s.Claim(ctx) // Claim's UPDATE … FROM must return the model too
+	if err != nil || !ok {
+		t.Fatalf("Claim: %v %v", ok, err)
+	}
+	m := rec.Model
+	if m.ID != tk.ModelID || m.Family != "claude-opus-5-5" || m.Effort != "high" || !m.Fast || m.Thinking {
+		t.Errorf("model = %+v", m)
+	}
+
+	plain := task.New("r", "p") // no model → auto
+	if err := s.Create(ctx, plain, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, plain.ID); rec.Model.ID != "auto" {
+		t.Errorf("default model = %q, want auto", rec.Model.ID)
+	}
+}
+
+func TestCreateRejectsUnknownModel(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	tk := task.New("r", "p")
+	tk.ModelID = "no-such-model"
+	if err := s.Create(ctx, tk, "cursor"); err == nil {
+		t.Fatal("Create accepted an unknown model")
+	}
+}
+
+// Disabling a model hides it from choices but not from tasks that used it.
+func TestDisabledModelStillShownOnTasks(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	const id = "gpt-5.2-high"
+	tk := task.New("r", "p")
+	tk.ModelID = id
+	if err := s.Create(ctx, tk, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE models SET enabled = false WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.pool.Exec(context.Background(), `UPDATE models SET enabled = true WHERE id = $1`, id) })
+
+	vs, _ := s.ListModels(ctx)
+	if slices.ContainsFunc(vs, func(v models.Variant) bool { return v.ID == id }) {
+		t.Error("disabled model still listed")
+	}
+	if rec, _ := s.Get(ctx, tk.ID); rec.Model.ID != id {
+		t.Errorf("task's model = %q, want %s", rec.Model.ID, id)
 	}
 }

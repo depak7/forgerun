@@ -3,25 +3,39 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/task"
 )
 
 // Store is safe for concurrent use.
 type Store struct {
-	mu    sync.Mutex
-	tasks map[string]*store.Record
+	mu     sync.Mutex
+	tasks  map[string]*store.Record
+	models map[string]models.Variant
 }
 
 var _ store.Store = (*Store)(nil)
 
-func New() *Store { return &Store{tasks: map[string]*store.Record{}} }
+var autoModel = models.Variant{ID: "auto", Agent: "cursor", Family: "auto", Name: "Auto", IsDefault: true, ZDR: true}
+
+// New returns an empty store that knows auto plus vs.
+func New(vs ...models.Variant) *Store {
+	s := &Store{tasks: map[string]*store.Record{}, models: map[string]models.Variant{"auto": autoModel}}
+	for _, v := range vs {
+		s.models[v.ID] = v
+	}
+	return s
+}
 
 func (s *Store) Close() {}
 
@@ -33,9 +47,21 @@ func (s *Store) Create(_ context.Context, t task.Task, agent string) error {
 	if _, ok := s.tasks[t.ID]; ok {
 		return fmt.Errorf("creating task %s: already exists", t.ID)
 	}
+	m, ok := s.models[cmp.Or(t.ModelID, "auto")]
+	if !ok { // mirrors the Postgres foreign key
+		return fmt.Errorf("creating task %s: unknown model %q", t.ID, t.ModelID)
+	}
 	s.tasks[t.ID] = &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, Agent: agent,
-		State: task.Queued, CreatedAt: time.Now()}
+		Model: m, State: task.Queued, CreatedAt: time.Now()}
 	return nil
+}
+
+func (s *Store) ListModels(context.Context) ([]models.Variant, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vs := slices.Collect(maps.Values(s.models))
+	slices.SortFunc(vs, func(a, b models.Variant) int { return strings.Compare(a.ID, b.ID) })
+	return vs, nil
 }
 
 func (s *Store) Start(_ context.Context, id string) error {
