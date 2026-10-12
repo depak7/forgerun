@@ -188,6 +188,24 @@ func (s *Store) GetAgent(ctx context.Context, id string) (store.Agent, error) {
 	return a, nil
 }
 
+func (s *Store) ListAgents(ctx context.Context) ([]store.Agent, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, name, enabled, default_model_id FROM agents WHERE enabled ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing agents: %w", err)
+	}
+	agents, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.Agent, error) {
+		var a store.Agent
+		var defaultModel *string
+		err := row.Scan(&a.ID, &a.Name, &a.Enabled, &defaultModel)
+		a.DefaultModelID = deref(defaultModel)
+		return a, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing agents: %w", err)
+	}
+	return agents, nil
+}
+
 func (s *Store) ListModels(ctx context.Context) ([]models.Variant, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+modelColumns+`
 		FROM models m JOIN agents a ON a.id = m.agent_id

@@ -57,6 +57,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", srv.cancelTask)
 	mux.HandleFunc("GET /api/tasks/{id}/log", srv.taskLog)
 	mux.HandleFunc("GET /api/tasks/{id}/patch", srv.taskPatch)
+	mux.HandleFunc("GET /api/agents", srv.listAgents)
 	mux.HandleFunc("GET /api/models", srv.listModels)
 	mux.HandleFunc("GET /healthz", srv.health)
 	return mux
@@ -131,7 +132,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cat, err := s.catalog(r.Context())
+	cat, err := s.catalog(r.Context(), s.agent)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -246,11 +247,19 @@ func (s *Server) taskPatch(w http.ResponseWriter, r *http.Request) {
 	s.serveFile(w, r, rec.PatchPath, "text/x-diff; charset=utf-8")
 }
 
-// catalog loads the models a request may choose from: this server's agent's
-// enabled models, minus those without zero data retention if required. It
-// is read from the store on every call, so a newly inserted model is usable
-// at once.
-func (s *Server) catalog(ctx context.Context) (*models.Catalog, error) {
+// catalog loads agentID's enabled models, minus those without zero data
+// retention if required. It is read from the store on every call, so a
+// newly inserted model is usable at once.
+func (s *Server) catalog(ctx context.Context, agentID string) (*models.Catalog, error) {
+	vs, err := s.models(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return models.NewCatalog(agentID, vs), nil
+}
+
+// models returns every enabled model, minus non-ZDR ones if required.
+func (s *Server) models(ctx context.Context) ([]models.Variant, error) {
 	vs, err := s.store.ListModels(ctx)
 	if err != nil {
 		return nil, err
@@ -258,7 +267,42 @@ func (s *Server) catalog(ctx context.Context) (*models.Catalog, error) {
 	if s.requireZDR {
 		vs = slices.DeleteFunc(vs, func(v models.Variant) bool { return !v.ZDR })
 	}
-	return models.NewCatalog(s.agent, vs), nil
+	return vs, nil
+}
+
+// defaultFamily is the model family used when a request names none. The
+// server's DefaultModel applies only to the agent this server runs.
+func (s *Server) defaultFamily(agentID string, cat *models.Catalog) string {
+	if agentID == s.agent && s.defaultModel != "" {
+		return s.defaultModel
+	}
+	return cat.DefaultFamily()
+}
+
+type agentJSON struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	DefaultModel string `json:"default_model"` // model family
+	Runnable     bool   `json:"runnable"`      // this server can run tasks with it
+}
+
+func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	vs, err := s.models(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	out := make([]agentJSON, 0, len(agents))
+	for _, a := range agents {
+		cat := models.NewCatalog(a.ID, vs)
+		out = append(out, agentJSON{ID: a.ID, Name: a.Name, DefaultModel: s.defaultFamily(a.ID, cat), Runnable: a.ID == s.agent})
+	}
+	writeData(w, http.StatusOK, out)
 }
 
 type familyJSON struct {
@@ -271,8 +315,20 @@ type familyJSON struct {
 	ZDR           bool     `json:"zdr"`
 }
 
+// listModels serves GET /api/models?agent=<id>; without ?agent= it lists
+// the models of the agent this server runs.
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
-	cat, err := s.catalog(r.Context())
+	agentID := cmp.Or(r.URL.Query().Get("agent"), s.agent)
+	a, err := s.store.GetAgent(r.Context(), agentID)
+	if errors.Is(err, store.ErrAgentNotFound) || (err == nil && !a.Enabled) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	cat, err := s.catalog(r.Context(), agentID)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -288,9 +344,11 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			Thinking: f.Thinking, Fast: f.Fast, ZDR: f.ZDR})
 	}
 	writeData(w, http.StatusOK, struct {
-		Default string       `json:"default"`
-		Models  []familyJSON `json:"models"`
-	}{cmp.Or(s.defaultModel, cat.DefaultFamily()), out})
+		Agent    string       `json:"agent"`
+		Runnable bool         `json:"runnable"` // this server can run tasks with this agent
+		Default  string       `json:"default"`
+		Models   []familyJSON `json:"models"`
+	}{agentID, agentID == s.agent, s.defaultFamily(agentID, cat), out})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

@@ -456,3 +456,21 @@ func TestDisabledAgentHidesModels(t *testing.T) {
 		t.Error("models of a disabled agent are still listed")
 	}
 }
+
+func TestListAgents(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	addAgent(t, s, "claude-code")
+	if _, err := s.pool.Exec(ctx, `UPDATE agents SET enabled = false WHERE id = 'claude-code'`); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := s.ListAgents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(agents, func(a store.Agent) bool { return a.ID == "cursor" && a.DefaultModelID == "auto" }) {
+		t.Errorf("cursor missing from %+v", agents)
+	}
+	if slices.ContainsFunc(agents, func(a store.Agent) bool { return a.ID == "claude-code" }) {
+		t.Error("disabled agent listed")
+	}
+}

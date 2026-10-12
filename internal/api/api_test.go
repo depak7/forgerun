@@ -391,16 +391,10 @@ func TestCreateRejectsBadModelChoice(t *testing.T) {
 func TestListModels(t *testing.T) {
 	h, _, _ := setup(t)
 	data, _ := decode(t, do(h, "GET", "/api/models", ""), http.StatusOK)
-	var got struct {
-		Default string       `json:"default"`
-		Models  []familyJSON `json:"models"`
-	}
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	var ids []string
-	for _, m := range got.Models {
-		ids = append(ids, m.ID)
+	got := decodeModels(t, data)
+	ids := familyIDs(got.Models)
+	if got.Agent != "cursor" || !got.Runnable {
+		t.Errorf("agent=%q runnable=%v, want cursor true", got.Agent, got.Runnable)
 	}
 	if got.Default != "auto" || !slices.Equal(ids, []string{"auto", "claude-fable-5-1", "claude-opus-5-5"}) {
 		t.Fatalf("default=%q models=%v (another agent's model must not appear)", got.Default, ids)
@@ -428,4 +422,72 @@ func TestRequireZDR(t *testing.T) {
 		t.Error("non-ZDR model listed despite RequireZDR")
 	}
 	createTask(t, h) // ZDR models (auto) still work
+}
+
+type modelsResponse struct {
+	Agent    string       `json:"agent"`
+	Runnable bool         `json:"runnable"`
+	Default  string       `json:"default"`
+	Models   []familyJSON `json:"models"`
+}
+
+func decodeModels(t *testing.T, data json.RawMessage) modelsResponse {
+	t.Helper()
+	var got modelsResponse
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func familyIDs(fams []familyJSON) []string {
+	var ids []string
+	for _, f := range fams {
+		ids = append(ids, f.ID)
+	}
+	return ids
+}
+
+func TestListModelsForAgent(t *testing.T) {
+	// The server default applies to its own agent only, never to another's listing.
+	h, _, _ := setup(t, func(c *Config) { c.DefaultModel = "claude-opus-5-5" })
+	data, _ := decode(t, do(h, "GET", "/api/models?agent=other-agent", ""), http.StatusOK)
+	got := decodeModels(t, data)
+	if got.Agent != "other-agent" || got.Runnable || got.Default != "other-x" ||
+		!slices.Equal(familyIDs(got.Models), []string{"other-x"}) {
+		t.Errorf("other-agent listing = %+v", got)
+	}
+
+	_, apiErr := decode(t, do(h, "GET", "/api/models?agent=nope", ""), http.StatusNotFound)
+	if apiErr.Code != "not_found" || apiErr.Message != "agent not found" {
+		t.Errorf("unknown agent: %+v", apiErr)
+	}
+
+	down := New(Config{Store: disabledAgents{memory.New(testModels...)}, Pool: &fakePool{}, Agent: "cursor", Log: slog.New(slog.DiscardHandler)})
+	decode(t, do(down, "GET", "/api/models?agent=cursor", ""), http.StatusNotFound)
+}
+
+// disabledAgents reports every agent as disabled.
+type disabledAgents struct{ store.Store }
+
+func (d disabledAgents) GetAgent(ctx context.Context, id string) (store.Agent, error) {
+	a, err := d.Store.GetAgent(ctx, id)
+	a.Enabled = false
+	return a, err
+}
+
+func TestListAgents(t *testing.T) {
+	h, _, _ := setup(t)
+	data, _ := decode(t, do(h, "GET", "/api/agents", ""), http.StatusOK)
+	var agents []agentJSON
+	if err := json.Unmarshal(data, &agents); err != nil {
+		t.Fatal(err)
+	}
+	want := []agentJSON{
+		{ID: "cursor", Name: "cursor", DefaultModel: "auto", Runnable: true},
+		{ID: "other-agent", Name: "other-agent", DefaultModel: "other-x", Runnable: false},
+	}
+	if !slices.Equal(agents, want) {
+		t.Errorf("agents = %+v\nwant     %+v", agents, want)
+	}
 }

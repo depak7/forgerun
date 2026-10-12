@@ -85,3 +85,15 @@ func TestGetAgent(t *testing.T) {
 		t.Errorf("unknown agent: got %v, want ErrAgentNotFound", err)
 	}
 }
+
+func TestListAgents(t *testing.T) {
+	other := models.Variant{ID: "x", AgentID: "another", Family: "x", IsDefault: true}
+	s := New(fakeDefault, other)
+	agents, err := s.ListAgents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 2 || agents[0].ID != "another" || agents[1].ID != "fake" || agents[1].DefaultModelID != "auto" {
+		t.Errorf("agents = %+v", agents)
+	}
+}

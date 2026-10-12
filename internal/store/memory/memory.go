@@ -93,6 +93,24 @@ func (s *Store) GetAgent(_ context.Context, id string) (store.Agent, error) {
 	return a, nil
 }
 
+func (s *Store) ListAgents(ctx context.Context) ([]store.Agent, error) {
+	s.mu.Lock()
+	ids := map[string]bool{}
+	for k := range s.models {
+		ids[k.agent] = true
+	}
+	s.mu.Unlock() // GetAgent locks again
+	var agents []store.Agent
+	for _, id := range slices.Sorted(maps.Keys(ids)) {
+		a, err := s.GetAgent(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		agents = append(agents, a)
+	}
+	return agents, nil
+}
+
 func (s *Store) ListModels(context.Context) ([]models.Variant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

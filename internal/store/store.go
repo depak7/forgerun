@@ -70,6 +70,8 @@ type Store interface {
 	List(ctx context.Context, limit int) ([]Record, error)
 	// GetAgent returns one agent, or ErrAgentNotFound.
 	GetAgent(ctx context.Context, id string) (Agent, error)
+	// ListAgents returns every enabled agent, sorted by id.
+	ListAgents(ctx context.Context) ([]Agent, error)
 	// ListModels returns every enabled model of every enabled agent.
 	ListModels(ctx context.Context) ([]models.Variant, error)
 	// Ping reports whether the store is reachable.
