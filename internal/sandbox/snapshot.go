@@ -2,8 +2,10 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"syscall"
 
@@ -137,8 +139,16 @@ func (s *Sandbox) attachSecrets(ctx context.Context, secrets []Secret) error {
 // snapshots it has replaced or evicted.
 func DeleteSnapshot(ctx context.Context, ref string) error {
 	err := microsandbox.Snapshot.Remove(ctx, ref, true)
-	if err != nil && !microsandbox.IsKind(err, microsandbox.ErrSnapshotNotFound) {
-		return fmt.Errorf("deleting snapshot %s: %w", ref, err)
+	if err == nil || microsandbox.IsKind(err, microsandbox.ErrSnapshotNotFound) || gone(ref) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("deleting snapshot %s: %w", ref, err)
+}
+
+// gone reports whether a local snapshot's folder no longer exists. Removing
+// such a snapshot fails with a plain I/O error rather than "not found", but
+// it's already deleted as far as forgerun is concerned.
+func gone(ref string) bool {
+	_, err := os.Stat(ref)
+	return errors.Is(err, fs.ErrNotExist)
 }

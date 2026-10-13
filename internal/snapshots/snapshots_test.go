@@ -19,7 +19,7 @@ import (
 
 const testRepo = "https://github.com/octocat/Hello-World" // tiny; default branch "master"
 
-// messyAgent leaves behind everything the cleanup must deal with: an edit
+// messyAgent reports what it started with, then leaves behind everything the cleanup must deal with: an edit
 // it commits on a new branch, an untracked file, an ignored cache (kept),
 // and state in its own home folder. If fail is set, it then fails.
 type messyAgent struct{ fail bool }
@@ -29,7 +29,10 @@ func (messyAgent) Image() string             { return "depak7/forgerun-agent-cur
 func (messyAgent) Secrets() []sandbox.Secret { return nil }
 func (messyAgent) StatePaths() []string      { return []string{"/root/.fake-agent"} }
 func (a messyAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
+	// The first two lines report what the task started with, for the tests.
 	script := `set -e
+echo "agent sees commit $(git rev-parse HEAD)"
+if [ -e ignored-cache/data ]; then echo "agent found the ignored cache"; fi
 echo edited-by-agent >> README
 git checkout -q -b agent-branch
 git -c user.email=a@example.com -c user.name=agent commit -qam "agent commit"
@@ -102,6 +105,7 @@ func TestSaveCleansAndReplaces(t *testing.T) {
 		{"agent edit undone", "grep -c edited-by-agent README || true", "0"},
 		{"untracked removed", "test -e untracked.txt && echo present || echo gone", "gone"},
 		{"working tree clean", "git status --porcelain", ""},
+		{"agent branch deleted", "git branch --format='%(refname:short)'", "master"},
 		{"ignored cache kept", "cat ignored-cache/data", "kept"},
 		{"agent state wiped", "test -e /root/.fake-agent && echo present || echo gone", "gone"},
 	}
@@ -192,4 +196,125 @@ func TestGroup(t *testing.T) {
 	if got := slug("__Hello_World.js--"); got != "hello-world-js" {
 		t.Errorf("slug = %q", got)
 	}
+}
+
+// A second task on the same repo starts from the first one's snapshot and
+// inherits its ignored files (stand-ins for installed dependencies).
+func TestWarmStart(t *testing.T) {
+	r, s := setup(t, messyAgent{})
+	ctx := context.Background()
+
+	run := func() (store.Record, string) {
+		t.Helper()
+		tk := task.New(testRepo, "unused")
+		if err := s.Create(ctx, tk, "fake"); err != nil { // UseSnapshot records against it
+			t.Fatal(err)
+		}
+		res, err := r.Run(ctx, tk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec, _ := s.Get(ctx, tk.ID)
+		log, _ := os.ReadFile(res.LogPath)
+		return rec, string(log)
+	}
+
+	cold, coldLog := run()
+	if cold.SnapshotID != nil || !strings.Contains(coldLog, "starting cold") || strings.Contains(coldLog, "found the ignored cache") {
+		t.Fatalf("first task should start cold with nothing inherited (snapshot %v):\n%s", cold.SnapshotID, coldLog)
+	}
+	snap, _ := s.CurrentSnapshot(ctx, testRepo, "fake")
+
+	warm, warmLog := run()
+	if warm.SnapshotID == nil || *warm.SnapshotID != snap.ID {
+		t.Errorf("second task's snapshot = %v, want %d", warm.SnapshotID, snap.ID)
+	}
+	for _, want := range []string{"restored from snapshot", "(warm)", "agent found the ignored cache", "agent sees commit " + snap.Commit} {
+		if !strings.Contains(warmLog, want) {
+			t.Errorf("second task's log lacks %q:\n%s", want, warmLog)
+		}
+	}
+	t.Logf("cold: %s", readyLine(coldLog))
+	t.Logf("warm: %s", readyLine(warmLog))
+}
+
+// A snapshot taken at an old commit is brought up to date before the agent runs.
+func TestWarmStartUpdatesCode(t *testing.T) {
+	r, s := setup(t, messyAgent{})
+	ctx := context.Background()
+
+	// Build an outdated snapshot by hand: a checkout one commit behind, with
+	// origin/master also pointing there, as if the snapshot were old.
+	vm, err := sandbox.New(ctx, "outdated-"+time.Now().Format("150405"), sandbox.Config{
+		Image: "depak7/forgerun-agent-cursor:dev", CPUs: 1, MemoryMiB: 512, MaxLifetime: 2 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vm.Destroy()
+	out, err := vm.Run(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c", `set -e
+git clone -q --depth=2 ` + testRepo + ` /work/repo && cd /work/repo
+git rev-parse HEAD
+git update-ref refs/remotes/origin/master HEAD~1
+git reset -q --hard HEAD~1
+git rev-parse HEAD`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits := strings.Fields(out) // [latest, older]
+	latest, older := commits[0], commits[1]
+	img, err := vm.TakeSnapshot(ctx, Group(testRepo, "fake"), "outdated-"+time.Now().Format("150405"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ReplaceSnapshot(ctx, store.Snapshot{Repo: testRepo, AgentID: "fake", Ref: img.Ref, Commit: older}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := r.Run(ctx, task.New(testRepo, "unused"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, _ := os.ReadFile(res.LogPath)
+	if !strings.Contains(string(log), "agent sees commit "+latest) {
+		t.Errorf("agent didn't get the latest commit %.7s (snapshot was at %.7s):\n%s", latest, older, log)
+	}
+}
+
+// A snapshot whose files are gone: the task still succeeds from a cold start,
+// and the broken snapshot is removed so the next task doesn't retry it.
+func TestBrokenSnapshotFallsBackCold(t *testing.T) {
+	r, s := setup(t, messyAgent{})
+	ctx := context.Background()
+	broken, _, err := s.ReplaceSnapshot(ctx, store.Snapshot{Repo: testRepo, AgentID: "fake",
+		Ref: "/nonexistent/forgerun-test/snap_missing", Commit: "abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := r.Run(ctx, task.New(testRepo, "unused"))
+	if err != nil {
+		t.Fatalf("task failed because of a broken snapshot: %v", err)
+	}
+	log, _ := os.ReadFile(res.LogPath)
+	for _, want := range []string{"warning: snapshot not usable, starting cold", "(cold)"} {
+		if !strings.Contains(string(log), want) {
+			t.Errorf("log lacks %q:\n%s", want, log)
+		}
+	}
+	snaps, _ := s.ListSnapshots(ctx)
+	for _, snap := range snaps {
+		if snap.ID == broken.ID {
+			t.Errorf("broken snapshot %d is still listed (%s); log:\n%s", snap.ID, snap.State, log)
+		}
+	}
+}
+
+// readyLine picks the "sandbox ready in …" line out of a task log.
+func readyLine(log string) string {
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, "sandbox ready in") {
+			return line
+		}
+	}
+	return "(no ready line)"
 }

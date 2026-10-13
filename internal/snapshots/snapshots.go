@@ -7,9 +7,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/store"
@@ -22,6 +24,46 @@ type Manager struct {
 }
 
 var _ task.Snapshotter = (*Manager)(nil)
+
+// Restore boots a VM from the current snapshot for req's repo and agent,
+// attaches req.Config's secrets, updates the code to the latest commit and
+// records that the task started from it.
+func (m *Manager) Restore(ctx context.Context, req task.RestoreRequest, logf func(string, ...any)) (*sandbox.Sandbox, error) {
+	snap, err := m.Store.CurrentSnapshot(ctx, req.Repo, req.AgentID)
+	if errors.Is(err, store.ErrSnapshotNotFound) {
+		return nil, task.ErrNoSnapshot
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	sb, err := sandbox.Restore(ctx, snap.Ref, req.TaskID, req.Config)
+	if err != nil {
+		// The snapshot itself is unusable (e.g. missing or corrupt). Remove
+		// it so later tasks don't trip over it too; the next successful
+		// task saves a fresh one.
+		if rmErr := m.remove(ctx, snap); rmErr != nil {
+			logf("warning: removing unusable snapshot %d: %v", snap.ID, rmErr)
+		}
+		return nil, fmt.Errorf("restoring snapshot %d: %w", snap.ID, err)
+	}
+	logf("restored from snapshot %d (commit %.7s, taken %s ago)", snap.ID, snap.Commit,
+		time.Since(snap.CreatedAt).Round(time.Second))
+
+	// A failure here (e.g. the network) doesn't mean the snapshot is bad,
+	// so it's kept; only this VM is discarded.
+	commit, err := update(ctx, sb, req.RepoDir)
+	if err != nil {
+		sb.Destroy()
+		return nil, err
+	}
+	logf("updated to %.7s", commit)
+
+	if err := m.Store.UseSnapshot(ctx, req.TaskID, snap.ID); err != nil {
+		logf("warning: recording snapshot use: %v", err) // the VM is fine; carry on
+	}
+	return sb, nil
+}
 
 // Save cleans the task's VM, snapshots it as the current snapshot for its
 // repo and agent, and deletes the snapshot it replaces.
@@ -81,27 +123,7 @@ func (m *Manager) remove(ctx context.Context, snap store.Snapshot) error {
 // Kept: git-ignored files (node_modules, build caches). Removed: the agent's
 // edits, commits and branches, untracked files, and the agent's state paths.
 func clean(ctx context.Context, sb *sandbox.Sandbox, req task.SnapshotRequest) (string, error) {
-	git := func(args ...string) (string, error) {
-		out, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: append([]string{"-C", req.RepoDir}, args...)})
-		return strings.TrimSpace(out), err
-	}
-	// origin/HEAD is the remote's default branch, e.g. "origin/main".
-	remote, err := git("rev-parse", "--abbrev-ref", "origin/HEAD")
-	if err != nil {
-		return "", fmt.Errorf("finding default branch: %w", err)
-	}
-	branch := strings.TrimPrefix(remote, "origin/")
-	// -B (re)creates the branch at origin's commit and --force throws away
-	// local changes, so even an agent that committed or switched branches
-	// is undone.
-	if _, err := git("checkout", "--force", "-B", branch, remote); err != nil {
-		return "", fmt.Errorf("resetting to %s: %w", remote, err)
-	}
-	// Without -x, clean leaves ignored files alone.
-	if _, err := git("clean", "-fd"); err != nil {
-		return "", fmt.Errorf("removing untracked files: %w", err)
-	}
-	commit, err := git("rev-parse", "HEAD")
+	commit, err := resetToDefault(ctx, sb, req.RepoDir)
 	if err != nil {
 		return "", err
 	}
@@ -112,6 +134,70 @@ func clean(ctx context.Context, sb *sandbox.Sandbox, req task.SnapshotRequest) (
 		}
 	}
 	return commit, nil
+}
+
+// update brings a restored checkout to the latest commit of the remote's
+// default branch, like a git pull that can't conflict. It returns the commit.
+func update(ctx context.Context, sb *sandbox.Sandbox, dir string) (string, error) {
+	// Ask the remote which branch is the default, in case it changed
+	// (e.g. master renamed to main) since the snapshot was taken.
+	if _, err := git(ctx, sb, dir, "remote", "set-head", "origin", "--auto"); err != nil {
+		return "", fmt.Errorf("finding default branch: %w", err)
+	}
+	remote, err := git(ctx, sb, dir, "rev-parse", "--abbrev-ref", "origin/HEAD")
+	if err != nil {
+		return "", fmt.Errorf("finding default branch: %w", err)
+	}
+	// Only the newest commit is needed, as with the cold path's shallow clone.
+	if _, err := git(ctx, sb, dir, "fetch", "--depth=1", "origin", strings.TrimPrefix(remote, "origin/")); err != nil {
+		return "", fmt.Errorf("fetching %s: %w", remote, err)
+	}
+	return resetToDefault(ctx, sb, dir)
+}
+
+// resetToDefault checks out origin's default branch at origin's commit,
+// discarding local changes, commits, other branches, stashes and untracked
+// files (ignored files are kept). It returns the commit.
+func resetToDefault(ctx context.Context, sb *sandbox.Sandbox, dir string) (string, error) {
+	// origin/HEAD is the remote's default branch, e.g. "origin/main".
+	remote, err := git(ctx, sb, dir, "rev-parse", "--abbrev-ref", "origin/HEAD")
+	if err != nil {
+		return "", fmt.Errorf("finding default branch: %w", err)
+	}
+	branch := strings.TrimPrefix(remote, "origin/")
+	// -B (re)creates the branch at origin's commit and --force throws away
+	// local changes, so even an agent that committed or switched branches
+	// is undone.
+	if _, err := git(ctx, sb, dir, "checkout", "--force", "-B", branch, remote); err != nil {
+		return "", fmt.Errorf("resetting to %s: %w", remote, err)
+	}
+	// Without -x, clean leaves ignored files alone.
+	if _, err := git(ctx, sb, dir, "clean", "-fd"); err != nil {
+		return "", fmt.Errorf("removing untracked files: %w", err)
+	}
+	// Branches and stashes the agent made would otherwise reach the next task.
+	branches, err := git(ctx, sb, dir, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	if err != nil {
+		return "", fmt.Errorf("listing branches: %w", err)
+	}
+	for _, b := range strings.Fields(branches) {
+		if b == branch {
+			continue
+		}
+		if _, err := git(ctx, sb, dir, "branch", "-D", b); err != nil {
+			return "", fmt.Errorf("deleting branch %s: %w", b, err)
+		}
+	}
+	if _, err := git(ctx, sb, dir, "stash", "clear"); err != nil {
+		return "", fmt.Errorf("clearing stashes: %w", err)
+	}
+	return git(ctx, sb, dir, "rev-parse", "HEAD")
+}
+
+// git runs git in dir inside the VM and returns its trimmed output.
+func git(ctx context.Context, sb *sandbox.Sandbox, dir string, args ...string) (string, error) {
+	out, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: append([]string{"-C", dir}, args...)})
+	return strings.TrimSpace(out), err
 }
 
 // Group is the microsandbox snapshot group for a repo and agent, e.g.
