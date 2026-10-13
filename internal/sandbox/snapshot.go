@@ -3,6 +3,9 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"path/filepath"
+	"syscall"
 
 	microsandbox "github.com/superradcompany/microsandbox/sdk/go"
 )
@@ -15,7 +18,8 @@ const snapshotGroup = "forgerun"
 // contains secrets: microsandbox keeps them outside the VM and doesn't
 // carry them into snapshots.
 type Snapshot struct {
-	Ref string // what Restore and DeleteSnapshot take
+	Ref       string // what Restore and DeleteSnapshot take
+	SizeBytes int64  // real disk space used; 0 if it couldn't be measured
 }
 
 // TakeSnapshot saves the VM's disk as a snapshot called name. The VM keeps
@@ -32,8 +36,51 @@ func (s *Sandbox) TakeSnapshot(ctx context.Context, name string) (Snapshot, erro
 		return Snapshot{}, fmt.Errorf("taking snapshot %s of %s: %w", name, s.Name(), err)
 	}
 	// a.SizeBytes() is the virtual disk size (e.g. 4 GiB), not space used,
-	// so it isn't exposed; measure real usage on disk if it's ever needed.
-	return Snapshot{Ref: a.Reference()}, nil
+	// so measure the snapshot's folder instead. Local snapshots are
+	// referenced by their folder path.
+	snap := Snapshot{Ref: a.Reference()}
+	if a.ReferenceKind() == "path" {
+		snap.SizeBytes, err = diskUsage(a.Reference())
+		if err != nil {
+			return snap, fmt.Errorf("measuring snapshot %s: %w", name, err)
+		}
+	}
+	return snap, nil
+}
+
+// diskUsage returns the space the files under dir actually occupy, like du.
+// VM disks are sparse files, so their apparent size overstates usage;
+// allocated blocks are counted instead.
+func diskUsage(dir string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			total += st.Blocks * 512 // st_blocks is in 512-byte units on macOS and Linux
+		} else {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total, err
+}
+
+// Compact merges the VM's disk layers. Each snapshot of a restored VM adds
+// a layer, so compacting before snapshotting keeps rolling snapshots from
+// stacking layers without limit. The VM keeps running (paused for a few
+// milliseconds). It returns the layer counts before and after.
+func (s *Sandbox) Compact(ctx context.Context) (before, after int, err error) {
+	res, err := s.vm.Compact(ctx, microsandbox.DiskCompactionOptions{RootDiskOnly: true})
+	if err != nil {
+		return 0, 0, fmt.Errorf("compacting %s: %w", s.Name(), err)
+	}
+	return int(res.InputLayers), int(res.OutputLayers), nil
 }
 
 // Restore boots a new VM called name from a snapshot. cfg.CPUs, MemoryMiB,
@@ -78,8 +125,13 @@ func (s *Sandbox) attachSecrets(ctx context.Context, secrets []Secret) error {
 
 // DeleteSnapshot removes a snapshot. Deleting one that no longer exists is
 // not an error.
+//
+// It always forces: microsandbox refuses to delete a snapshot that others
+// were taken from, but each snapshot is self-contained and running VMs don't
+// need their source (verified by experiment), and forgerun only deletes
+// snapshots it has replaced or evicted.
 func DeleteSnapshot(ctx context.Context, ref string) error {
-	err := microsandbox.Snapshot.Remove(ctx, ref, false)
+	err := microsandbox.Snapshot.Remove(ctx, ref, true)
 	if err != nil && !microsandbox.IsKind(err, microsandbox.ErrSnapshotNotFound) {
 		return fmt.Errorf("deleting snapshot %s: %w", ref, err)
 	}
