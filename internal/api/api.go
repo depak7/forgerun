@@ -78,6 +78,7 @@ type taskJSON struct {
 	State      task.State `json:"state"`
 	Error      string     `json:"error"`
 	HasPatch   bool       `json:"has_patch"`
+	SnapshotID *int64     `json:"snapshot_id"` // snapshot it was restored from; null = cold start
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at"`  // null until running
 	FinishedAt *time.Time `json:"finished_at"` // null until finished
@@ -87,7 +88,7 @@ func toJSON(r store.Record) taskJSON {
 	return taskJSON{
 		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.AgentID,
 		Model: r.Model.Family, Effort: r.Model.Effort, Thinking: r.Model.Thinking, Fast: r.Model.Fast, ModelID: r.Model.ID,
-		State: r.State, Error: r.Error, HasPatch: r.PatchPath != "",
+		State: r.State, Error: r.Error, HasPatch: r.PatchPath != "", SnapshotID: r.SnapshotID,
 		CreatedAt: r.CreatedAt.UTC(), StartedAt: utc(r.StartedAt), FinishedAt: utc(r.FinishedAt),
 	}
 }

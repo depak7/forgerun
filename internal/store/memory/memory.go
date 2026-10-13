@@ -22,9 +22,11 @@ type modelKey struct{ agent, id string }
 
 // Store is safe for concurrent use.
 type Store struct {
-	mu     sync.Mutex
-	tasks  map[string]*store.Record
-	models map[modelKey]models.Variant
+	mu        sync.Mutex
+	tasks     map[string]*store.Record
+	models    map[modelKey]models.Variant
+	snapshots map[int64]*store.Snapshot
+	lastID    int64 // the last snapshot id handed out
 }
 
 var _ store.Store = (*Store)(nil)
@@ -33,7 +35,8 @@ var _ store.Store = (*Store)(nil)
 // Agents are implied by their models: an agent exists if any of vs belongs
 // to it, and its default is the variant marked AgentDefault.
 func New(vs ...models.Variant) *Store {
-	s := &Store{tasks: map[string]*store.Record{}, models: map[modelKey]models.Variant{}}
+	s := &Store{tasks: map[string]*store.Record{}, models: map[modelKey]models.Variant{},
+		snapshots: map[int64]*store.Snapshot{}}
 	for _, v := range vs {
 		s.models[modelKey{v.AgentID, v.ID}] = v
 	}
@@ -211,6 +214,102 @@ func (s *Store) List(_ context.Context, limit int) ([]store.Record, error) {
 		recs = recs[:limit]
 	}
 	return recs, nil
+}
+
+func (s *Store) CurrentSnapshot(_ context.Context, repo, agentID string) (store.Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if snap := s.current(store.NormalizeRepo(repo), agentID); snap != nil {
+		return *snap, nil
+	}
+	return store.Snapshot{}, fmt.Errorf("%w: %s for %s", store.ErrSnapshotNotFound, repo, agentID)
+}
+
+// current finds the current snapshot for a normalized repo, or nil.
+// The caller holds s.mu.
+func (s *Store) current(repo, agentID string) *store.Snapshot {
+	for _, snap := range s.snapshots {
+		if snap.Repo == repo && snap.AgentID == agentID && snap.State == store.SnapshotCurrent {
+			return snap
+		}
+	}
+	return nil
+}
+
+func (s *Store) UseSnapshot(_ context.Context, taskID string, snapshotID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snap, ok := s.snapshots[snapshotID]
+	if !ok || snap.State == store.SnapshotDeleted {
+		return fmt.Errorf("%w: %d", store.ErrSnapshotNotFound, snapshotID)
+	}
+	r, ok := s.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("%w: %s", store.ErrNotFound, taskID)
+	}
+	snap.LastUsedAt = time.Now()
+	r.SnapshotID = &snapshotID
+	return nil
+}
+
+func (s *Store) ReplaceSnapshot(_ context.Context, snap store.Snapshot) (store.Snapshot, *store.Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasAgent(snap.AgentID) { // mirrors the Postgres foreign key
+		return store.Snapshot{}, nil, fmt.Errorf("saving snapshot: %w: %s", store.ErrAgentNotFound, snap.AgentID)
+	}
+	snap.Repo = store.NormalizeRepo(snap.Repo)
+	var retired *store.Snapshot
+	if old := s.current(snap.Repo, snap.AgentID); old != nil {
+		old.State = store.SnapshotRetired
+		cp := *old // a copy, so the caller can't change the stored one
+		retired = &cp
+	}
+	s.lastID++
+	now := time.Now()
+	snap.ID, snap.State, snap.CreatedAt, snap.LastUsedAt, snap.DeletedAt = s.lastID, store.SnapshotCurrent, now, now, nil
+	s.snapshots[snap.ID] = &snap
+	return snap, retired, nil
+}
+
+// hasAgent reports whether any model belongs to agent. The caller holds s.mu.
+func (s *Store) hasAgent(agent string) bool {
+	for k := range s.models {
+		if k.agent == agent {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) MarkSnapshotDeleted(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snap, ok := s.snapshots[id]
+	if !ok {
+		return fmt.Errorf("%w: %d", store.ErrSnapshotNotFound, id)
+	}
+	if snap.DeletedAt == nil {
+		now := time.Now()
+		snap.DeletedAt = &now
+	}
+	snap.State = store.SnapshotDeleted
+	return nil
+}
+
+func (s *Store) ListSnapshots(context.Context) ([]store.Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var snaps []store.Snapshot
+	for _, snap := range s.snapshots {
+		if snap.State != store.SnapshotDeleted {
+			snaps = append(snaps, *snap)
+		}
+	}
+	slices.SortFunc(snaps, func(a, b store.Snapshot) int { // least recently used first
+		return cmp.Or(a.LastUsedAt.Compare(b.LastUsedAt), cmp.Compare(a.ID, b.ID))
+	})
+	return snaps, nil
 }
 
 // transition checks and applies a state change. The caller holds s.mu.

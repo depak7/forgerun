@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"sync"
@@ -15,7 +16,7 @@ import (
 )
 
 // openTest connects to FORGERUN_TEST_DATABASE_URL and empties the tasks
-// table. Tests are skipped when the variable is unset.
+// and snapshots tables. Tests are skipped when the variable is unset.
 func openTest(t *testing.T) *Store {
 	t.Helper()
 	url := os.Getenv("FORGERUN_TEST_DATABASE_URL")
@@ -28,7 +29,7 @@ func openTest(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	if _, err := s.pool.Exec(ctx, `TRUNCATE tasks`); err != nil {
+	if _, err := s.pool.Exec(ctx, `TRUNCATE tasks, snapshots`); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -377,6 +378,7 @@ func addAgent(t *testing.T, s *Store, id string) {
 		ctx := context.Background()
 		s.pool.Exec(ctx, `UPDATE agents SET default_model_id = NULL WHERE id = $1`, id)
 		s.pool.Exec(ctx, `DELETE FROM tasks WHERE agent_id = $1`, id)
+		s.pool.Exec(ctx, `DELETE FROM snapshots WHERE agent_id = $1`, id)
 		s.pool.Exec(ctx, `DELETE FROM models WHERE agent_id = $1`, id)
 		s.pool.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id)
 	})
@@ -472,5 +474,161 @@ func TestListAgents(t *testing.T) {
 	}
 	if slices.ContainsFunc(agents, func(a store.Agent) bool { return a.ID == "claude-code" }) {
 		t.Error("disabled agent listed")
+	}
+}
+
+// newSnap is a snapshot to save for repo and agent.
+func newSnap(repo, agent, ref string) store.Snapshot {
+	return store.Snapshot{Repo: repo, AgentID: agent, Ref: ref, Commit: "abc123", DepsFingerprint: "fp", SizeBytes: 4096}
+}
+
+func TestReplaceSnapshot(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	const repo = "https://github.com/x/y"
+
+	if _, err := s.CurrentSnapshot(ctx, repo, "cursor"); !errors.Is(err, store.ErrSnapshotNotFound) {
+		t.Fatalf("before any snapshot: got %v, want ErrSnapshotNotFound", err)
+	}
+
+	first, retired, err := s.ReplaceSnapshot(ctx, newSnap(repo, "cursor", "/snaps/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retired != nil {
+		t.Errorf("first snapshot retired %+v", *retired)
+	}
+	if first.ID == 0 || first.State != store.SnapshotCurrent || first.Ref != "/snaps/1" || first.Commit != "abc123" ||
+		first.DepsFingerprint != "fp" || first.SizeBytes != 4096 || first.CreatedAt.IsZero() || first.DeletedAt != nil {
+		t.Errorf("saved = %+v", first)
+	}
+
+	second, retired, err := s.ReplaceSnapshot(ctx, newSnap(repo, "cursor", "/snaps/2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retired == nil || retired.ID != first.ID || retired.State != store.SnapshotRetired {
+		t.Fatalf("second replace retired %+v, want snapshot %d as retired", retired, first.ID)
+	}
+	if cur, err := s.CurrentSnapshot(ctx, repo, "cursor"); err != nil || cur.ID != second.ID {
+		t.Errorf("current = %d (%v), want %d", cur.ID, err, second.ID)
+	}
+
+	// The retired one is still listed (still on disk) until marked deleted.
+	if snaps, _ := s.ListSnapshots(ctx); len(snaps) != 2 {
+		t.Errorf("listed %d snapshots, want 2", len(snaps))
+	}
+	for range 2 { // marking twice is fine
+		if err := s.MarkSnapshotDeleted(ctx, first.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snaps, _ := s.ListSnapshots(ctx)
+	if len(snaps) != 1 || snaps[0].ID != second.ID {
+		t.Errorf("after delete, listed %+v, want only %d", snaps, second.ID)
+	}
+	if err := s.MarkSnapshotDeleted(ctx, 999999); !errors.Is(err, store.ErrSnapshotNotFound) {
+		t.Errorf("unknown snapshot: got %v, want ErrSnapshotNotFound", err)
+	}
+}
+
+func TestSnapshotsPerRepoAndAgent(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	addAgent(t, s, "claude-code")
+
+	c, _, err := s.ReplaceSnapshot(ctx, newSnap("https://GitHub.com/x/y.git", "cursor", "/c"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Another agent on the same repo gets its own snapshot; cursor's stays current.
+	if _, retired, err := s.ReplaceSnapshot(ctx, newSnap("https://github.com/x/y", "claude-code", "/cc")); err != nil || retired != nil {
+		t.Fatalf("claude-code snapshot: retired %+v, err %v", retired, err)
+	}
+	// Different spellings of the repo find the same snapshot.
+	for _, repo := range []string{"https://github.com/x/y", "https://github.com/x/y/", "https://GITHUB.com/x/y.git"} {
+		if cur, err := s.CurrentSnapshot(ctx, repo, "cursor"); err != nil || cur.ID != c.ID {
+			t.Errorf("CurrentSnapshot(%q) = %d (%v), want %d", repo, cur.ID, err, c.ID)
+		}
+	}
+	if c.Repo != "https://github.com/x/y" {
+		t.Errorf("stored repo = %q, want normalized", c.Repo)
+	}
+	if _, err := s.CurrentSnapshot(ctx, "https://github.com/x/other", "cursor"); !errors.Is(err, store.ErrSnapshotNotFound) {
+		t.Errorf("other repo: got %v, want ErrSnapshotNotFound", err)
+	}
+	if _, _, err := s.ReplaceSnapshot(ctx, newSnap("https://github.com/x/y", "no-such-agent", "/n")); err == nil {
+		t.Error("snapshot saved for an unknown agent")
+	}
+}
+
+func TestUseSnapshot(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	a, _, _ := s.ReplaceSnapshot(ctx, newSnap("https://github.com/x/a", "cursor", "/a"))
+	b, _, _ := s.ReplaceSnapshot(ctx, newSnap("https://github.com/x/b", "cursor", "/b"))
+	tk := task.New("https://github.com/x/a", "p")
+	if err := s.Create(ctx, tk, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, tk.ID); rec.SnapshotID != nil {
+		t.Errorf("new task has snapshot %d, want nil (cold)", *rec.SnapshotID)
+	}
+
+	// Using a makes it the most recently used: b is listed first now.
+	if err := s.UseSnapshot(ctx, tk.ID, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, tk.ID); rec.SnapshotID == nil || *rec.SnapshotID != a.ID {
+		t.Errorf("task snapshot = %v, want %d", rec.SnapshotID, a.ID)
+	}
+	snaps, _ := s.ListSnapshots(ctx)
+	if len(snaps) != 2 || snaps[0].ID != b.ID || !snaps[1].LastUsedAt.After(a.LastUsedAt) {
+		t.Errorf("listed %+v, want b then a (a used later)", snaps)
+	}
+
+	if err := s.UseSnapshot(ctx, "no-such-task", a.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("unknown task: got %v, want ErrNotFound", err)
+	}
+	s.MarkSnapshotDeleted(ctx, b.ID)
+	if err := s.UseSnapshot(ctx, tk.ID, b.ID); !errors.Is(err, store.ErrSnapshotNotFound) {
+		t.Errorf("deleted snapshot: got %v, want ErrSnapshotNotFound", err)
+	}
+}
+
+// Many tasks for one repo finishing at once still leave exactly one current
+// snapshot, and every other one is retired exactly once (so it gets deleted).
+func TestReplaceSnapshotIsAtomic(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	const n = 10
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		retired = map[int64]int{}
+	)
+	for i := range n {
+		wg.Go(func() {
+			_, old, err := s.ReplaceSnapshot(ctx, newSnap("https://github.com/x/y", "cursor", fmt.Sprintf("/s%d", i)))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if old != nil {
+				mu.Lock()
+				retired[old.ID]++
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+
+	cur, err := s.CurrentSnapshot(ctx, "https://github.com/x/y", "cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retired) != n-1 {
+		t.Errorf("%d snapshots retired, want %d", len(retired), n-1)
+	}
+	for id, times := range retired {
+		if times != 1 || id == cur.ID {
+			t.Errorf("snapshot %d retired %d times (current is %d)", id, times, cur.ID)
+		}
 	}
 }

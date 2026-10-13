@@ -312,7 +312,7 @@ func TestTaskJSONShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"id", "repo", "prompt", "agent", "model", "effort", "thinking", "fast", "model_id",
-		"state", "error", "has_patch", "created_at", "started_at", "finished_at"} {
+		"state", "error", "has_patch", "snapshot_id", "created_at", "started_at", "finished_at"} {
 		if _, ok := fields[k]; !ok {
 			t.Errorf("task JSON missing %q", k)
 		}

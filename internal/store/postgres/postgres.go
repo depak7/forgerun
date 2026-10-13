@@ -137,7 +137,7 @@ const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, 
 
 // selectColumns is the task (aliased t) plus its model.
 const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.patch_path,
-	t.created_at, t.started_at, t.finished_at, ` + modelColumns
+	t.snapshot_id, t.created_at, t.started_at, t.finished_at, ` + modelColumns
 
 const fromTasks = ` FROM tasks t
 	JOIN models m ON m.agent_id = t.agent_id AND m.id = t.model_id
@@ -225,6 +225,119 @@ func (s *Store) ListModels(ctx context.Context) ([]models.Variant, error) {
 	return vs, nil
 }
 
+// snapshotColumns is a snapshot row, in scanSnapshot's order.
+const snapshotColumns = `id, repo, agent_id, ref, commit_sha, deps_fingerprint, size_bytes, state,
+	created_at, last_used_at, deleted_at`
+
+func (s *Store) CurrentSnapshot(ctx context.Context, repo, agentID string) (store.Snapshot, error) {
+	row := s.pool.QueryRow(ctx, `SELECT `+snapshotColumns+` FROM snapshots
+		WHERE repo = $1 AND agent_id = $2 AND state = 'current'`, store.NormalizeRepo(repo), agentID)
+	snap, err := scanSnapshot(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Snapshot{}, fmt.Errorf("%w: %s for %s", store.ErrSnapshotNotFound, repo, agentID)
+	}
+	if err != nil {
+		return store.Snapshot{}, fmt.Errorf("getting snapshot of %s for %s: %w", repo, agentID, err)
+	}
+	return snap, nil
+}
+
+func (s *Store) UseSnapshot(ctx context.Context, taskID string, snapshotID int64) error {
+	// Both updates happen, or neither: BeginFunc commits if the function
+	// returns nil and rolls back if it returns an error.
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE snapshots SET last_used_at = now()
+			WHERE id = $1 AND state <> 'deleted'`, snapshotID)
+		if err != nil {
+			return fmt.Errorf("using snapshot %d: %w", snapshotID, err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("%w: %d", store.ErrSnapshotNotFound, snapshotID)
+		}
+		tag, err = tx.Exec(ctx, `UPDATE tasks SET snapshot_id = $2 WHERE id = $1`, taskID, snapshotID)
+		if err != nil {
+			return fmt.Errorf("recording snapshot of task %s: %w", taskID, err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("%w: %s", store.ErrNotFound, taskID)
+		}
+		return nil
+	})
+}
+
+func (s *Store) ReplaceSnapshot(ctx context.Context, snap store.Snapshot) (store.Snapshot, *store.Snapshot, error) {
+	repo := store.NormalizeRepo(snap.Repo)
+	var saved store.Snapshot
+	var retired *store.Snapshot
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		// Two tasks for the same repo and agent may finish together. This
+		// lock (released at commit) makes the second wait for the first, so
+		// it then retires the first one's snapshot. Without it, both would
+		// see the same "previous" snapshot and the second insert would
+		// break the one-current-snapshot index.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1 || ' ' || $2, 0))`,
+			repo, snap.AgentID); err != nil {
+			return err
+		}
+		old, err := scanSnapshot(tx.QueryRow(ctx, `UPDATE snapshots SET state = 'retired'
+			WHERE repo = $1 AND agent_id = $2 AND state = 'current'
+			RETURNING `+snapshotColumns, repo, snap.AgentID))
+		switch {
+		case err == nil:
+			retired = &old
+		case !errors.Is(err, pgx.ErrNoRows): // no rows = first snapshot of this repo
+			return err
+		}
+		saved, err = scanSnapshot(tx.QueryRow(ctx, `INSERT INTO snapshots
+			(repo, agent_id, ref, commit_sha, deps_fingerprint, size_bytes)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			RETURNING `+snapshotColumns,
+			repo, snap.AgentID, snap.Ref, snap.Commit, snap.DepsFingerprint, snap.SizeBytes))
+		return err // includes the FK error for an unknown agent
+	})
+	if err != nil {
+		return store.Snapshot{}, nil, fmt.Errorf("saving snapshot of %s for %s: %w", repo, snap.AgentID, err)
+	}
+	return saved, retired, nil
+}
+
+func (s *Store) MarkSnapshotDeleted(ctx context.Context, id int64) error {
+	// COALESCE keeps the first deletion time if it's marked twice.
+	tag, err := s.pool.Exec(ctx, `UPDATE snapshots
+		SET state = 'deleted', deleted_at = COALESCE(deleted_at, now()) WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("marking snapshot %d deleted: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %d", store.ErrSnapshotNotFound, id)
+	}
+	return nil
+}
+
+func (s *Store) ListSnapshots(ctx context.Context) ([]store.Snapshot, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+snapshotColumns+` FROM snapshots
+		WHERE state <> 'deleted' ORDER BY last_used_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("listing snapshots: %w", err)
+	}
+	snaps, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.Snapshot, error) {
+		return scanSnapshot(row)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing snapshots: %w", err)
+	}
+	return snaps, nil
+}
+
+func scanSnapshot(row pgx.Row) (store.Snapshot, error) {
+	var snap store.Snapshot
+	var state string
+	err := row.Scan(&snap.ID, &snap.Repo, &snap.AgentID, &snap.Ref, &snap.Commit, &snap.DepsFingerprint,
+		&snap.SizeBytes, &state, &snap.CreatedAt, &snap.LastUsedAt, &snap.DeletedAt)
+	snap.State = store.SnapshotState(state)
+	return snap, err
+}
+
 // scanRecord reads one row in selectColumns order. pgx.Row is satisfied by
 // both QueryRow's result and pgx.Rows, so Get and List share this.
 func scanRecord(row pgx.Row) (store.Record, error) {
@@ -235,7 +348,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		startedAt, finishedAt      *time.Time
 	)
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
-		&errMsg, &logPath, &patchPath, &rec.CreatedAt, &startedAt, &finishedAt,
+		&errMsg, &logPath, &patchPath, &rec.SnapshotID, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
 		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR)
 	if err != nil {

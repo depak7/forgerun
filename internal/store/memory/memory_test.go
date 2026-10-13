@@ -97,3 +97,60 @@ func TestListAgents(t *testing.T) {
 		t.Errorf("agents = %+v", agents)
 	}
 }
+
+// The same rules as the Postgres snapshot tests, in one pass.
+func TestSnapshots(t *testing.T) {
+	other := models.Variant{ID: "m", AgentID: "other", Family: "m", AgentDefault: true}
+	s, ctx := New(fakeDefault, other), context.Background()
+	snap := func(repo, agent, ref string) store.Snapshot {
+		return store.Snapshot{Repo: repo, AgentID: agent, Ref: ref, Commit: "abc"}
+	}
+
+	if _, err := s.CurrentSnapshot(ctx, "https://h/x/y", "fake"); !errors.Is(err, store.ErrSnapshotNotFound) {
+		t.Fatalf("before any snapshot: got %v", err)
+	}
+	first, retired, err := s.ReplaceSnapshot(ctx, snap("https://H/x/y.git", "fake", "/1"))
+	if err != nil || retired != nil || first.State != store.SnapshotCurrent || first.Repo != "https://h/x/y" {
+		t.Fatalf("first = %+v, retired %v, err %v", first, retired, err)
+	}
+	if _, retired, _ := s.ReplaceSnapshot(ctx, snap("https://h/x/y", "other", "/o")); retired != nil {
+		t.Error("another agent's snapshot retired fake's")
+	}
+	second, retired, _ := s.ReplaceSnapshot(ctx, snap("https://h/x/y/", "fake", "/2"))
+	if retired == nil || retired.ID != first.ID || retired.State != store.SnapshotRetired {
+		t.Fatalf("retired %+v, want %d", retired, first.ID)
+	}
+	if cur, _ := s.CurrentSnapshot(ctx, "https://h/x/y", "fake"); cur.ID != second.ID {
+		t.Errorf("current = %d, want %d", cur.ID, second.ID)
+	}
+	if _, _, err := s.ReplaceSnapshot(ctx, snap("https://h/x/y", "no-such-agent", "/n")); !errors.Is(err, store.ErrAgentNotFound) {
+		t.Errorf("unknown agent: got %v", err)
+	}
+
+	tk := task.New("https://h/x/y", "p")
+	s.Create(ctx, tk, "fake")
+	if err := s.UseSnapshot(ctx, tk.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, tk.ID); rec.SnapshotID == nil || *rec.SnapshotID != second.ID {
+		t.Errorf("task snapshot = %v, want %d", rec.SnapshotID, second.ID)
+	}
+	if snaps, _ := s.ListSnapshots(ctx); len(snaps) != 3 || snaps[2].ID != second.ID {
+		t.Errorf("listed %+v, want 3 with the just-used one last", snaps)
+	}
+
+	for range 2 {
+		if err := s.MarkSnapshotDeleted(ctx, first.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if snaps, _ := s.ListSnapshots(ctx); len(snaps) != 2 {
+		t.Errorf("listed %d after delete, want 2", len(snaps))
+	}
+	if err := s.UseSnapshot(ctx, tk.ID, first.ID); !errors.Is(err, store.ErrSnapshotNotFound) {
+		t.Errorf("deleted snapshot: got %v", err)
+	}
+	if err := s.UseSnapshot(ctx, "nope", second.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("unknown task: got %v", err)
+	}
+}
