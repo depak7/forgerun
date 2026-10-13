@@ -43,6 +43,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   forgerun serve [-addr 127.0.0.1:8080] [-workers 2] [-timeout 15m] [-out out] [-db url]
                  [-model family] [-require-zdr] [-snapshots=false]
+                 [-snapshot-max-age 168h] [-snapshot-budget 20GB] [-snapshot-sweep 10m]
   forgerun run   -repo <git-url> -prompt <task> [-timeout 15m] [-out out]
 
 The database URL defaults to $FORGERUN_DATABASE_URL, then the docker-compose dev database.

@@ -4,6 +4,7 @@
 package snapshots
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,9 +19,15 @@ import (
 	"github.com/depak7/forgerun/internal/task"
 )
 
-// Manager saves and replaces snapshots. It is safe for concurrent use.
+// Manager saves, restores and cleans up snapshots. It is safe for
+// concurrent use.
 type Manager struct {
 	Store store.Store
+	// Prefix starts the name of every snapshot group this manager owns
+	// ("" = "forgerun"). Sweep only ever touches groups with its prefix,
+	// so tests use their own and can't delete a server's snapshots.
+	Prefix string
+	Limits Limits
 }
 
 var _ task.Snapshotter = (*Manager)(nil)
@@ -78,7 +85,7 @@ func (m *Manager) Save(ctx context.Context, sb *sandbox.Sandbox, req task.Snapsh
 	if err != nil {
 		return err
 	}
-	snap, err := sb.TakeSnapshot(ctx, Group(req.Repo, req.AgentID), req.TaskID)
+	snap, err := sb.TakeSnapshot(ctx, m.Group(req.Repo, req.AgentID), req.TaskID)
 	if err != nil {
 		return err
 	}
@@ -205,11 +212,13 @@ func git(ctx context.Context, sb *sandbox.Sandbox, dir string, args ...string) (
 // own group because a group is one lineage with one head (its current
 // snapshot). The hash keeps similar names apart; the rest is for humans
 // looking in ~/.microsandbox/snapshots.
-func Group(repo, agentID string) string {
+func (m *Manager) Group(repo, agentID string) string {
 	repo = store.NormalizeRepo(repo)
 	sum := sha256.Sum256([]byte(repo + " " + agentID))
-	return fmt.Sprintf("forgerun-%s-%s-%s", slug(agentID), slug(path.Base(repo)), hex.EncodeToString(sum[:6]))
+	return fmt.Sprintf("%s-%s-%s-%s", m.prefix(), slug(agentID), slug(path.Base(repo)), hex.EncodeToString(sum[:6]))
 }
+
+func (m *Manager) prefix() string { return cmp.Or(m.Prefix, "forgerun") }
 
 // slug keeps lower-case letters and digits, turning anything else into
 // single dashes: "Hello_World.js" -> "hello-world-js".
@@ -228,7 +237,10 @@ func slug(s string) string {
 	return strings.TrimSuffix(b.String(), "-")
 }
 
-// size formats bytes for the log, e.g. "39.2 MB".
+// size formats bytes for the log, e.g. "39.2 MB" or "3.1 GB".
 func size(b int64) string {
+	if b >= 1e9 {
+		return fmt.Sprintf("%.1f GB", float64(b)/1e9)
+	}
 	return fmt.Sprintf("%.1f MB", float64(b)/1e6)
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	microsandbox "github.com/superradcompany/microsandbox/sdk/go"
 )
@@ -139,16 +140,41 @@ func (s *Sandbox) attachSecrets(ctx context.Context, secrets []Secret) error {
 // snapshots it has replaced or evicted.
 func DeleteSnapshot(ctx context.Context, ref string) error {
 	err := microsandbox.Snapshot.Remove(ctx, ref, true)
-	if err == nil || microsandbox.IsKind(err, microsandbox.ErrSnapshotNotFound) || gone(ref) {
+	if err == nil || microsandbox.IsKind(err, microsandbox.ErrSnapshotNotFound) || SnapshotGone(ref) {
 		return nil
 	}
 	return fmt.Errorf("deleting snapshot %s: %w", ref, err)
 }
 
-// gone reports whether a local snapshot's folder no longer exists. Removing
-// such a snapshot fails with a plain I/O error rather than "not found", but
-// it's already deleted as far as forgerun is concerned.
-func gone(ref string) bool {
+// SnapshotGone reports whether a local snapshot's folder no longer exists.
+// Removing such a snapshot fails with a plain I/O error rather than "not
+// found", but it's already deleted as far as forgerun is concerned.
+func SnapshotGone(ref string) bool {
 	_, err := os.Stat(ref)
 	return errors.Is(err, fs.ErrNotExist)
+}
+
+// SnapshotInfo describes a snapshot found on disk.
+type SnapshotInfo struct {
+	Ref       string
+	Group     string // "" if it isn't in a group
+	CreatedAt time.Time
+}
+
+// ListSnapshots returns every snapshot microsandbox has on this host, in any
+// group, including ones forgerun didn't make.
+func ListSnapshots(ctx context.Context) ([]SnapshotInfo, error) {
+	handles, err := microsandbox.Snapshot.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing snapshots: %w", err)
+	}
+	infos := make([]SnapshotInfo, 0, len(handles))
+	for _, h := range handles {
+		info := SnapshotInfo{Ref: h.Reference(), CreatedAt: h.CreatedAt()}
+		if g := h.Group(); g != nil {
+			info.Group = *g
+		}
+		infos = append(infos, info)
+	}
+	return infos, nil
 }

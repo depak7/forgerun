@@ -3,6 +3,7 @@ package snapshots
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -62,9 +63,13 @@ func setup(t *testing.T, a agent.Agent) (*task.Runner, *memory.Store) {
 		}
 	})
 	r := &task.Runner{Agent: a, OutDir: t.TempDir(), CPUs: 1, MemMiB: 1024, Timeout: 5 * time.Minute,
-		Stdout: io.Discard, Snapshots: &Manager{Store: s}}
+		Stdout: io.Discard, Snapshots: &Manager{Store: s, Prefix: testPrefix}}
 	return r, s
 }
+
+// testPrefix keeps this run's snapshot groups apart from a real server's
+// (and from other test runs), so sweeps here can't delete anything else.
+var testPrefix = fmt.Sprintf("frtest%d", time.Now().UnixNano()%1e9)
 
 func TestSaveCleansAndReplaces(t *testing.T) {
 	r, s := setup(t, messyAgent{})
@@ -149,7 +154,7 @@ func TestNoSnapshotAfterFailure(t *testing.T) {
 func TestSaveFailureIsOnlyAWarning(t *testing.T) {
 	r, s := setup(t, messyAgent{})
 	failing := &failingStore{Store: s}
-	r.Snapshots = &Manager{Store: failing}
+	r.Snapshots = &Manager{Store: failing, Prefix: testPrefix}
 
 	res, err := r.Run(context.Background(), task.New(testRepo, "unused"))
 	if err != nil {
@@ -178,20 +183,24 @@ func (f *failingStore) ReplaceSnapshot(_ context.Context, snap store.Snapshot) (
 }
 
 func TestGroup(t *testing.T) {
-	g := Group("https://github.com/octocat/Hello-World", "cursor")
+	m := &Manager{}
+	g := m.Group("https://github.com/octocat/Hello-World", "cursor")
 	if !strings.HasPrefix(g, "forgerun-cursor-hello-world-") || len(g) != len("forgerun-cursor-hello-world-")+12 {
 		t.Errorf("Group = %q", g)
 	}
-	if Group("https://GitHub.com/octocat/Hello-World.git/", "cursor") != g {
+	if m.Group("https://GitHub.com/octocat/Hello-World.git/", "cursor") != g {
 		t.Error("spellings of one repo got different groups")
 	}
 	for _, other := range []string{
-		Group("https://github.com/octocat/Hello-World", "claude-code"), // other agent
-		Group("https://github.com/someone/Hello-World", "cursor"),      // same name, other owner
+		m.Group("https://github.com/octocat/Hello-World", "claude-code"), // other agent
+		m.Group("https://github.com/someone/Hello-World", "cursor"),      // same name, other owner
 	} {
 		if other == g {
 			t.Errorf("%q collides with %q", other, g)
 		}
+	}
+	if got := (&Manager{Prefix: "frtest1"}).Group("https://github.com/octocat/Hello-World", "cursor"); !strings.HasPrefix(got, "frtest1-cursor-") {
+		t.Errorf("with a prefix, Group = %q", got)
 	}
 	if got := slug("__Hello_World.js--"); got != "hello-world-js" {
 		t.Errorf("slug = %q", got)
@@ -262,7 +271,7 @@ git rev-parse HEAD`}})
 	}
 	commits := strings.Fields(out) // [latest, older]
 	latest, older := commits[0], commits[1]
-	img, err := vm.TakeSnapshot(ctx, Group(testRepo, "fake"), "outdated-"+time.Now().Format("150405"))
+	img, err := vm.TakeSnapshot(ctx, (&Manager{Prefix: testPrefix}).Group(testRepo, "fake"), "outdated-"+time.Now().Format("150405"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,7 +33,11 @@ func serveCmd(args []string) error {
 	out := fs.String("out", "out", "directory for task results")
 	defaultModel := fs.String("model", "", "default model family for requests that name none (default: the agent's own)")
 	requireZDR := fs.Bool("require-zdr", false, "offer only models with zero data retention")
-	useSnapshots := fs.Bool("snapshots", true, "after each successful task, save its VM as the repo's snapshot")
+	useSnapshots := fs.Bool("snapshots", true, "start tasks from their repo's snapshot, and save one after each successful task")
+	snapshotMaxAge := fs.Duration("snapshot-max-age", 7*24*time.Hour, "delete a repo's snapshot when no task has used it for this long (0 = never)")
+	snapshotBudget := byteSize(20e9)
+	fs.Var(&snapshotBudget, "snapshot-budget", "total disk for snapshots, e.g. 500MB or 20GB; least recently used are deleted first (0 = no limit)")
+	snapshotSweep := fs.Duration("snapshot-sweep", 10*time.Minute, "how often to check snapshot limits and clean up")
 	dbURL := dbFlag(fs)
 	fs.Parse(args)
 
@@ -86,8 +90,20 @@ func serveCmd(args []string) error {
 	}
 
 	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: io.Discard}
+	sweepsDone := make(chan struct{})
 	if *useSnapshots {
-		runner.Snapshots = &snapshots.Manager{Store: db}
+		mgr := &snapshots.Manager{Store: db, Limits: snapshots.Limits{MaxAge: *snapshotMaxAge, Budget: int64(snapshotBudget)}}
+		runner.Snapshots = mgr
+		// Before any task runs: finish deletes a crash interrupted, remove
+		// orphans, apply the limits.
+		mgr.SweepAndLog(ctx, log)
+		go func() {
+			mgr.RunSweeps(ctx, *snapshotSweep, log)
+			close(sweepsDone)
+		}()
+		log.Info("snapshots on", "max_age", *snapshotMaxAge, "budget", snapshotBudget.String(), "sweep_every", *snapshotSweep)
+	} else {
+		close(sweepsDone)
 	}
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
@@ -119,7 +135,8 @@ func serveCmd(args []string) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("http shutdown", "err", err)
 	}
-	<-poolDone // every running task has recorded its outcome and destroyed its VM
+	<-poolDone   // every running task has recorded its outcome and destroyed its VM
+	<-sweepsDone // no snapshot sweep is half done
 	log.Info("stopped")
 	return runErr
 }
