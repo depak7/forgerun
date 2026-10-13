@@ -35,7 +35,7 @@ func TestSnapshotRestore(t *testing.T) {
 	run(builder, "mkdir -p /work/repo/node_modules/dep && echo v1 > /work/repo/node_modules/dep/version")
 
 	// 2. Snapshot it while running, then the builder can go.
-	snap, err := builder.TakeSnapshot(ctx, "snaptest-"+time.Now().Format("150405"))
+	snap, err := builder.TakeSnapshot(ctx, "forgerun-test", "snaptest-"+time.Now().Format("150405"))
 	builder.Destroy()
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestRollingSnapshot(t *testing.T) {
 	}
 	snapshot := func(sb *Sandbox, name string) Snapshot {
 		t.Helper()
-		snap, err := sb.TakeSnapshot(ctx, name+"-"+stamp)
+		snap, err := sb.TakeSnapshot(ctx, "forgerun-test", name+"-"+stamp)
 		if err != nil {
 			t.Fatal(err)
 		}

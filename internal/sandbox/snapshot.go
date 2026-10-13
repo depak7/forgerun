@@ -10,10 +10,6 @@ import (
 	microsandbox "github.com/superradcompany/microsandbox/sdk/go"
 )
 
-// snapshotGroup is the microsandbox snapshot group forgerun stores all of its
-// snapshots in, so they're easy to find and clean up.
-const snapshotGroup = "forgerun"
-
 // Snapshot is a saved VM disk that new VMs can be restored from. It never
 // contains secrets: microsandbox keeps them outside the VM and doesn't
 // carry them into snapshots.
@@ -22,18 +18,27 @@ type Snapshot struct {
 	SizeBytes int64  // real disk space used; 0 if it couldn't be measured
 }
 
-// TakeSnapshot saves the VM's disk as a snapshot called name. The VM keeps
-// running; its file system is flushed first so recent writes are included.
-// (forgerun VMs are ephemeral, so stopping one first would delete its disk.)
-func (s *Sandbox) TakeSnapshot(ctx context.Context, name string) (Snapshot, error) {
+// TakeSnapshot saves the VM's disk as snapshot name in group, and makes it
+// the group's head. The VM keeps running; its file system is flushed first
+// so recent writes are included. (forgerun VMs are ephemeral, so stopping
+// one first would delete its disk.)
+//
+// A microsandbox group is one lineage of snapshots, and its head can't be
+// deleted while other members exist. Making each new snapshot the head lets
+// the one it replaces be deleted.
+func (s *Sandbox) TakeSnapshot(ctx context.Context, group, name string) (Snapshot, error) {
 	a, err := microsandbox.Snapshot.Create(ctx, microsandbox.SnapshotCreateOptions{
 		FromSandbox: s.Name(),
 		Name:        name,
-		Group:       snapshotGroup,
+		Group:       group,
 		GuestFlush:  microsandbox.GuestFlushRequired,
 	})
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("taking snapshot %s of %s: %w", name, s.Name(), err)
+	}
+	if _, err := microsandbox.Snapshot.GroupHead(ctx, group+":"+name); err != nil {
+		DeleteSnapshot(ctx, a.Reference())
+		return Snapshot{}, fmt.Errorf("making snapshot %s the head of %s: %w", name, group, err)
 	}
 	// a.SizeBytes() is the virtual disk size (e.g. 4 GiB), not space used,
 	// so measure the snapshot's folder instead. Local snapshots are

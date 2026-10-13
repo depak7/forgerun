@@ -39,6 +39,11 @@ func (c *Cursor) Secrets() []sandbox.Secret {
 	}}
 }
 
+// StatePaths: ~/.cursor isn't in the image (the CLI lives in ~/.local), so
+// everything in it was written during the run: cli-config.json (rewritten
+// by every Run), chats and project data.
+func (c *Cursor) StatePaths() []string { return []string{"/root/.cursor"} }
+
 func (c *Cursor) Run(ctx context.Context, sb *sandbox.Sandbox, req Request, logs io.Writer) error {
 	if err := sb.WriteFile(ctx, "/root/.cursor/cli-config.json", []byte(cliConfig)); err != nil {
 		return fmt.Errorf("writing cursor config: %w", err)

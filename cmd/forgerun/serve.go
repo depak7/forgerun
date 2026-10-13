@@ -18,6 +18,7 @@ import (
 	"github.com/depak7/forgerun/internal/api"
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/sandbox"
+	"github.com/depak7/forgerun/internal/snapshots"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/postgres"
 	"github.com/depak7/forgerun/internal/task"
@@ -32,6 +33,7 @@ func serveCmd(args []string) error {
 	out := fs.String("out", "out", "directory for task results")
 	defaultModel := fs.String("model", "", "default model family for requests that name none (default: the agent's own)")
 	requireZDR := fs.Bool("require-zdr", false, "offer only models with zero data retention")
+	useSnapshots := fs.Bool("snapshots", true, "after each successful task, save its VM as the repo's snapshot")
 	dbURL := dbFlag(fs)
 	fs.Parse(args)
 
@@ -84,6 +86,9 @@ func serveCmd(args []string) error {
 	}
 
 	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: io.Discard}
+	if *useSnapshots {
+		runner.Snapshots = &snapshots.Manager{Store: db}
+	}
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
 		Handler: api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agent: ag.ID(),

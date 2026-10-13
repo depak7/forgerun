@@ -18,6 +18,11 @@ import (
 
 const repoDir = "/work/repo"
 
+// snapshotTimeout bounds saving a snapshot after the task. It's separate
+// from Runner.Timeout so a task that finishes near its deadline can still
+// be snapshotted.
+const snapshotTimeout = 2 * time.Minute
+
 // Task is what the user asked for.
 type Task struct {
 	ID      string
@@ -50,6 +55,9 @@ type Runner struct {
 	MemMiB  uint32
 	Timeout time.Duration
 	Stdout  io.Writer // live progress; also saved to the log file
+	// Snapshots, if set, saves the VM after each successful task so later
+	// tasks for the same repo can start from it. nil = no snapshots.
+	Snapshots Snapshotter
 }
 
 func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
@@ -75,7 +83,7 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 		Image:       r.Agent.Image(),
 		CPUs:        r.CPUs,
 		MemoryMiB:   r.MemMiB,
-		MaxLifetime: r.Timeout + 2*time.Minute, // backstop if we crash
+		MaxLifetime: r.Timeout + snapshotTimeout + 2*time.Minute, // backstop if we crash
 		Secrets:     r.Agent.Secrets(),
 	})
 	if err != nil {
@@ -111,12 +119,32 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	}
 	if diff == "" {
 		step("agent made no changes")
-		return res, nil
+	} else {
+		res.PatchPath = filepath.Join(res.Dir, "changes.patch")
+		if err := os.WriteFile(res.PatchPath, []byte(diff), 0o644); err != nil {
+			return res, fmt.Errorf("saving patch: %w", err)
+		}
+		step("patch saved to %s", res.PatchPath)
 	}
-	res.PatchPath = filepath.Join(res.Dir, "changes.patch")
-	if err := os.WriteFile(res.PatchPath, []byte(diff), 0o644); err != nil {
-		return res, fmt.Errorf("saving patch: %w", err)
-	}
-	step("patch saved to %s", res.PatchPath)
+
+	r.saveSnapshot(ctx, sb, t, step)
 	return res, nil
+}
+
+// saveSnapshot keeps the VM as the repo's snapshot. The task has already
+// succeeded, so a failure here is only a warning in the log.
+func (r *Runner) saveSnapshot(ctx context.Context, sb *sandbox.Sandbox, t Task, step func(string, ...any)) {
+	if r.Snapshots == nil || ctx.Err() != nil { // off, or the task was cancelled
+		return
+	}
+	// The task's context may be about to time out; snapshotting gets its
+	// own time limit instead.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotTimeout)
+	defer cancel()
+	err := r.Snapshots.Save(ctx, sb, SnapshotRequest{
+		TaskID: t.ID, Repo: t.Repo, AgentID: r.Agent.ID(), RepoDir: repoDir, StatePaths: r.Agent.StatePaths(),
+	}, step)
+	if err != nil {
+		step("warning: snapshot not saved: %v", err)
+	}
 }

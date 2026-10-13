@@ -28,6 +28,7 @@ type fakeAgent struct{}
 func (fakeAgent) ID() string                { return "fake" }
 func (fakeAgent) Image() string             { return "depak7/forgerun-agent-cursor:dev" } // has git
 func (fakeAgent) Secrets() []sandbox.Secret { return nil }
+func (fakeAgent) StatePaths() []string      { return []string{"/root/.fake-agent"} }
 func (fakeAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
 	return sb.Stream(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c", "echo hello from forgerun >> README"}, Dir: req.Dir}, logs)
 }
