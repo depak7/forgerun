@@ -16,6 +16,7 @@ import (
 
 	"github.com/depak7/forgerun/internal/agent"
 	"github.com/depak7/forgerun/internal/api"
+	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/snapshots"
@@ -68,6 +69,11 @@ func serveCmd(args []string) error {
 		return err
 	}
 	log.Info("models loaded", "agent", ag.ID(), "families", families, "default", effective, "require_zdr", *requireZDR)
+	prTokens, err := githubTokens(ctx, os.Getenv("GITHUB_TOKEN"), &forge.GitHub{}, time.Now(), log)
+	if err != nil {
+		return err
+	}
+	_ = prTokens // used by PR publishing, the next step
 	if err := sandbox.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
@@ -139,6 +145,34 @@ func serveCmd(args []string) error {
 	<-sweepsDone // no snapshot sweep is half done
 	log.Info("stopped")
 	return runErr
+}
+
+// tokenWarnBefore is how soon before a GitHub token expires serve warns.
+const tokenWarnBefore = 3 * 24 * time.Hour
+
+// githubTokens returns where PR publishing gets GitHub tokens from: the
+// GITHUB_TOKEN personal access token (value), checked with GitHub now.
+// With no token, PRs are off and it returns nil. A token GitHub rejects
+// stops startup: it was configured on purpose, so it should work.
+func githubTokens(ctx context.Context, value string, gh *forge.GitHub, now time.Time, log *slog.Logger) (forge.TokenSource, error) {
+	if value == "" {
+		log.Info("pull requests disabled: GITHUB_TOKEN not set")
+		return nil, nil
+	}
+	tok := forge.NewToken(value)
+	id, err := gh.WhoAmI(ctx, tok)
+	if err != nil {
+		return nil, fmt.Errorf("checking GITHUB_TOKEN: %w", err)
+	}
+	expires := "never"
+	if !id.Expires.IsZero() {
+		expires = id.Expires.Format(time.DateOnly)
+	}
+	log.Info("github: authenticated", "as", id.Login, "token_expires", expires)
+	if !id.Expires.IsZero() && id.Expires.Sub(now) < tokenWarnBefore {
+		log.Warn("github token expires soon; pull requests will fail after that", "expires", id.Expires.Format(time.DateTime))
+	}
+	return forge.NewStaticToken(tok), nil
 }
 
 // checkAgent makes sure the database knows the agent this server runs and

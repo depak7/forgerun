@@ -1,10 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/memory"
@@ -67,6 +74,58 @@ func TestCheckModels(t *testing.T) {
 			}
 			if err != nil || got != tc.want {
 				t.Errorf("got %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestGitHubTokens(t *testing.T) {
+	const secret = "github_pat_SECRET123"
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	fake := func(expiry string) *forge.GitHub {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "Bearer "+secret {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, `{"message":"Bad credentials"}`)
+				return
+			}
+			w.Header().Set("GitHub-Authentication-Token-Expiration", expiry)
+			fmt.Fprint(w, `{"login":"depak7"}`)
+		}))
+		t.Cleanup(srv.Close)
+		return &forge.GitHub{BaseURL: srv.URL}
+	}
+	tests := []struct {
+		name, value, expiry string
+		wantSource, wantErr bool
+		wantLog             []string
+	}{
+		{"no token: PRs off", "", "", false, false, []string{"pull requests disabled"}},
+		{"valid token", secret, "2026-10-21 07:52:48 UTC", true, false, []string{"as=depak7", "token_expires=2026-10-21"}},
+		{"expires soon", secret, "2026-10-15 07:52:48 UTC", true, false, []string{"level=WARN", "expires soon"}},
+		{"rejected token stops startup", "github_pat_WRONG", "", false, true, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var logged bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&logged, nil))
+			src, err := githubTokens(context.Background(), tc.value, fake(tc.expiry), now, log)
+			if (err != nil) != tc.wantErr || (src != nil) != tc.wantSource {
+				t.Fatalf("source %v, err %v", src, err)
+			}
+			for _, w := range tc.wantLog {
+				if !strings.Contains(logged.String(), w) {
+					t.Errorf("log lacks %q:\n%s", w, logged.String())
+				}
+			}
+			if strings.Contains(logged.String(), secret) || (err != nil && strings.Contains(err.Error(), "WRONG")) {
+				t.Error("token leaked into the log or error")
+			}
+			if src != nil {
+				tok, _ := src.Token(context.Background(), forge.Repo{})
+				if tok.Reveal() != secret {
+					t.Error("source returns the wrong token")
+				}
 			}
 		})
 	}

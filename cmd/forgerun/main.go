@@ -47,6 +47,7 @@ func usage() {
   forgerun run   -repo <git-url> -prompt <task> [-timeout 15m] [-out out]
 
 The database URL defaults to $FORGERUN_DATABASE_URL, then the docker-compose dev database.
+serve reads CURSOR_API_KEY, and GITHUB_TOKEN (optional) to open pull requests.
 `)
 	os.Exit(64)
 }
