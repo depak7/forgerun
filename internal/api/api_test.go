@@ -312,7 +312,7 @@ func TestTaskJSONShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"id", "repo", "prompt", "agent", "model", "effort", "thinking", "fast", "model_id",
-		"state", "error", "has_patch", "snapshot_id", "created_at", "started_at", "finished_at"} {
+		"state", "error", "has_patch", "snapshot_id", "pr", "summary", "created_at", "started_at", "finished_at"} {
 		if _, ok := fields[k]; !ok {
 			t.Errorf("task JSON missing %q", k)
 		}
@@ -489,5 +489,37 @@ func TestListAgents(t *testing.T) {
 	}
 	if !slices.Equal(agents, want) {
 		t.Errorf("agents = %+v\nwant     %+v", agents, want)
+	}
+}
+
+func TestCreateWithPullRequest(t *testing.T) {
+	const body = `{"repo":"https://github.com/o/r","prompt":"fix it","pr":true}`
+
+	// Without a GitHub token, refuse up front instead of failing after the work.
+	h, _, _ := setup(t)
+	_, apiErr := decode(t, do(h, "POST", "/api/tasks", body), http.StatusBadRequest)
+	if !strings.Contains(apiErr.Message, "pull requests are disabled") {
+		t.Errorf("no token: %q", apiErr.Message)
+	}
+
+	h, s, _ := setup(t, func(c *Config) { c.PullRequests = true })
+	_, apiErr = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://gitlab.com/o/r","prompt":"fix it","pr":true}`), http.StatusBadRequest)
+	if !strings.Contains(apiErr.Message, "aren't supported") {
+		t.Errorf("unsupported host: %q", apiErr.Message)
+	}
+
+	data, _ := decode(t, do(h, "POST", "/api/tasks", body), http.StatusCreated)
+	tk := decodeTask(t, data)
+	if !tk.PR.Requested || tk.PR.URL != "" || tk.PR.Error != "" || tk.Summary != "" {
+		t.Errorf("new PR task: pr=%+v summary=%q", tk.PR, tk.Summary)
+	}
+	if rec, _ := s.Get(context.Background(), tk.ID); !rec.PR.Requested {
+		t.Error("store didn't record the PR request")
+	}
+
+	// Without "pr", nothing changes.
+	data, _ = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://gitlab.com/o/r","prompt":"fix it"}`), http.StatusCreated)
+	if tk := decodeTask(t, data); tk.PR.Requested {
+		t.Error("PR requested without asking")
 	}
 }

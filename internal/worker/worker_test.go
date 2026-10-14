@@ -235,3 +235,34 @@ func TestPassesModelToExecutor(t *testing.T) {
 		t.Fatal("task never ran")
 	}
 }
+
+// The PR request reaches the executor, and the result's PR fields are saved;
+// a PR task that fails says why it has no pull request.
+func TestPullRequestTasks(t *testing.T) {
+	s := memory.New(fakeDefault)
+	ok, failing := task.New("r", "ok"), task.New("r", "fail")
+	ok.PR, failing.PR = true, true
+	for _, tk := range []task.Task{ok, failing} {
+		if err := s.Create(context.Background(), tk, "fake"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	startPool(t, s, fakeExec(func(_ context.Context, tk task.Task) (task.Result, error) {
+		if !tk.PR {
+			return task.Result{}, errors.New("executor wasn't told about the PR")
+		}
+		if tk.Prompt == "fail" {
+			return task.Result{}, errors.New("agent: exit code 1")
+		}
+		return task.Result{BaseCommit: "abc", Summary: "sum", PRURL: "https://github.com/o/r/pull/1"}, nil
+	}), 1, 10*time.Millisecond)
+
+	rec := waitState(t, s, ok.ID, task.Succeeded)
+	if rec.PR.URL != "https://github.com/o/r/pull/1" || rec.Summary != "sum" || rec.BaseCommit != "abc" {
+		t.Errorf("succeeded: %+v", rec)
+	}
+	rec = waitState(t, s, failing.ID, task.Failed)
+	if rec.PR.Error != "no pull request: the task failed" {
+		t.Errorf("failed: PR error %q", rec.PR.Error)
+	}
+}

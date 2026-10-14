@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/task"
@@ -33,6 +34,7 @@ type Config struct {
 	Agent        string // id of the agent new tasks run on, e.g. "cursor"; only its models are offered
 	DefaultModel string // model family used when a request names none; "" = the agent's own default
 	RequireZDR   bool   // offer only models with zero data retention
+	PullRequests bool   // tasks may ask for a pull request (the server has a GitHub token)
 	Log          *slog.Logger
 }
 
@@ -42,13 +44,14 @@ type Server struct {
 	agent        string
 	defaultModel string
 	requireZDR   bool
+	pullRequests bool
 	log          *slog.Logger
 }
 
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, pullRequests: cfg.PullRequests, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
@@ -79,6 +82,8 @@ type taskJSON struct {
 	Error      string     `json:"error"`
 	HasPatch   bool       `json:"has_patch"`
 	SnapshotID *int64     `json:"snapshot_id"` // snapshot it was restored from; null = cold start
+	PR         prJSON     `json:"pr"`
+	Summary    string     `json:"summary"` // the agent's summary of the conversation (PR tasks); "" if none
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at"`  // null until running
 	FinishedAt *time.Time `json:"finished_at"` // null until finished
@@ -89,8 +94,16 @@ func toJSON(r store.Record) taskJSON {
 		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.AgentID,
 		Model: r.Model.Family, Effort: r.Model.Effort, Thinking: r.Model.Thinking, Fast: r.Model.Fast, ModelID: r.Model.ID,
 		State: r.State, Error: r.Error, HasPatch: r.PatchPath != "", SnapshotID: r.SnapshotID,
+		PR: prJSON{Requested: r.PR.Requested, URL: r.PR.URL, Error: r.PR.Error}, Summary: r.Summary,
 		CreatedAt: r.CreatedAt.UTC(), StartedAt: utc(r.StartedAt), FinishedAt: utc(r.FinishedAt),
 	}
+}
+
+// prJSON is a task's pull request in the API.
+type prJSON struct {
+	Requested bool   `json:"requested"`
+	URL       string `json:"url"`   // "" until opened
+	Error     string `json:"error"` // why it wasn't opened; "" otherwise
 }
 
 // utc returns t in UTC, so clients always get "…Z" timestamps regardless of
@@ -111,6 +124,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Effort   string `json:"effort"`
 		Thinking *bool  `json:"thinking"` // nil = not sent
 		Fast     *bool  `json:"fast"`
+		PR       bool   `json:"pr"` // open a pull request with the changes
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	dec.DisallowUnknownFields()
@@ -131,6 +145,17 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
+	if req.PR {
+		// Refuse now rather than fail after the agent has done the work.
+		if !s.pullRequests {
+			writeError(w, http.StatusBadRequest, "pull requests are disabled on this server (it has no GITHUB_TOKEN)")
+			return
+		}
+		if _, err := forge.ParseRepo(req.Repo); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	cat, err := s.catalog(r.Context(), s.agent)
 	if err != nil {
@@ -148,7 +173,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := task.New(req.Repo, req.Prompt)
-	t.ModelID = v.ID
+	t.ModelID, t.PR = v.ID, req.PR
 	if err := s.store.Create(r.Context(), t, s.agent); err != nil {
 		s.internalError(w, r, err)
 		return

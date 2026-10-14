@@ -154,3 +154,16 @@ func TestSnapshots(t *testing.T) {
 		t.Errorf("unknown task: got %v", err)
 	}
 }
+
+func TestPullRequestFields(t *testing.T) {
+	s, ctx := New(fakeDefault), context.Background()
+	tk := task.New("r", "p")
+	tk.PR = true
+	s.Create(ctx, tk, "fake")
+	s.Start(ctx, tk.ID)
+	s.Finish(ctx, tk.ID, store.Outcome{State: task.Succeeded, BaseCommit: "abc", Summary: "sum", PRError: "denied"})
+	rec, _ := s.Get(ctx, tk.ID)
+	if rec.PR != (store.PullRequest{Requested: true, Error: "denied"}) || rec.BaseCommit != "abc" || rec.Summary != "sum" {
+		t.Errorf("got pr=%+v base=%q summary=%q", rec.PR, rec.BaseCommit, rec.Summary)
+	}
+}

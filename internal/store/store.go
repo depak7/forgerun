@@ -42,6 +42,9 @@ type Record struct {
 	LogPath    string
 	PatchPath  string // "" if no changes
 	SnapshotID *int64 // the snapshot the task was restored from; nil = cold start
+	PR         PullRequest
+	BaseCommit string // the commit the agent started from; "" until known
+	Summary    string // the agent's conversation summary; "" if none
 	CreatedAt  time.Time
 	StartedAt  *time.Time // nil until running
 	FinishedAt *time.Time // nil until terminal
@@ -87,12 +90,24 @@ func NormalizeRepo(repo string) string {
 	return strings.TrimSuffix(repo, ".git")
 }
 
+// PullRequest is a task's pull request: whether one was asked for, and
+// what happened.
+type PullRequest struct {
+	Requested bool
+	URL       string // "" until opened
+	Error     string // why it wasn't opened; "" otherwise
+}
+
 // Outcome is how a task ended.
 type Outcome struct {
-	State     task.State // Succeeded, Failed or Cancelled
-	Error     string
-	LogPath   string
-	PatchPath string
+	State      task.State // Succeeded, Failed or Cancelled
+	Error      string
+	LogPath    string
+	PatchPath  string
+	BaseCommit string
+	Summary    string
+	PRURL      string
+	PRError    string
 }
 
 type Store interface {

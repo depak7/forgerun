@@ -29,3 +29,14 @@ type Agent interface {
 	StatePaths() []string
 	Run(ctx context.Context, sb *sandbox.Sandbox, req Request, logs io.Writer) error
 }
+
+// Continuer is an optional Agent capability: sending one more prompt to the
+// conversation the last Run started, in the same VM, and returning the
+// reply. forgerun uses it to ask for a summary of the conversation, which
+// only the agent's own chat can give (what the user asked for as well as
+// what was done). It must not change files.
+//
+// Check for it with a type assertion: if c, ok := a.(Continuer); ok { ... }
+type Continuer interface {
+	Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string) (string, error)
+}

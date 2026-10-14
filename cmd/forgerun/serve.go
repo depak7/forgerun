@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/depak7/forgerun/internal/api"
 	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/models"
+	"github.com/depak7/forgerun/internal/publish"
 	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/snapshots"
 	"github.com/depak7/forgerun/internal/store"
@@ -73,7 +75,6 @@ func serveCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	_ = prTokens // used by PR publishing, the next step
 	if err := sandbox.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
@@ -96,6 +97,14 @@ func serveCmd(args []string) error {
 	}
 
 	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: io.Discard}
+	if prTokens != nil {
+		// Publishing runs git on this host (never in a VM).
+		if _, err := exec.LookPath("git"); err != nil {
+			ln.Close()
+			return fmt.Errorf("pull requests need git installed on this host: %w", err)
+		}
+		runner.Publisher = &publish.Publisher{Tokens: prTokens, GitHub: &forge.GitHub{}}
+	}
 	sweepsDone := make(chan struct{})
 	if *useSnapshots {
 		mgr := &snapshots.Manager{Store: db, Limits: snapshots.Limits{MaxAge: *snapshotMaxAge, Budget: int64(snapshotBudget)}}
@@ -114,7 +123,7 @@ func serveCmd(args []string) error {
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
 		Handler: api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agent: ag.ID(),
-			DefaultModel: *defaultModel, RequireZDR: *requireZDR, Log: log})),
+			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PullRequests: prTokens != nil, Log: log})),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

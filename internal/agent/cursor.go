@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/depak7/forgerun/internal/sandbox"
 )
@@ -54,6 +55,24 @@ func (c *Cursor) Run(ctx context.Context, sb *sandbox.Sandbox, req Request, logs
 		Dir:  req.Dir,
 		Env:  map[string]string{"HOME": "/root"}, // CURSOR_API_KEY comes from the VM as a placeholder
 	}, logs)
+}
+
+var _ Continuer = (*Cursor)(nil)
+
+// Continue sends prompt to the chat the last Run created and returns the
+// reply. The VM holds only that chat (snapshots wipe ~/.cursor), so
+// --continue picks the right one. Ask mode is read-only.
+func (c *Cursor) Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string) (string, error) {
+	out, err := sb.Run(ctx, sandbox.Cmd{
+		Name: "agent",
+		Args: []string{"-p", prompt, "--continue", "--mode", "ask", "--trust", "--output-format", "text"},
+		Dir:  dir,
+		Env:  map[string]string{"HOME": "/root"},
+	})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // cursorArgs builds the CLI arguments. "auto" is Cursor's default, so it

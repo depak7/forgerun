@@ -48,10 +48,10 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	// An empty model id means the agent's default_model_id. If the agent has
 	// none (or doesn't exist), model_id is NULL and the insert fails.
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id)
+		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id, pr_requested)
 		VALUES ($1, $2, $3, $4, $5, COALESCE(NULLIF($6, ''),
-			(SELECT default_model_id FROM agents WHERE id = $4)))`,
-		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID)
+			(SELECT default_model_id FROM agents WHERE id = $4)), $7)`,
+		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.PR)
 	if err != nil {
 		return fmt.Errorf("creating task %s: %w", t.ID, err) // includes the FK error for an unknown model
 	}
@@ -65,9 +65,11 @@ func (s *Store) Start(ctx context.Context, id string) error {
 
 func (s *Store) Finish(ctx context.Context, id string, o store.Outcome) error {
 	return s.transition(ctx, id, task.Running, o.State,
-		`UPDATE tasks SET state = $3, error = $4, log_path = $5, patch_path = $6, finished_at = now()
+		`UPDATE tasks SET state = $3, error = $4, log_path = $5, patch_path = $6, finished_at = now(),
+			base_commit = $7, summary = $8, pr_url = $9, pr_error = $10
 		 WHERE id = $1 AND state = $2`,
-		nullable(o.Error), nullable(o.LogPath), nullable(o.PatchPath))
+		nullable(o.Error), nullable(o.LogPath), nullable(o.PatchPath),
+		nullable(o.BaseCommit), nullable(o.Summary), nullable(o.PRURL), nullable(o.PRError))
 }
 
 func (s *Store) Claim(ctx context.Context) (store.Record, bool, error) {
@@ -137,7 +139,7 @@ const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, 
 
 // selectColumns is the task (aliased t) plus its model.
 const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.patch_path,
-	t.snapshot_id, t.created_at, t.started_at, t.finished_at, ` + modelColumns
+	t.snapshot_id, t.pr_requested, t.pr_url, t.pr_error, t.base_commit, t.summary, t.created_at, t.started_at, t.finished_at, ` + modelColumns
 
 const fromTasks = ` FROM tasks t
 	JOIN models m ON m.agent_id = t.agent_id AND m.id = t.model_id
@@ -342,13 +344,15 @@ func scanSnapshot(row pgx.Row) (store.Snapshot, error) {
 // both QueryRow's result and pgx.Rows, so Get and List share this.
 func scanRecord(row pgx.Row) (store.Record, error) {
 	var (
-		rec                        store.Record
-		state                      string
-		errMsg, logPath, patchPath *string // nil = NULL
-		startedAt, finishedAt      *time.Time
+		rec                                 store.Record
+		state                               string
+		errMsg, logPath, patchPath          *string // nil = NULL
+		prURL, prError, baseCommit, summary *string
+		startedAt, finishedAt               *time.Time
 	)
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
-		&errMsg, &logPath, &patchPath, &rec.SnapshotID, &rec.CreatedAt, &startedAt, &finishedAt,
+		&errMsg, &logPath, &patchPath, &rec.SnapshotID,
+		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
 		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR)
 	if err != nil {
@@ -359,6 +363,8 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		return store.Record{}, fmt.Errorf("task %s has unknown state %q", rec.ID, state)
 	}
 	rec.Error, rec.LogPath, rec.PatchPath = deref(errMsg), deref(logPath), deref(patchPath)
+	rec.PR.URL, rec.PR.Error = deref(prURL), deref(prError)
+	rec.BaseCommit, rec.Summary = deref(baseCommit), deref(summary)
 	rec.StartedAt, rec.FinishedAt = startedAt, finishedAt
 	return rec, nil
 }

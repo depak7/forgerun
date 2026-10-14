@@ -58,7 +58,7 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 		return fmt.Errorf("creating task %s: no model %q for agent %s", t.ID, t.ModelID, agentID)
 	}
 	s.tasks[t.ID] = &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, AgentID: agentID,
-		Model: m, State: task.Queued, CreatedAt: time.Now()}
+		Model: m, State: task.Queued, PR: store.PullRequest{Requested: t.PR}, CreatedAt: time.Now()}
 	return nil
 }
 
@@ -144,6 +144,7 @@ func (s *Store) Finish(_ context.Context, id string, o store.Outcome) error {
 		return err
 	}
 	r.Error, r.LogPath, r.PatchPath = o.Error, o.LogPath, o.PatchPath
+	r.BaseCommit, r.Summary, r.PR.URL, r.PR.Error = o.BaseCommit, o.Summary, o.PRURL, o.PRError
 	now := time.Now()
 	r.FinishedAt = &now
 	return nil

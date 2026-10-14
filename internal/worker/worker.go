@@ -4,6 +4,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -103,11 +104,14 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	p.setRunning(rec.ID, cancel)
 
 	log.Info("task started", "id", rec.ID, "repo", rec.Repo)
-	res, err := p.exec.Run(taskCtx, task.Task{ID: rec.ID, Repo: rec.Repo, Prompt: rec.Prompt, ModelID: rec.Model.ID})
+	res, err := p.exec.Run(taskCtx, task.Task{ID: rec.ID, Repo: rec.Repo, Prompt: rec.Prompt, ModelID: rec.Model.ID, PR: rec.PR.Requested})
 	// Untrack before saving: once the store says the task is finished,
 	// Cancel must already report false.
 	p.setRunning(rec.ID, nil)
 	o := outcome(taskCtx, res, err)
+	if rec.PR.Requested && o.State != task.Succeeded && o.PRError == "" {
+		o.PRError = fmt.Sprintf("no pull request: the task %s", o.State)
+	}
 
 	// taskCtx may be cancelled already; recording the outcome must still happen.
 	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -132,7 +136,8 @@ func (p *Pool) setRunning(id string, cancel context.CancelCauseFunc) {
 
 // outcome decides how a finished run is recorded.
 func outcome(ctx context.Context, res task.Result, err error) store.Outcome {
-	o := store.Outcome{State: task.Succeeded, LogPath: res.LogPath, PatchPath: res.PatchPath}
+	o := store.Outcome{State: task.Succeeded, LogPath: res.LogPath, PatchPath: res.PatchPath,
+		BaseCommit: res.BaseCommit, Summary: res.Summary, PRURL: res.PRURL, PRError: res.PRError}
 	switch {
 	case err == nil:
 	case errors.Is(context.Cause(ctx), errCancelledByUser):

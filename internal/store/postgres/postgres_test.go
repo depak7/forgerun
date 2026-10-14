@@ -632,3 +632,31 @@ func TestReplaceSnapshotIsAtomic(t *testing.T) {
 		}
 	}
 }
+
+func TestPullRequestFields(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	tk := task.New("https://github.com/o/r", "p")
+	tk.PR = true
+	if err := s.Create(ctx, tk, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, tk.ID); !rec.PR.Requested || rec.PR.URL != "" || rec.Summary != "" || rec.BaseCommit != "" {
+		t.Fatalf("after Create: %+v", rec)
+	}
+	s.Start(ctx, tk.ID)
+	o := store.Outcome{State: task.Succeeded, BaseCommit: "abc123", Summary: "## Requested\nx",
+		PRURL: "https://github.com/o/r/pull/1"}
+	if err := s.Finish(ctx, tk.ID, o); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := s.Get(ctx, tk.ID)
+	if rec.PR != (store.PullRequest{Requested: true, URL: "https://github.com/o/r/pull/1"}) ||
+		rec.BaseCommit != "abc123" || rec.Summary != "## Requested\nx" {
+		t.Errorf("after Finish: pr=%+v base=%q summary=%q", rec.PR, rec.BaseCommit, rec.Summary)
+	}
+	other := task.New("r", "p") // no PR asked
+	s.Create(ctx, other, "cursor")
+	if rec, _ := s.Get(ctx, other.ID); rec.PR.Requested {
+		t.Error("PR requested without asking")
+	}
+}
