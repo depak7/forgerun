@@ -33,6 +33,7 @@ func serveCmd(args []string) error {
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on")
 	workers := fs.Int("workers", 2, "how many tasks may run at once")
 	timeout := fs.Duration("timeout", 15*time.Minute, "max time per task")
+	agentIdle := fs.Duration("agent-idle", 10*time.Minute, "stop an agent that prints nothing and changes no files for this long (0 = never)")
 	out := fs.String("out", "out", "directory for task results")
 	defaultModel := fs.String("model", "", "default model family for requests that name none (default: the agent's own)")
 	requireZDR := fs.Bool("require-zdr", false, "offer only models with zero data retention")
@@ -96,7 +97,7 @@ func serveCmd(args []string) error {
 		log.Warn("marked orphaned running tasks as failed", "count", n)
 	}
 
-	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: io.Discard}
+	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, AgentIdle: *agentIdle, Stdout: io.Discard}
 	var prs api.PRs // stays a nil interface when PRs are off (a nil *Publisher in it wouldn't be)
 	var publisher *publish.Publisher
 	if prTokens != nil {

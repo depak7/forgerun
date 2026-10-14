@@ -80,6 +80,9 @@ type Runner struct {
 	MemMiB  uint32
 	Timeout time.Duration
 	Stdout  io.Writer // live progress; also saved to the log file
+	// AgentIdle stops an agent that produces no output and changes no
+	// files for this long, failing the task early. 0 = never.
+	AgentIdle time.Duration
 	// Snapshots, if set, saves the VM after each successful task so later
 	// tasks for the same repo can start from it. nil = no snapshots.
 	Snapshots Snapshotter
@@ -152,7 +155,7 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	res.BaseCommit = strings.TrimSpace(res.BaseCommit)
 
 	step("running %s agent (model: %s)", r.Agent.ID(), cmp.Or(t.ModelID, "auto"))
-	if err := r.Agent.Run(ctx, sb, agent.Request{Dir: repoDir, Prompt: prompt(t), ModelID: t.ModelID}, logs); err != nil {
+	if err := r.runAgent(ctx, sb, t, logs, step); err != nil {
 		return res, fmt.Errorf("agent: %w", err)
 	}
 
@@ -185,6 +188,39 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 		r.publish(ctx, t, &res, step)
 	}
 	return res, nil
+}
+
+// runAgent runs the agent, under a watchdog when AgentIdle is set.
+func (r *Runner) runAgent(ctx context.Context, sb *sandbox.Sandbox, t Task, logs io.Writer, step func(string, ...any)) error {
+	req := agent.Request{Dir: repoDir, Prompt: prompt(t), ModelID: t.ModelID}
+	if r.AgentIdle <= 0 {
+		return r.Agent.Run(ctx, sb, req, logs)
+	}
+	agentCtx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
+	dog := newWatchdog(r.AgentIdle, fileProbe(sb, append([]string{repoDir}, r.Agent.StatePaths()...)))
+	go dog.Watch(agentCtx, stop)
+
+	err := r.Agent.Run(agentCtx, sb, req, dog.Writer(logs))
+	if cause := context.Cause(agentCtx); errors.Is(cause, errStalled) {
+		step("stopped the agent: %v", cause)
+		return cause
+	}
+	return err
+}
+
+// fileProbe reports whether any file under paths changed since the last
+// call, by comparing modification times against a marker file in the VM.
+// Errors count as "no change"; the watchdog keeps going.
+func fileProbe(sb *sandbox.Sandbox, paths []string) func(context.Context) bool {
+	const marker = "/tmp/.forgerun-activity"
+	// -newer compares against the marker; -print -quit stops at the first hit.
+	script := `find "$@" -newer ` + marker + ` -print -quit 2>/dev/null; touch ` + marker
+	sb.Run(context.Background(), sandbox.Cmd{Name: "touch", Args: []string{marker}})
+	return func(ctx context.Context) bool {
+		out, err := sb.Run(ctx, sandbox.Cmd{Name: "sh", Args: append([]string{"-c", script, "probe"}, paths...)})
+		return err == nil && strings.TrimSpace(out) != ""
+	}
 }
 
 // summarize asks the agent, in its own conversation, for a summary of what

@@ -41,7 +41,7 @@ func main() {
 
 func usage() {
 	fmt.Fprint(os.Stderr, `usage:
-  forgerun serve [-addr 127.0.0.1:8080] [-workers 2] [-timeout 15m] [-out out] [-db url]
+  forgerun serve [-addr 127.0.0.1:8080] [-workers 2] [-timeout 15m] [-agent-idle 10m] [-out out] [-db url]
                  [-model family] [-require-zdr] [-snapshots=false]
                  [-snapshot-max-age 168h] [-snapshot-budget 20GB] [-snapshot-sweep 10m]
   forgerun run   -repo <git-url> -prompt <task> [-timeout 15m] [-out out]

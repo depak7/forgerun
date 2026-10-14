@@ -54,3 +54,51 @@ func TestRunEndToEnd(t *testing.T) {
 		t.Errorf("log does not record the model:\n%s", log)
 	}
 }
+
+// shellAgent runs a shell script in the repo as its "work".
+type shellAgent struct{ script string }
+
+func (shellAgent) ID() string                { return "fake" }
+func (shellAgent) Image() string             { return "depak7/forgerun-agent-cursor:dev" }
+func (shellAgent) Secrets() []sandbox.Secret { return nil }
+func (shellAgent) StatePaths() []string      { return []string{"/root/.fake-agent"} }
+func (a shellAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
+	return sb.Stream(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c", a.script}, Dir: req.Dir}, logs)
+}
+
+func idleRunner(t *testing.T, script string) *Runner {
+	t.Helper()
+	if os.Getenv("FORGERUN_INTEGRATION") == "" {
+		t.Skip("set FORGERUN_INTEGRATION=1 to boot a real VM")
+	}
+	return &Runner{Agent: shellAgent{script}, OutDir: t.TempDir(), CPUs: 1, MemMiB: 1024,
+		Timeout: 5 * time.Minute, AgentIdle: 4 * time.Second, Stdout: io.Discard}
+}
+
+func TestStalledAgentIsStopped(t *testing.T) {
+	r := idleRunner(t, `echo "Connection lost, reconnecting (attempt 1)..."; sleep 60`)
+	start := time.Now()
+	res, err := r.Run(context.Background(), New("https://github.com/octocat/Hello-World", "unused"))
+	if err == nil || !strings.Contains(err.Error(), "agent stalled: no output or file changes for 4s") ||
+		!strings.Contains(err.Error(), "Connection lost, reconnecting") {
+		t.Fatalf("err = %v", err)
+	}
+	if took := time.Since(start); took > 40*time.Second {
+		t.Errorf("took %s; the stall should be caught long before the agent's 60s sleep ends", took)
+	}
+	if log, _ := os.ReadFile(res.LogPath); !strings.Contains(string(log), "stopped the agent") {
+		t.Errorf("log doesn't say why:\n%s", log)
+	}
+}
+
+func TestQuietButBusyAgentIsNotStopped(t *testing.T) {
+	// No output for 12s (three times the limit), but a file changes every second.
+	r := idleRunner(t, `for i in $(seq 12); do echo $i >> progress.txt; sleep 1; done`)
+	res, err := r.Run(context.Background(), New("https://github.com/octocat/Hello-World", "unused"))
+	if err != nil {
+		t.Fatalf("a busy agent was stopped: %v", err)
+	}
+	if res.PatchPath == "" {
+		t.Error("its work was lost")
+	}
+}
