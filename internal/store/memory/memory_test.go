@@ -167,3 +167,42 @@ func TestPullRequestFields(t *testing.T) {
 		t.Errorf("got pr=%+v base=%q summary=%q", rec.PR, rec.BaseCommit, rec.Summary)
 	}
 }
+
+func TestThreads(t *testing.T) {
+	s, ctx := New(fakeDefault), context.Background()
+	first := task.New("r", "p")
+	first.PR = true
+	s.Create(ctx, first, "fake")
+	s.Start(ctx, first.ID)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, PRURL: "u", PRNumber: 9, PRBranch: "b"})
+
+	follow := func(parent string) (task.Task, error) {
+		tk := task.New("r", "p")
+		tk.PR, tk.ParentID = true, parent
+		return tk, s.Create(ctx, tk, "fake")
+	}
+	second, err := follow(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, second.ID); rec.ThreadID != first.ID || rec.ParentID != first.ID || rec.PR.Number != 9 || !rec.PR.Requested {
+		t.Errorf("follow-up = %+v", rec)
+	}
+	if _, err := follow(second.ID); !errors.Is(err, store.ErrThreadBusy) {
+		t.Errorf("busy: %v", err)
+	}
+	s.Start(ctx, second.ID)
+	s.Finish(ctx, second.ID, store.Outcome{State: task.Failed})
+	if rec, _ := s.Get(ctx, second.ID); rec.PR.Number != 9 {
+		t.Errorf("failed follow-up lost the PR: %+v", rec.PR)
+	}
+	if _, err := follow(first.ID); !errors.Is(err, store.ErrNotLatest) {
+		t.Errorf("not latest: %v", err)
+	}
+	if _, err := follow("nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("unknown parent: %v", err)
+	}
+	if thread, _ := s.ThreadTasks(ctx, first.ID); len(thread) != 2 || thread[0].ID != first.ID {
+		t.Errorf("thread = %+v", thread)
+	}
+}

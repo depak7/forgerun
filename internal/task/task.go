@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,6 +33,20 @@ type Task struct {
 	Prompt  string
 	ModelID string // exact agent model id; "" or "auto" lets the agent choose
 	PR      bool   // open a pull request with the changes
+	// ParentID, for a follow-up, is the task it continues; "" otherwise.
+	ParentID string
+	// FollowUp is set by the worker when the task continues a thread's
+	// pull request; nil for a fresh task.
+	FollowUp *FollowUp
+}
+
+// FollowUp is what a follow-up task needs to know about its thread.
+type FollowUp struct {
+	Branch     string   // the pull request's branch, e.g. "forgerun/t-…"
+	PRNumber   int      // the pull request to update
+	ThreadBase string   // the commit the thread's first task started from
+	Summary    string   // the latest summary of the thread; "" if none
+	Requests   []string // earlier requests in the thread, oldest first
 }
 
 // New creates a task with a unique, sortable ID like "t-20261011-142233-a1b2c3".
@@ -51,7 +66,9 @@ type Result struct {
 	BaseCommit  string // the commit the agent started from
 	Summary     string // the agent's conversation summary (PR tasks); "" if none
 	SummaryPath string
-	PRURL       string // the pull request, if one was opened
+	PRURL       string // the pull request, if one was opened or updated
+	PRNumber    int
+	PRBranch    string
 	PRError     string // why a requested pull request wasn't opened
 }
 
@@ -123,13 +140,19 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	}
 	step("sandbox ready in %s (%s)", time.Since(start).Round(100*time.Millisecond), mode)
 
+	if t.FollowUp != nil {
+		step("checking out %s", t.FollowUp.Branch)
+		if err := checkoutThread(ctx, sb, t.FollowUp); err != nil {
+			return res, err
+		}
+	}
 	if res.BaseCommit, err = sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"-C", repoDir, "rev-parse", "HEAD"}}); err != nil {
 		return res, fmt.Errorf("reading start commit: %w", err)
 	}
 	res.BaseCommit = strings.TrimSpace(res.BaseCommit)
 
 	step("running %s agent (model: %s)", r.Agent.ID(), cmp.Or(t.ModelID, "auto"))
-	if err := r.Agent.Run(ctx, sb, agent.Request{Dir: repoDir, Prompt: t.Prompt, ModelID: t.ModelID}, logs); err != nil {
+	if err := r.Agent.Run(ctx, sb, agent.Request{Dir: repoDir, Prompt: prompt(t), ModelID: t.ModelID}, logs); err != nil {
 		return res, fmt.Errorf("agent: %w", err)
 	}
 
@@ -155,7 +178,7 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	}
 
 	if t.PR && res.PatchPath != "" {
-		r.summarize(ctx, sb, &res, step) // before the snapshot cleanup wipes the chat
+		r.summarize(ctx, sb, t, &res, step) // before the snapshot cleanup wipes the chat
 	}
 	r.saveSnapshot(ctx, sb, t, step)
 	if t.PR {
@@ -167,14 +190,18 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 // summarize asks the agent, in its own conversation, for a summary of what
 // was asked and done. Agents that can't continue a conversation give none;
 // the pull request then describes the request and the changed files.
-func (r *Runner) summarize(ctx context.Context, sb *sandbox.Sandbox, res *Result, step func(string, ...any)) {
+func (r *Runner) summarize(ctx context.Context, sb *sandbox.Sandbox, t Task, res *Result, step func(string, ...any)) {
 	c, ok := r.Agent.(agent.Continuer)
 	if !ok {
 		step("%s agent can't continue its conversation; no summary", r.Agent.ID())
 		return
 	}
 	step("asking the agent for a summary")
-	summary, err := c.Continue(ctx, sb, repoDir, SummaryPrompt)
+	ask := SummaryPrompt
+	if t.FollowUp != nil {
+		ask += "\n\n" + followUpSummaryNote
+	}
+	summary, err := c.Continue(ctx, sb, repoDir, ask)
 	if err != nil || summary == "" {
 		step("warning: no summary: %v", cmp.Or(err, errors.New("empty reply")))
 		return
@@ -208,17 +235,26 @@ func (r *Runner) publish(ctx context.Context, t Task, res *Result, step func(str
 	step("opening a pull request")
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishTimeout)
 	defer cancel()
-	url, err := r.Publisher.Publish(ctx, PublishRequest{
+	req := PublishRequest{
 		TaskID: t.ID, Repo: t.Repo, BaseCommit: res.BaseCommit, PatchPath: res.PatchPath,
-		Prompt: t.Prompt, Summary: res.Summary,
-	})
+		Prompt: t.Prompt, Summary: res.Summary, Requests: []string{t.Prompt},
+	}
+	if fu := t.FollowUp; fu != nil {
+		req.Branch, req.PRNumber = fu.Branch, fu.PRNumber
+		req.Requests = append(slices.Clone(fu.Requests), t.Prompt)
+	}
+	pr, err := r.Publisher.Publish(ctx, req)
 	if err != nil {
 		res.PRError = err.Error()
-		step("warning: pull request not opened: %v", err)
+		step("warning: pull request not published: %v", err)
 		return
 	}
-	res.PRURL = url
-	step("pull request opened: %s", url)
+	res.PRURL, res.PRNumber, res.PRBranch = pr.URL, pr.Number, pr.Branch
+	if t.FollowUp != nil {
+		step("pull request updated: %s", pr.URL)
+	} else {
+		step("pull request opened: %s", pr.URL)
+	}
 }
 
 // restore returns a VM started from the repo's snapshot, ready to run the

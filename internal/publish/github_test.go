@@ -30,7 +30,7 @@ func TestPublishToGitHub(t *testing.T) {
 
 	p := &Publisher{Tokens: forge.NewStaticToken(forge.NewToken(token)), GitHub: &forge.GitHub{}}
 	id := "test-" + time.Now().Format("20060102-150405") // a new branch every run
-	url, err := p.Publish(context.Background(), task.PublishRequest{
+	pr, err := p.Publish(context.Background(), task.PublishRequest{
 		TaskID: id, Repo: repo, BaseCommit: base, PatchPath: patch,
 		Prompt:  "Publish test: append a line to the README",
 		Summary: "## Requested\nAppend a line to the README.\n\n## Done\nAppended it and added forgerun-test.txt.\n\n## Open\nNothing; this is a test.",
@@ -38,8 +38,28 @@ func TestPublishToGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(url, strings.TrimSuffix(repo, ".git")+"/pull/") {
-		t.Errorf("url = %q", url)
+	if !strings.HasPrefix(pr.URL, strings.TrimSuffix(repo, ".git")+"/pull/") || pr.Branch != Branch(id) || pr.Number == 0 {
+		t.Errorf("published %+v", pr)
 	}
-	t.Logf("opened %s (branch %s)", url, Branch(id))
+	t.Logf("opened %s (branch %s)", pr.URL, pr.Branch)
+
+	// A follow-up: a commit on top of the branch, and a refreshed description.
+	work := filepath.Join(dir, "fu")
+	head := sh(t, dir, "git clone -q --depth=1 --branch "+pr.Branch+" "+repo+" fu && git -C fu rev-parse HEAD")
+	patch2 := filepath.Join(dir, "followup.patch")
+	sh(t, work, `printf 'Second round.\n' >> forgerun-test.txt && git add -A && git diff --cached --binary > `+patch2)
+	again, err := p.Publish(context.Background(), task.PublishRequest{
+		TaskID: id + "-2", Repo: repo, BaseCommit: head, PatchPath: patch2,
+		Prompt:   "Publish test: a second round",
+		Summary:  "## Requested\nBoth rounds.\n\n## Done\nAppended a line, then a second round.\n\n## Open\nNothing.",
+		Requests: []string{"Publish test: append a line to the README", "Publish test: a second round"},
+		Branch:   pr.Branch, PRNumber: pr.Number,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.URL != pr.URL || again.Number != pr.Number {
+		t.Errorf("follow-up published %+v, want the same pull request %+v", again, pr)
+	}
+	t.Logf("updated %s", again.URL)
 }

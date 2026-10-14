@@ -57,9 +57,42 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 	if !ok { // mirrors the Postgres foreign keys / missing agent default
 		return fmt.Errorf("creating task %s: no model %q for agent %s", t.ID, t.ModelID, agentID)
 	}
-	s.tasks[t.ID] = &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, AgentID: agentID,
-		Model: m, State: task.Queued, PR: store.PullRequest{Requested: t.PR}, CreatedAt: time.Now()}
+	rec := &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, AgentID: agentID,
+		Model: m, State: task.Queued, PR: store.PullRequest{Requested: t.PR}, ThreadID: t.ID, CreatedAt: time.Now()}
+	if t.ParentID != "" { // mirrors the Postgres thread rules and indexes
+		parent, ok := s.tasks[t.ParentID]
+		if !ok {
+			return fmt.Errorf("creating task %s: parent %w: %s", t.ID, store.ErrNotFound, t.ParentID)
+		}
+		for _, other := range s.tasks {
+			if other.ParentID == t.ParentID {
+				return fmt.Errorf("creating task %s: %w", t.ID, store.ErrNotLatest)
+			}
+			if other.ThreadID == parent.ThreadID && (other.State == task.Queued || other.State == task.Running) {
+				return fmt.Errorf("creating task %s: %w", t.ID, store.ErrThreadBusy)
+			}
+		}
+		rec.ParentID, rec.ThreadID = parent.ID, parent.ThreadID
+		rec.PR = parent.PR
+		rec.PR.Requested, rec.PR.Error = true, ""
+	}
+	s.tasks[t.ID] = rec
 	return nil
+}
+
+func (s *Store) ThreadTasks(_ context.Context, threadID string) ([]store.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var recs []store.Record
+	for _, r := range s.tasks {
+		if r.ThreadID == threadID {
+			recs = append(recs, *r)
+		}
+	}
+	slices.SortFunc(recs, func(a, b store.Record) int {
+		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+	})
+	return recs, nil
 }
 
 // model finds agent's model id, or the agent's default when id is "".
@@ -144,7 +177,9 @@ func (s *Store) Finish(_ context.Context, id string, o store.Outcome) error {
 		return err
 	}
 	r.Error, r.LogPath, r.PatchPath = o.Error, o.LogPath, o.PatchPath
-	r.BaseCommit, r.Summary, r.PR.URL, r.PR.Error = o.BaseCommit, o.Summary, o.PRURL, o.PRError
+	r.BaseCommit, r.Summary, r.PR.Error = o.BaseCommit, o.Summary, o.PRError
+	// A follow-up inherited its thread's pull request; keep it if this run didn't publish.
+	r.PR.URL, r.PR.Number, r.PR.Branch = cmp.Or(o.PRURL, r.PR.URL), cmp.Or(o.PRNumber, r.PR.Number), cmp.Or(o.PRBranch, r.PR.Branch)
 	now := time.Now()
 	r.FinishedAt = &now
 	return nil

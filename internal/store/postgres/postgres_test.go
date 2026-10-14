@@ -660,3 +660,107 @@ func TestPullRequestFields(t *testing.T) {
 		t.Error("PR requested without asking")
 	}
 }
+
+// prTask creates a task that finished with an opened pull request.
+func prTask(t *testing.T, s *Store, parent string) task.Task {
+	t.Helper()
+	ctx := context.Background()
+	tk := task.New("https://github.com/o/r", "p")
+	tk.PR, tk.ParentID = true, parent
+	if err := s.Create(ctx, tk, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	return tk
+}
+
+func finishTask(t *testing.T, s *Store, id string, o store.Outcome) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.Start(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(ctx, id, o); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestThreads(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	first := prTask(t, s, "")
+	finishTask(t, s, first.ID, store.Outcome{State: task.Succeeded, Summary: "s1",
+		PRURL: "https://github.com/o/r/pull/9", PRNumber: 9, PRBranch: "forgerun/" + first.ID})
+
+	second := prTask(t, s, first.ID)
+	rec, _ := s.Get(ctx, second.ID)
+	if rec.ParentID != first.ID || rec.ThreadID != first.ID || !rec.PR.Requested ||
+		rec.PR.Number != 9 || rec.PR.Branch != "forgerun/"+first.ID || rec.PR.URL != "https://github.com/o/r/pull/9" {
+		t.Fatalf("follow-up = %+v", rec)
+	}
+	if root, _ := s.Get(ctx, first.ID); root.ThreadID != first.ID || root.ParentID != "" {
+		t.Errorf("first task: thread %q parent %q", root.ThreadID, root.ParentID)
+	}
+
+	// One task at a time per thread; one follow-up per task.
+	if err := s.Create(ctx, withParent(second.ID), "cursor"); !errors.Is(err, store.ErrThreadBusy) {
+		t.Errorf("busy thread: got %v, want ErrThreadBusy", err)
+	}
+	// A follow-up that fails without publishing keeps the thread's pull request.
+	finishTask(t, s, second.ID, store.Outcome{State: task.Failed, Error: "agent failed"})
+	if rec, _ := s.Get(ctx, second.ID); rec.PR.Number != 9 || rec.PR.URL == "" {
+		t.Errorf("failed follow-up lost the PR: %+v", rec.PR)
+	}
+	if err := s.Create(ctx, withParent(first.ID), "cursor"); !errors.Is(err, store.ErrNotLatest) {
+		t.Errorf("second follow-up on one task: got %v, want ErrNotLatest", err)
+	}
+	if err := s.Create(ctx, withParent("t-nope"), "cursor"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("unknown parent: got %v, want ErrNotFound", err)
+	}
+
+	third := prTask(t, s, second.ID)
+	thread, err := s.ThreadTasks(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := idsOf(thread); !slices.Equal(ids, []string{first.ID, second.ID, third.ID}) {
+		t.Errorf("thread = %v", ids)
+	}
+}
+
+// Two follow-ups on the same task at the same moment: exactly one is created.
+func TestFollowUpRace(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	first := prTask(t, s, "")
+	finishTask(t, s, first.ID, store.Outcome{State: task.Succeeded, PRNumber: 9, PRBranch: "b", PRURL: "u"})
+	for range 5 {
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		parent := first.ID
+		if thread, _ := s.ThreadTasks(ctx, first.ID); len(thread) > 1 {
+			parent = thread[len(thread)-1].ID
+			finishTask(t, s, parent, store.Outcome{State: task.Succeeded})
+		}
+		for i := range errs {
+			wg.Go(func() { errs[i] = s.Create(ctx, withParent(parent), "cursor") })
+		}
+		wg.Wait()
+		ok := 0
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, store.ErrNotLatest), errors.Is(err, store.ErrThreadBusy):
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}
+		if ok != 1 {
+			t.Fatalf("%d of 2 concurrent follow-ups were created, want exactly 1 (%v)", ok, errs)
+		}
+	}
+}
+
+func withParent(id string) task.Task {
+	tk := task.New("https://github.com/o/r", "p")
+	tk.PR, tk.ParentID = true, id
+	return tk
+}

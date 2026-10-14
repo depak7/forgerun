@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -34,8 +35,15 @@ type Config struct {
 	Agent        string // id of the agent new tasks run on, e.g. "cursor"; only its models are offered
 	DefaultModel string // model family used when a request names none; "" = the agent's own default
 	RequireZDR   bool   // offer only models with zero data retention
-	PullRequests bool   // tasks may ask for a pull request (the server has a GitHub token)
+	PRs          PRs    // pull requests; nil = off (the server has no GitHub token)
 	Log          *slog.Logger
+}
+
+// PRs is what the API needs to know about pull requests: whether one is
+// still open, so follow-ups can be refused before any work is done.
+// publish.Publisher implements it.
+type PRs interface {
+	IsOpen(ctx context.Context, repo string, number int) (bool, error)
 }
 
 type Server struct {
@@ -44,19 +52,21 @@ type Server struct {
 	agent        string
 	defaultModel string
 	requireZDR   bool
-	pullRequests bool
+	prs          PRs
 	log          *slog.Logger
 }
 
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, pullRequests: cfg.PullRequests, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
 	mux.HandleFunc("GET /api/tasks/{id}", srv.getTask)
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", srv.cancelTask)
+	mux.HandleFunc("POST /api/tasks/{id}/followups", srv.createFollowUp)
+	mux.HandleFunc("GET /api/tasks/{id}/thread", srv.getThread)
 	mux.HandleFunc("GET /api/tasks/{id}/log", srv.taskLog)
 	mux.HandleFunc("GET /api/tasks/{id}/patch", srv.taskPatch)
 	mux.HandleFunc("GET /api/agents", srv.listAgents)
@@ -82,6 +92,8 @@ type taskJSON struct {
 	Error      string     `json:"error"`
 	HasPatch   bool       `json:"has_patch"`
 	SnapshotID *int64     `json:"snapshot_id"` // snapshot it was restored from; null = cold start
+	ParentID   *string    `json:"parent_id"`   // the task this one follows up; null for a thread's first task
+	ThreadID   string     `json:"thread_id"`   // the thread's first task
 	PR         prJSON     `json:"pr"`
 	Summary    string     `json:"summary"` // the agent's summary of the conversation (PR tasks); "" if none
 	CreatedAt  time.Time  `json:"created_at"`
@@ -94,7 +106,9 @@ func toJSON(r store.Record) taskJSON {
 		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.AgentID,
 		Model: r.Model.Family, Effort: r.Model.Effort, Thinking: r.Model.Thinking, Fast: r.Model.Fast, ModelID: r.Model.ID,
 		State: r.State, Error: r.Error, HasPatch: r.PatchPath != "", SnapshotID: r.SnapshotID,
-		PR: prJSON{Requested: r.PR.Requested, URL: r.PR.URL, Error: r.PR.Error}, Summary: r.Summary,
+		PR:       prJSON{Requested: r.PR.Requested, URL: r.PR.URL, Number: r.PR.Number, Branch: r.PR.Branch, Error: r.PR.Error},
+		Summary:  r.Summary,
+		ParentID: optional(r.ParentID), ThreadID: r.ThreadID,
 		CreatedAt: r.CreatedAt.UTC(), StartedAt: utc(r.StartedAt), FinishedAt: utc(r.FinishedAt),
 	}
 }
@@ -102,8 +116,18 @@ func toJSON(r store.Record) taskJSON {
 // prJSON is a task's pull request in the API.
 type prJSON struct {
 	Requested bool   `json:"requested"`
-	URL       string `json:"url"`   // "" until opened
-	Error     string `json:"error"` // why it wasn't opened; "" otherwise
+	URL       string `json:"url"`    // "" until opened
+	Number    int    `json:"number"` // 0 until opened
+	Branch    string `json:"branch"` // "" until opened
+	Error     string `json:"error"`  // why it wasn't opened; "" otherwise
+}
+
+// optional maps "" to a JSON null.
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // utc returns t in UTC, so clients always get "…Z" timestamps regardless of
@@ -126,15 +150,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Fast     *bool  `json:"fast"`
 		PR       bool   `json:"pr"` // open a pull request with the changes
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body larger than 1 MB")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+	if !decodeBody(w, r, &req) {
 		return
 	}
 	if err := validateRepo(req.Repo); err != nil {
@@ -147,7 +163,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.PR {
 		// Refuse now rather than fail after the agent has done the work.
-		if !s.pullRequests {
+		if s.prs == nil {
 			writeError(w, http.StatusBadRequest, "pull requests are disabled on this server (it has no GITHUB_TOKEN)")
 			return
 		}
@@ -157,18 +173,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cat, err := s.catalog(r.Context(), s.agent)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	v, err := cat.Resolve(models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast}, s.defaultModel)
-	if errors.Is(err, models.ErrInvalidChoice) {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err != nil {
-		s.internalError(w, r, err)
+	v, ok := s.resolveModel(w, r, models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast})
+	if !ok {
 		return
 	}
 
@@ -181,6 +187,135 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	s.pool.Nudge()
 	w.Header().Set("Location", "/api/tasks/"+t.ID)
 	s.writeTask(w, r, t.ID, http.StatusCreated)
+}
+
+// decodeBody reads a JSON request body of at most 1 MB into v, rejecting
+// unknown fields. It writes the error response itself if it can't.
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body larger than 1 MB")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return false
+	}
+	return true
+}
+
+// resolveModel turns a request's model choice into an exact model of the
+// server's agent, writing the error response itself if it can't.
+func (s *Server) resolveModel(w http.ResponseWriter, r *http.Request, ch models.Choice) (models.Variant, bool) {
+	cat, err := s.catalog(r.Context(), s.agent)
+	if err != nil {
+		s.internalError(w, r, err)
+		return models.Variant{}, false
+	}
+	v, err := cat.Resolve(ch, s.defaultModel)
+	if errors.Is(err, models.ErrInvalidChoice) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return models.Variant{}, false
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return models.Variant{}, false
+	}
+	return v, true
+}
+
+// createFollowUp continues a thread's pull request with a new request. The
+// agent works on the pull request's branch with the thread's summary as
+// context, and the result is pushed to the same pull request.
+func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prompt   string `json:"prompt"`
+		Agent    string `json:"agent"` // "" = the server's agent
+		Model    string `json:"model"`
+		Effort   string `json:"effort"`
+		Thinking *bool  `json:"thinking"`
+		Fast     *bool  `json:"fast"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	if req.Agent != "" && req.Agent != s.agent {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("this server runs the %s agent; %q isn't available here", s.agent, req.Agent))
+		return
+	}
+	if s.prs == nil {
+		writeError(w, http.StatusBadRequest, "pull requests are disabled on this server (it has no GITHUB_TOKEN)")
+		return
+	}
+	parent, ok := s.getRecord(w, r)
+	if !ok {
+		return
+	}
+	// Explain the thread rules in the user's terms; the store enforces them too.
+	if parent.PR.Number == 0 {
+		writeError(w, http.StatusConflict, "task "+parent.ID+" has no pull request to follow up on")
+		return
+	}
+	if !parent.State.Terminal() {
+		writeError(w, http.StatusConflict, "task "+parent.ID+" is still "+string(parent.State)+"; follow up when it finishes")
+		return
+	}
+	thread, err := s.store.ThreadTasks(r.Context(), parent.ThreadID)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	if latest := thread[len(thread)-1]; latest.ID != parent.ID {
+		writeError(w, http.StatusConflict, "follow up on the latest task in this thread: "+latest.ID)
+		return
+	}
+	open, err := s.prs.IsOpen(r.Context(), parent.Repo, parent.PR.Number)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "checking the pull request on GitHub: "+err.Error())
+		return
+	}
+	if !open {
+		writeError(w, http.StatusConflict, fmt.Sprintf("pull request #%d is closed or merged", parent.PR.Number))
+		return
+	}
+
+	v, ok := s.resolveModel(w, r, models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast})
+	if !ok {
+		return
+	}
+	t := task.New(parent.Repo, req.Prompt)
+	t.ModelID, t.PR, t.ParentID = v.ID, true, parent.ID
+	if err := s.store.Create(r.Context(), t, s.agent); err != nil {
+		s.storeError(w, r, err)
+		return
+	}
+	s.pool.Nudge()
+	w.Header().Set("Location", "/api/tasks/"+t.ID)
+	s.writeTask(w, r, t.ID, http.StatusCreated)
+}
+
+// getThread lists every task in the thread of the given task, oldest first.
+func (s *Server) getThread(w http.ResponseWriter, r *http.Request) {
+	rec, ok := s.getRecord(w, r)
+	if !ok {
+		return
+	}
+	recs, err := s.store.ThreadTasks(r.Context(), rec.ThreadID)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	out := make([]taskJSON, len(recs))
+	for i, rec := range recs {
+		out[i] = toJSON(rec)
+	}
+	writeData(w, http.StatusOK, out)
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
@@ -433,6 +568,8 @@ func (s *Server) storeError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "task not found")
 	case errors.Is(err, task.ErrInvalidTransition):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, store.ErrThreadBusy), errors.Is(err, store.ErrNotLatest):
 		writeError(w, http.StatusConflict, err.Error())
 	default:
 		s.internalError(w, r, err)

@@ -40,32 +40,35 @@ const (
 func Branch(taskID string) string { return "forgerun/" + taskID }
 
 // Publish commits the task's patch on top of the commit the task started
-// from, pushes it as a new branch (never forced) and opens a pull request
-// into the repo's default branch. It returns the pull request's URL.
-func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (string, error) {
+// from and pushes it (never forced). A fresh task gets a new branch and a
+// pull request into the repo's default branch; a follow-up adds a commit to
+// its thread's branch and refreshes the pull request's description.
+func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.PublishedPR, error) {
 	repo, err := forge.ParseRepo(req.Repo)
 	if err != nil {
-		return "", err
+		return task.PublishedPR{}, err
 	}
 	tok, err := p.Tokens.Token(ctx, repo)
 	if err != nil {
-		return "", fmt.Errorf("getting a token for %s: %w", repo, err)
+		return task.PublishedPR{}, fmt.Errorf("getting a token for %s: %w", repo, err)
 	}
 
 	dir, err := os.MkdirTemp("", "forgerun-publish-")
 	if err != nil {
-		return "", err
+		return task.PublishedPR{}, err
 	}
 	defer os.RemoveAll(dir)
 	g := &git{ctx: ctx, dir: dir, env: authEnv(repo, tok), secret: tok.Reveal()}
 
-	branch := Branch(req.TaskID)
+	followUp := req.Branch != ""
+	branch := cmp.Or(req.Branch, Branch(req.TaskID))
 	remote := "https://" + repo.Host + "/" + repo.Owner + "/" + repo.Name + ".git"
 	if p.RemoteURL != nil {
 		remote = p.RemoteURL(repo)
 	}
-	// Only the commit the task started from is needed, even if the default
-	// branch has moved on since.
+	// Only the commit the task started from is needed: for a fresh task,
+	// even if the default branch has moved on since; for a follow-up, the
+	// branch's commit when the task began.
 	steps := [][]string{
 		{"init", "-q"},
 		{"remote", "add", "origin", remote},
@@ -76,28 +79,58 @@ func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (strin
 	}
 	for _, args := range steps {
 		if _, err := g.run(args...); err != nil {
-			return "", err
+			return task.PublishedPR{}, err
 		}
 	}
 	files, err := g.run("diff", "--name-status", "-M", "HEAD~1", "HEAD")
 	if err != nil {
-		return "", err
+		return task.PublishedPR{}, err
 	}
-	// No --force: if the branch exists with other commits, git refuses
-	// rather than overwrite them.
+	// No --force: if the branch has commits we don't have (someone pushed
+	// while the task ran), git refuses rather than overwrite them.
 	if _, err := g.run("push", "-q", "origin", "HEAD:refs/heads/"+branch); err != nil {
-		return "", err
+		if followUp && strings.Contains(err.Error(), "rejected") {
+			return task.PublishedPR{}, fmt.Errorf("branch %s changed while the task ran (did someone push to it?); nothing was overwritten: %w", branch, err)
+		}
+		return task.PublishedPR{}, err
 	}
 
-	base, err := p.GitHub.DefaultBranch(ctx, tok, repo)
-	if err != nil {
-		return "", err
+	body := p.body(req, files)
+	var pr forge.PullRequest
+	if followUp {
+		pr, err = p.GitHub.UpdatePullRequestBody(ctx, tok, repo, req.PRNumber, body)
+		if err != nil {
+			return task.PublishedPR{}, fmt.Errorf("the commit was pushed to %s, but updating pull request #%d failed: %w", branch, req.PRNumber, err)
+		}
+	} else {
+		base, err := p.GitHub.DefaultBranch(ctx, tok, repo)
+		if err != nil {
+			return task.PublishedPR{}, err
+		}
+		pr, err = p.GitHub.OpenPullRequest(ctx, tok, repo, branch, base, title(req.Prompt), body)
+		if err != nil {
+			return task.PublishedPR{}, fmt.Errorf("branch %s was pushed, but opening the pull request failed: %w", branch, err)
+		}
 	}
-	pr, err := p.GitHub.OpenPullRequest(ctx, tok, repo, branch, base, title(req.Prompt), p.body(req, files))
+	return task.PublishedPR{URL: pr.URL, Number: pr.Number, Branch: branch}, nil
+}
+
+// IsOpen reports whether a repo's pull request is still open, so a
+// follow-up can be refused before any work is done.
+func (p *Publisher) IsOpen(ctx context.Context, repoURL string, number int) (bool, error) {
+	repo, err := forge.ParseRepo(repoURL)
 	if err != nil {
-		return "", fmt.Errorf("branch %s was pushed, but opening the pull request failed: %w", branch, err)
+		return false, err
 	}
-	return pr.URL, nil
+	tok, err := p.Tokens.Token(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	pr, err := p.GitHub.GetPullRequest(ctx, tok, repo, number)
+	if err != nil {
+		return false, err
+	}
+	return pr.State == "open", nil
 }
 
 // authEnv gives git the token through its environment only: never in the
@@ -161,20 +194,41 @@ func commitMessage(req task.PublishRequest) string {
 }
 
 // body is the pull request description: the agent's summary when there is
-// one, otherwise the request and the changed files.
+// one, otherwise the requests and the files the latest commit changed.
+// Every request in the thread is listed, oldest first.
 func (p *Publisher) body(req task.PublishRequest, files string) string {
+	requests := req.Requests
+	if len(requests) == 0 {
+		requests = []string{req.Prompt}
+	}
 	var b strings.Builder
 	if req.Summary != "" {
 		b.WriteString(req.Summary + "\n\n")
 	} else {
-		b.WriteString("## Requested\n\n" + quote(req.Prompt) + "\n\n## Changed files\n\n```\n" + strings.TrimSpace(files) + "\n```\n\n")
+		b.WriteString("## Requested\n\n" + list(requests) + "\n\n## Changed in the latest commit\n\n```\n" + strings.TrimSpace(files) + "\n```\n\n")
 	}
 	b.WriteString("---\n")
 	b.WriteString(cmp.Or(p.taskLink(req.TaskID), "forgerun task `"+req.TaskID+"`"))
 	if req.Summary != "" {
-		b.WriteString("\n\n<details><summary>Original request</summary>\n\n" + quote(req.Prompt) + "\n\n</details>")
+		label := "Original request"
+		if len(requests) > 1 {
+			label = fmt.Sprintf("Requests (%d)", len(requests))
+		}
+		b.WriteString("\n\n<details><summary>" + label + "</summary>\n\n" + list(requests) + "\n\n</details>")
 	}
 	return b.String()
+}
+
+// list formats requests as block quotes, numbered when there's more than one.
+func list(requests []string) string {
+	if len(requests) == 1 {
+		return quote(requests[0])
+	}
+	parts := make([]string, len(requests))
+	for i, r := range requests {
+		parts[i] = fmt.Sprintf("%d.\n%s", i+1, quote(r))
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func (p *Publisher) taskLink(id string) string {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/depak7/forgerun/internal/models"
@@ -47,15 +48,53 @@ func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	// An empty model id means the agent's default_model_id. If the agent has
 	// none (or doesn't exist), model_id is NULL and the insert fails.
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id, pr_requested)
-		VALUES ($1, $2, $3, $4, $5, COALESCE(NULLIF($6, ''),
-			(SELECT default_model_id FROM agents WHERE id = $4)), $7)`,
-		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.PR)
+	// A follow-up (parent set) joins the parent's thread and inherits its
+	// pull request; if the parent doesn't exist, nothing is inserted.
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id, pr_requested,
+		                   parent_id, thread_id, pr_url, pr_number, pr_branch)
+		SELECT $1, $2, $3, $4, $5,
+		       COALESCE(NULLIF($6, ''), (SELECT default_model_id FROM agents WHERE id = $4)),
+		       $7 OR p.id IS NOT NULL,
+		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch
+		FROM (SELECT NULLIF($8::text, '') AS parent) want
+		LEFT JOIN tasks p ON p.id = want.parent
+		WHERE want.parent IS NULL OR p.id IS NOT NULL`,
+		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.PR, t.ParentID)
 	if err != nil {
-		return fmt.Errorf("creating task %s: %w", t.ID, err) // includes the FK error for an unknown model
+		return fmt.Errorf("creating task %s: %w", t.ID, threadError(err)) // includes the FK error for an unknown model
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("creating task %s: parent %w: %s", t.ID, store.ErrNotFound, t.ParentID)
 	}
 	return nil
+}
+
+// threadError turns a violation of a thread's unique indexes into the
+// store's error for it. Postgres reports it as code 23505 and names the index.
+func threadError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		switch pgErr.ConstraintName {
+		case "tasks_one_followup_idx":
+			return store.ErrNotLatest
+		case "tasks_one_active_per_thread_idx":
+			return store.ErrThreadBusy
+		}
+	}
+	return err
+}
+
+func (s *Store) ThreadTasks(ctx context.Context, threadID string) ([]store.Record, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+selectColumns+fromTasks+` WHERE t.thread_id = $1 ORDER BY t.created_at, t.id`, threadID)
+	if err != nil {
+		return nil, fmt.Errorf("listing thread %s: %w", threadID, err)
+	}
+	recs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.Record, error) { return scanRecord(row) })
+	if err != nil {
+		return nil, fmt.Errorf("listing thread %s: %w", threadID, err)
+	}
+	return recs, nil
 }
 
 func (s *Store) Start(ctx context.Context, id string) error {
@@ -66,10 +105,13 @@ func (s *Store) Start(ctx context.Context, id string) error {
 func (s *Store) Finish(ctx context.Context, id string, o store.Outcome) error {
 	return s.transition(ctx, id, task.Running, o.State,
 		`UPDATE tasks SET state = $3, error = $4, log_path = $5, patch_path = $6, finished_at = now(),
-			base_commit = $7, summary = $8, pr_url = $9, pr_error = $10
+			base_commit = $7, summary = $8, pr_error = $10,
+			-- a follow-up inherited its thread's pull request; keep it if this run didn't publish
+			pr_url = COALESCE($9, pr_url), pr_number = COALESCE($11, pr_number), pr_branch = COALESCE($12, pr_branch)
 		 WHERE id = $1 AND state = $2`,
 		nullable(o.Error), nullable(o.LogPath), nullable(o.PatchPath),
-		nullable(o.BaseCommit), nullable(o.Summary), nullable(o.PRURL), nullable(o.PRError))
+		nullable(o.BaseCommit), nullable(o.Summary), nullable(o.PRURL), nullable(o.PRError),
+		nullableInt(o.PRNumber), nullable(o.PRBranch))
 }
 
 func (s *Store) Claim(ctx context.Context) (store.Record, bool, error) {
@@ -139,7 +181,8 @@ const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, 
 
 // selectColumns is the task (aliased t) plus its model.
 const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.patch_path,
-	t.snapshot_id, t.pr_requested, t.pr_url, t.pr_error, t.base_commit, t.summary, t.created_at, t.started_at, t.finished_at, ` + modelColumns
+	t.snapshot_id, t.pr_requested, t.pr_url, t.pr_error, t.base_commit, t.summary,
+	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.created_at, t.started_at, t.finished_at, ` + modelColumns
 
 const fromTasks = ` FROM tasks t
 	JOIN models m ON m.agent_id = t.agent_id AND m.id = t.model_id
@@ -348,11 +391,14 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		state                               string
 		errMsg, logPath, patchPath          *string // nil = NULL
 		prURL, prError, baseCommit, summary *string
+		parentID, prBranch                  *string
+		prNumber                            *int
 		startedAt, finishedAt               *time.Time
 	)
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
 		&errMsg, &logPath, &patchPath, &rec.SnapshotID,
-		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary, &rec.CreatedAt, &startedAt, &finishedAt,
+		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary,
+		&parentID, &rec.ThreadID, &prNumber, &prBranch, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
 		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR)
 	if err != nil {
@@ -365,6 +411,10 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	rec.Error, rec.LogPath, rec.PatchPath = deref(errMsg), deref(logPath), deref(patchPath)
 	rec.PR.URL, rec.PR.Error = deref(prURL), deref(prError)
 	rec.BaseCommit, rec.Summary = deref(baseCommit), deref(summary)
+	rec.ParentID, rec.PR.Branch = deref(parentID), deref(prBranch)
+	if prNumber != nil {
+		rec.PR.Number = *prNumber
+	}
 	rec.StartedAt, rec.FinishedAt = startedAt, finishedAt
 	return rec, nil
 }
@@ -375,6 +425,14 @@ func nullable(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// nullableInt maps 0 to SQL NULL.
+func nullableInt(n int) *int {
+	if n == 0 {
+		return nil
+	}
+	return &n
 }
 
 // deref maps SQL NULL to "".

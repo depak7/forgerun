@@ -110,10 +110,27 @@ func (g *GitHub) DefaultBranch(ctx context.Context, tok Token, repo Repo) (strin
 	return r.DefaultBranch, nil
 }
 
-// PullRequest is the part of a new pull request forgerun keeps.
+// PullRequest is the part of a pull request forgerun uses.
 type PullRequest struct {
 	Number int    `json:"number"`
 	URL    string `json:"html_url"`
+	State  string `json:"state"` // "open" or "closed"
+	Merged bool   `json:"merged"`
+}
+
+// GetPullRequest returns a pull request by number.
+func (g *GitHub) GetPullRequest(ctx context.Context, tok Token, repo Repo, number int) (PullRequest, error) {
+	var pr PullRequest
+	err := g.call(ctx, tok, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d", repo.Owner, repo.Name, number), nil, &pr)
+	return pr, err
+}
+
+// UpdatePullRequestBody replaces a pull request's description.
+func (g *GitHub) UpdatePullRequestBody(ctx context.Context, tok Token, repo Repo, number int, body string) (PullRequest, error) {
+	var pr PullRequest
+	err := g.call(ctx, tok, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/pulls/%d", repo.Owner, repo.Name, number),
+		map[string]string{"body": body}, &pr)
+	return pr, err
 }
 
 // OpenPullRequest opens a pull request from branch head into base.

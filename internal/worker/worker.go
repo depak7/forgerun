@@ -103,8 +103,16 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	defer cancel(nil) // always release the context's resources
 	p.setRunning(rec.ID, cancel)
 
-	log.Info("task started", "id", rec.ID, "repo", rec.Repo)
-	res, err := p.exec.Run(taskCtx, task.Task{ID: rec.ID, Repo: rec.Repo, Prompt: rec.Prompt, ModelID: rec.Model.ID, PR: rec.PR.Requested})
+	log.Info("task started", "id", rec.ID, "repo", rec.Repo, "thread", rec.ThreadID)
+	t := task.Task{ID: rec.ID, Repo: rec.Repo, Prompt: rec.Prompt, ModelID: rec.Model.ID, PR: rec.PR.Requested, ParentID: rec.ParentID}
+	var res task.Result
+	var err error
+	if t.ParentID != "" {
+		t.FollowUp, err = p.followUp(taskCtx, rec)
+	}
+	if err == nil {
+		res, err = p.exec.Run(taskCtx, t)
+	}
 	// Untrack before saving: once the store says the task is finished,
 	// Cancel must already report false.
 	p.setRunning(rec.ID, nil)
@@ -123,6 +131,30 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	log.Info("task finished", "id", rec.ID, "state", o.State, "err", o.Error)
 }
 
+// followUp gathers what a follow-up needs from its thread: the pull
+// request, where the thread started, the latest summary and the earlier
+// requests.
+func (p *Pool) followUp(ctx context.Context, rec store.Record) (*task.FollowUp, error) {
+	thread, err := p.store.ThreadTasks(ctx, rec.ThreadID)
+	if err != nil {
+		return nil, err
+	}
+	if rec.PR.Branch == "" || rec.PR.Number == 0 || len(thread) == 0 {
+		return nil, fmt.Errorf("thread %s has no pull request to continue", rec.ThreadID)
+	}
+	fu := &task.FollowUp{Branch: rec.PR.Branch, PRNumber: rec.PR.Number, ThreadBase: thread[0].BaseCommit}
+	for _, prev := range thread {
+		if prev.ID == rec.ID {
+			break
+		}
+		fu.Requests = append(fu.Requests, prev.Prompt)
+		if prev.Summary != "" {
+			fu.Summary = prev.Summary // the latest one wins: it covers the whole thread
+		}
+	}
+	return fu, nil
+}
+
 // setRunning tracks (cancel != nil) or untracks (nil) a task running here.
 func (p *Pool) setRunning(id string, cancel context.CancelCauseFunc) {
 	p.mu.Lock()
@@ -137,7 +169,8 @@ func (p *Pool) setRunning(id string, cancel context.CancelCauseFunc) {
 // outcome decides how a finished run is recorded.
 func outcome(ctx context.Context, res task.Result, err error) store.Outcome {
 	o := store.Outcome{State: task.Succeeded, LogPath: res.LogPath, PatchPath: res.PatchPath,
-		BaseCommit: res.BaseCommit, Summary: res.Summary, PRURL: res.PRURL, PRError: res.PRError}
+		BaseCommit: res.BaseCommit, Summary: res.Summary, PRURL: res.PRURL, PRNumber: res.PRNumber,
+		PRBranch: res.PRBranch, PRError: res.PRError}
 	switch {
 	case err == nil:
 	case errors.Is(context.Cause(ctx), errCancelledByUser):

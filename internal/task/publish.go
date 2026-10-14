@@ -24,7 +24,14 @@ Be concise. Do not change any files.`
 // Publisher turns a successful task's changes into a pull request.
 // publish.Publisher implements it; it runs on the host, never in a VM.
 type Publisher interface {
-	Publish(ctx context.Context, req PublishRequest) (url string, err error)
+	Publish(ctx context.Context, req PublishRequest) (PublishedPR, error)
+}
+
+// PublishedPR is the pull request a task opened or updated.
+type PublishedPR struct {
+	URL    string
+	Number int
+	Branch string
 }
 
 // PublishRequest is what a pull request is made from.
@@ -34,5 +41,10 @@ type PublishRequest struct {
 	BaseCommit string // the commit the task started from
 	PatchPath  string // the changes, as saved by the runner
 	Prompt     string
-	Summary    string // "" if the agent couldn't give one
+	Summary    string   // "" if the agent couldn't give one
+	Requests   []string // every request in the thread, oldest first, this one last
+	// For a follow-up: the existing branch and pull request to update.
+	// Branch "" means open a new one.
+	Branch   string
+	PRNumber int
 }

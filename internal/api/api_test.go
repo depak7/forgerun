@@ -312,7 +312,7 @@ func TestTaskJSONShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"id", "repo", "prompt", "agent", "model", "effort", "thinking", "fast", "model_id",
-		"state", "error", "has_patch", "snapshot_id", "pr", "summary", "created_at", "started_at", "finished_at"} {
+		"state", "error", "has_patch", "snapshot_id", "parent_id", "thread_id", "pr", "summary", "created_at", "started_at", "finished_at"} {
 		if _, ok := fields[k]; !ok {
 			t.Errorf("task JSON missing %q", k)
 		}
@@ -502,7 +502,7 @@ func TestCreateWithPullRequest(t *testing.T) {
 		t.Errorf("no token: %q", apiErr.Message)
 	}
 
-	h, s, _ := setup(t, func(c *Config) { c.PullRequests = true })
+	h, s, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
 	_, apiErr = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://gitlab.com/o/r","prompt":"fix it","pr":true}`), http.StatusBadRequest)
 	if !strings.Contains(apiErr.Message, "aren't supported") {
 		t.Errorf("unsupported host: %q", apiErr.Message)
@@ -522,4 +522,128 @@ func TestCreateWithPullRequest(t *testing.T) {
 	if tk := decodeTask(t, data); tk.PR.Requested {
 		t.Error("PR requested without asking")
 	}
+}
+
+// fakePRs answers whether a pull request is open.
+type fakePRs struct {
+	open bool
+	err  error
+}
+
+func (f fakePRs) IsOpen(context.Context, string, int) (bool, error) { return f.open, f.err }
+
+// finishWithPR moves a task to finished with an opened pull request, as a
+// worker would.
+func finishWithPR(t *testing.T, s *memory.Store, id string, state task.State) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.Start(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	o := store.Outcome{State: state, Summary: "summary of " + id}
+	if state == task.Succeeded {
+		o.PRURL, o.PRNumber, o.PRBranch = "https://github.com/o/r/pull/9", 9, "forgerun/"+id
+	}
+	if err := s.Finish(ctx, id, o); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFollowUps(t *testing.T) {
+	h, s, pool := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
+	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first","pr":true}`), http.StatusCreated))
+	follow := func(id, body string) *httptest.ResponseRecorder {
+		return do(h, "POST", "/api/tasks/"+id+"/followups", body)
+	}
+
+	// Not before it has finished and opened its pull request.
+	_, apiErr := decode(t, follow(first.ID, `{"prompt":"more"}`), http.StatusConflict)
+	if !strings.Contains(apiErr.Message, "no pull request") {
+		t.Errorf("before PR: %q", apiErr.Message)
+	}
+	finishWithPR(t, s, first.ID, task.Succeeded)
+
+	nudges := pool.nudges
+	second := decodeTask(t, mustData(t, follow(first.ID, `{"prompt":"second","model":"claude-opus-5-5","effort":"high"}`), http.StatusCreated))
+	if second.ParentID == nil || *second.ParentID != first.ID || second.ThreadID != first.ID ||
+		!second.PR.Requested || second.PR.Number != 9 || second.PR.Branch != "forgerun/"+first.ID ||
+		second.Repo != first.Repo || second.ModelID != "claude-opus-5-5-high" {
+		t.Errorf("follow-up = %+v", second)
+	}
+	if pool.nudges != nudges+1 {
+		t.Error("worker pool not nudged")
+	}
+
+	// The thread runs one task at a time, and continues from its latest task.
+	_, apiErr = decode(t, follow(second.ID, `{"prompt":"third"}`), http.StatusConflict)
+	if !strings.Contains(apiErr.Message, "still queued") {
+		t.Errorf("busy thread: %q", apiErr.Message)
+	}
+	finishWithPR(t, s, second.ID, task.Failed) // a failed follow-up can still be continued
+	_, apiErr = decode(t, follow(first.ID, `{"prompt":"third"}`), http.StatusConflict)
+	if !strings.Contains(apiErr.Message, "latest task in this thread: "+second.ID) {
+		t.Errorf("not latest: %q", apiErr.Message)
+	}
+	third := decodeTask(t, mustData(t, follow(second.ID, `{"prompt":"third"}`), http.StatusCreated))
+	if third.ThreadID != first.ID || third.PR.Number != 9 {
+		t.Errorf("third = %+v", third)
+	}
+
+	// The thread lists all three, oldest first.
+	var thread []taskJSON
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/tasks/"+third.ID+"/thread", ""), http.StatusOK), &thread)
+	if len(thread) != 3 || thread[0].ID != first.ID || thread[1].ID != second.ID || thread[2].ID != third.ID {
+		t.Errorf("thread = %v", thread)
+	}
+	if first.ParentID != nil || first.ThreadID != first.ID {
+		t.Errorf("first task: parent %v, thread %q", first.ParentID, first.ThreadID)
+	}
+}
+
+func TestFollowUpRefusals(t *testing.T) {
+	prepare := func(t *testing.T, prs PRs) (http.Handler, string) {
+		h, s, _ := setup(t, func(c *Config) { c.PRs = prs })
+		tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first","pr":true}`), http.StatusCreated))
+		finishWithPR(t, s, tk.ID, task.Succeeded)
+		return h, tk.ID
+	}
+	tests := []struct {
+		name, body string
+		prs        PRs
+		status     int
+		want       string
+	}{
+		{"closed pull request", `{"prompt":"x"}`, fakePRs{open: false}, http.StatusConflict, "closed or merged"},
+		{"GitHub unreachable", `{"prompt":"x"}`, fakePRs{err: errors.New("dial tcp: timeout")}, http.StatusBadGateway, "timeout"},
+		{"other agent", `{"prompt":"x","agent":"claude-code"}`, fakePRs{open: true}, http.StatusBadRequest, "runs the cursor agent"},
+		{"no prompt", `{"prompt":" "}`, fakePRs{open: true}, http.StatusBadRequest, "prompt is required"},
+		{"bad model", `{"prompt":"x","model":"nope"}`, fakePRs{open: true}, http.StatusBadRequest, "nope"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, id := prepare(t, tc.prs)
+			_, apiErr := decode(t, do(h, "POST", "/api/tasks/"+id+"/followups", tc.body), tc.status)
+			if !strings.Contains(apiErr.Message, tc.want) {
+				t.Errorf("got %q, want it to mention %q", apiErr.Message, tc.want)
+			}
+		})
+	}
+	t.Run("pull requests off", func(t *testing.T) {
+		h, _, _ := setup(t)
+		_, apiErr := decode(t, do(h, "POST", "/api/tasks/t-x/followups", `{"prompt":"x"}`), http.StatusBadRequest)
+		if !strings.Contains(apiErr.Message, "disabled") {
+			t.Errorf("got %q", apiErr.Message)
+		}
+	})
+	t.Run("unknown task", func(t *testing.T) {
+		h, _, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
+		decode(t, do(h, "POST", "/api/tasks/t-nope/followups", `{"prompt":"x"}`), http.StatusNotFound)
+	})
+}
+
+// mustData returns a successful response's data.
+func mustData(t *testing.T, rec *httptest.ResponseRecorder, status int) json.RawMessage {
+	t.Helper()
+	data, _ := decode(t, rec, status)
+	return data
 }

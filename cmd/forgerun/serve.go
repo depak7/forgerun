@@ -97,13 +97,16 @@ func serveCmd(args []string) error {
 	}
 
 	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: io.Discard}
+	var prs api.PRs // stays a nil interface when PRs are off (a nil *Publisher in it wouldn't be)
+	var publisher *publish.Publisher
 	if prTokens != nil {
 		// Publishing runs git on this host (never in a VM).
 		if _, err := exec.LookPath("git"); err != nil {
 			ln.Close()
 			return fmt.Errorf("pull requests need git installed on this host: %w", err)
 		}
-		runner.Publisher = &publish.Publisher{Tokens: prTokens, GitHub: &forge.GitHub{}}
+		publisher = &publish.Publisher{Tokens: prTokens, GitHub: &forge.GitHub{}}
+		runner.Publisher, prs = publisher, publisher
 	}
 	sweepsDone := make(chan struct{})
 	if *useSnapshots {
@@ -123,7 +126,7 @@ func serveCmd(args []string) error {
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
 		Handler: api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agent: ag.ID(),
-			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PullRequests: prTokens != nil, Log: log})),
+			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Log: log})),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

@@ -22,6 +22,13 @@ var ErrAgentNotFound = errors.New("agent not found")
 // current one for a repo and agent (meaning: start the task cold).
 var ErrSnapshotNotFound = errors.New("snapshot not found")
 
+// ErrThreadBusy means the thread already has a queued or running task.
+var ErrThreadBusy = errors.New("the thread already has a queued or running task")
+
+// ErrNotLatest means the task already has a follow-up; only the latest task
+// of a thread can be continued.
+var ErrNotLatest = errors.New("the task already has a follow-up")
+
 // Agent is a coding agent forgerun can run (a row of the agents table).
 type Agent struct {
 	ID             string // e.g. "cursor"
@@ -42,6 +49,8 @@ type Record struct {
 	LogPath    string
 	PatchPath  string // "" if no changes
 	SnapshotID *int64 // the snapshot the task was restored from; nil = cold start
+	ParentID   string // the task this one continues; "" for a thread's first task
+	ThreadID   string // the thread's first task (its own ID for a first task)
 	PR         PullRequest
 	BaseCommit string // the commit the agent started from; "" until known
 	Summary    string // the agent's conversation summary; "" if none
@@ -95,6 +104,8 @@ func NormalizeRepo(repo string) string {
 type PullRequest struct {
 	Requested bool
 	URL       string // "" until opened
+	Number    int    // 0 until opened
+	Branch    string // "" until opened
 	Error     string // why it wasn't opened; "" otherwise
 }
 
@@ -107,13 +118,19 @@ type Outcome struct {
 	BaseCommit string
 	Summary    string
 	PRURL      string
+	PRNumber   int
+	PRBranch   string
 	PRError    string
 }
 
 type Store interface {
 	// Create saves a new task in the Queued state for agentID. An empty
-	// t.ModelID means the agent's default model.
+	// t.ModelID means the agent's default model. With t.ParentID set, the
+	// task joins the parent's thread and inherits its pull request; it
+	// fails with ErrNotLatest or ErrThreadBusy if the thread can't take it.
 	Create(ctx context.Context, t task.Task, agentID string) error
+	// ThreadTasks returns every task in a thread, oldest first.
+	ThreadTasks(ctx context.Context, threadID string) ([]Record, error)
 	// Start moves a task from Queued to Running.
 	Start(ctx context.Context, id string) error
 	// Finish moves a task from Running to a terminal state.
