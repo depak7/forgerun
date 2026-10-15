@@ -25,6 +25,7 @@ import (
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/postgres"
 	"github.com/depak7/forgerun/internal/task"
+	"github.com/depak7/forgerun/internal/webui"
 	"github.com/depak7/forgerun/internal/worker"
 )
 
@@ -134,8 +135,8 @@ func serveCmd(args []string) error {
 	}
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
-		Handler: api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
-			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, OutDir: *out, GitHubUser: githubUser, Snapshots: snapshotSettings, Log: log})),
+		Handler: api.LogRequests(log, routes(api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
+			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, OutDir: *out, GitHubUser: githubUser, Snapshots: snapshotSettings, Log: log}))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -166,6 +167,16 @@ func serveCmd(args []string) error {
 	<-sweepsDone // no snapshot sweep is half done
 	log.Info("stopped")
 	return runErr
+}
+
+// routes sends /api/ and /healthz to the API and everything else to the
+// web app (a placeholder page unless built with -tags webui).
+func routes(apiHandler http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/api/", apiHandler)
+	mux.Handle("/healthz", apiHandler)
+	mux.Handle("/", webui.Handler(webui.Files()))
+	return mux
 }
 
 // tokenWarnBefore is how soon before a GitHub token expires serve warns.

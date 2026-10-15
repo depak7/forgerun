@@ -9,3 +9,8 @@ out/
 
 # local secrets (see .env.example)
 .env
+.gstack/
+
+# web UI: dependencies and the build that gets embedded (make build)
+web/node_modules/
+internal/webui/dist/

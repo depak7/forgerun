@@ -1,0 +1,117 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.strip {
+  display: flex;
+  gap: 28px;
+  align-items: center;
+  padding: 0 24px;
+  min-height: 36px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-deep);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.strip a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.stripRight {
+  margin-left: auto;
+}
+.alive {
+  color: var(--accent);
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.nav {
+  flex: 1 1 220px;
+  max-width: 250px;
+  padding: 24px 14px;
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text);
+  text-decoration: none;
+}
+.brand span:first-child {
+  color: var(--accent);
+}
+.links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+.link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  text-decoration: none;
+}
+.link:hover {
+  color: var(--text);
+}
+.linkActive {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.creds {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 10px;
+  border-top: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.4px;
+}
+.credRow {
+  display: flex;
+  justify-content: space-between;
+}
+.set {
+  color: var(--accent);
+}
+.missing {
+  color: var(--failed);
+}
+
+.main {
+  flex: 999 1 560px;
+  min-width: 0;
+  padding: 36px 44px 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}

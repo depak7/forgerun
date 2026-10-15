@@ -1,0 +1,47 @@
+/* forgerun's design tokens, taken from the approved mockup
+   (https://claude.ai/artifact/PFNtA8ogUyujmStfDJ6dUE). Components use these
+   variables, never raw colors, so the look changes in one place. */
+:root {
+  /* surfaces, darkest first */
+  --bg-deep: #0B0D0C;    /* top strip, log and preview panes */
+  --bg: #0F1110;         /* page */
+  --surface: #121513;    /* rows, cards, replies */
+  --surface-2: #131614;  /* sidebar, inputs */
+  --raised: #1C201E;     /* selected nav item, your messages */
+
+  /* lines */
+  --line-faint: #1C201E;
+  --line: #232725;
+  --line-strong: #2A2F2C;
+
+  /* text */
+  --text: #ECEEEC;
+  --text-soft: #D4D8D4;  /* agent replies */
+  --text-log: #C9CEC9;
+  --muted: #9DA39E;
+  --faint: #6E7570;      /* labels, ids */
+
+  /* accent: alive, the main action, done */
+  --accent: #4ADE9B;
+  --accent-hover: #8AF0C2;
+  --accent-ink: #0B1F14; /* text on the accent */
+  --accent-tint: #14261C;
+  --accent-line: #2E5C44;
+
+  /* states */
+  --running: #8AB4FF;
+  --failed: #FF8A7A;
+  --failed-line: #5A2E2A;
+  --merged: #C4A7FF;
+
+  /* diff */
+  --diff-add-bg: #10241A;
+  --diff-add: #7BEBB5;
+  --diff-hunk-bg: #121A2A;
+
+  --font-sans: "Geist", sans-serif;
+  --font-mono: "Geist Mono", monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+}
