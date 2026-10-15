@@ -58,8 +58,11 @@ export function usePatch(taskId: string, enabled: boolean) {
 }
 
 // useLiveLog is a step's whole log, fetched incrementally: it remembers how
-// many bytes it has and asks only for the rest (Range: bytes=N-), every
-// 2 seconds while live, so a long log isn't downloaded again and again.
+// many bytes it has and asks only for the rest, every 2 seconds while live,
+// so a long log isn't downloaded again and again. It asks from one byte
+// before the end it has (bytes=N-1-): the answer always holds at least that
+// byte, so a quiet agent doesn't turn every poll into a 416 error in the
+// browser console. That repeated byte is dropped.
 export function useLiveLog(taskId: string, live: boolean): { text: string; error: string } {
   const [state, setState] = useState({ id: taskId, text: "", error: "" });
   useEffect(() => {
@@ -71,9 +74,9 @@ export function useLiveLog(taskId: string, live: boolean): { text: string; error
     let decoder = new TextDecoder();
     setState({ id: taskId, text: "", error: "" });
     const pull = async () => {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/log`, bytes > 0 ? { headers: { Range: `bytes=${bytes}-` } } : {});
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/log`, bytes > 0 ? { headers: { Range: `bytes=${bytes - 1}-` } } : {});
       if (cancelled) return;
-      if (res.status === 416) return; // nothing new yet
+      if (res.status === 416) return; // the log got shorter than we had: keep what we have
       if (res.status === 404) {
         setState({ id: taskId, text: "", error: "" }); // no log yet: still queued
         return;
@@ -82,11 +85,14 @@ export function useLiveLog(taskId: string, live: boolean): { text: string; error
         setState({ id: taskId, text, error: `log: HTTP ${res.status}` });
         return;
       }
-      const chunk = new Uint8Array(await res.arrayBuffer());
+      let chunk = new Uint8Array(await res.arrayBuffer());
       if (cancelled) return;
       if (res.status === 200 && bytes > 0) {
         text = ""; // the server sent it all again
         decoder = new TextDecoder();
+      } else if (res.status === 206) {
+        chunk = chunk.subarray(1); // the byte we already had
+        if (chunk.length === 0) return; // nothing new yet
       }
       bytes = res.status === 200 ? chunk.length : bytes + chunk.length;
       text += decoder.decode(chunk, { stream: true });

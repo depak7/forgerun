@@ -3,8 +3,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { Layout } from "./components/Layout";
-import { Pending } from "./pages/Placeholder";
 import { NewTaskPage } from "./pages/NewTask";
+import { NotFoundPage } from "./pages/NotFound";
 import { SettingsPage } from "./pages/Settings";
 import { TasksPage } from "./pages/Tasks";
 import { ThreadPage } from "./pages/Thread";
@@ -20,7 +20,7 @@ const router = createBrowserRouter([
       { path: "/tasks/new", element: <NewTaskPage /> },
       { path: "/threads/:id", element: <ThreadPage /> },
       { path: "/settings", element: <SettingsPage /> },
-      { path: "*", element: <Pending title="Not found" /> },
+      { path: "*", element: <NotFoundPage /> },
     ],
   },
 ]);
