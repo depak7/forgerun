@@ -182,15 +182,13 @@ func routes(apiHandler http.Handler) http.Handler {
 // tokenWarnBefore is how soon before a GitHub token expires serve warns.
 const tokenWarnBefore = 3 * 24 * time.Hour
 
-// githubTokens returns where PR publishing gets GitHub tokens from (the
+// githubTokens returns where publishing gets GitHub tokens from (the
 // GITHUB_TOKEN personal access token, value) and the account it acts as,
-// checked with GitHub now.
-// With no token, PRs are off and it returns nil. A token GitHub rejects
-// stops startup: it was configured on purpose, so it should work.
+// checked with GitHub now. Every task pushes a branch, so a missing token,
+// or one GitHub rejects, stops startup.
 func githubTokens(ctx context.Context, value string, gh *forge.GitHub, now time.Time, log *slog.Logger) (forge.TokenSource, string, error) {
 	if value == "" {
-		log.Info("pull requests disabled: GITHUB_TOKEN not set")
-		return nil, "", nil
+		return nil, "", errors.New("GITHUB_TOKEN is not set: forgerun pushes every task's changes to a branch, so it needs a token that can push to your repos")
 	}
 	tok := forge.NewToken(value)
 	id, err := gh.WhoAmI(ctx, tok)
@@ -203,7 +201,7 @@ func githubTokens(ctx context.Context, value string, gh *forge.GitHub, now time.
 	}
 	log.Info("github: authenticated", "as", id.Login, "token_expires", expires)
 	if !id.Expires.IsZero() && id.Expires.Sub(now) < tokenWarnBefore {
-		log.Warn("github token expires soon; pull requests will fail after that", "expires", id.Expires.Format(time.DateTime))
+		log.Warn("github token expires soon; pushes and pull requests will fail after that", "expires", id.Expires.Format(time.DateTime))
 	}
 	return forge.NewStaticToken(tok), id.Login, nil
 }

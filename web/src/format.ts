@@ -53,6 +53,11 @@ function sameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
+// branchURL is a branch's page on the repo's host (github.com today).
+export function branchURL(repo: string, branch: string): string {
+  return `${normalizeRepo(repo)}/tree/${branch.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 // shortID shortens a task id for display: t-20261015-134423-629e08 → t-…629e08.
 export function shortID(id: string): string {
   return id.length > 12 ? `t-…${id.slice(-6)}` : id;

@@ -42,16 +42,16 @@ export function useThread(id: string) {
   });
 }
 
-// usePatch is a finished step's changes, as the git patch text.
-export function usePatch(taskId: string, enabled: boolean) {
+// useDiff is a finished step's changes, as git diff text.
+export function useDiff(taskId: string, enabled: boolean) {
   return useQuery({
-    queryKey: ["patch", taskId],
+    queryKey: ["diff", taskId],
     enabled,
-    staleTime: Infinity, // a finished step's patch never changes
+    staleTime: Infinity, // a finished step's diff never changes
     queryFn: async () => {
-      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/patch`);
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/diff`);
       if (res.status === 404) return "";
-      if (!res.ok) throw new Error(`patch: HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`diff: HTTP ${res.status}`);
       return res.text();
     },
   });

@@ -35,18 +35,18 @@ type Task struct {
 	ModelID string // exact agent model id; "" or "auto" lets the agent choose
 	Family  string // the model's family, e.g. "opus"; "" if unknown
 	Effort  string // the model's effort, e.g. "high"; "" = the agent's default
-	PR      bool   // open a pull request with the changes
+	PR      bool   // also open a pull request; the changes are pushed to a branch either way
 	// ParentID, for a follow-up, is the task it continues; "" otherwise.
 	ParentID string
 	// FollowUp is set by the worker when the task continues a thread's
-	// pull request; nil for a fresh task.
+	// branch; nil for a fresh task.
 	FollowUp *FollowUp
 }
 
 // FollowUp is what a follow-up task needs to know about its thread.
 type FollowUp struct {
-	Branch     string   // the pull request's branch, e.g. "forgerun/t-…"
-	PRNumber   int      // the pull request to update
+	Branch     string   // the thread's branch, e.g. "forgerun/add-a-test-9fe9cc"
+	PRNumber   int      // the thread's pull request to update; 0 = none yet
 	ThreadBase string   // the commit the thread's first task started from
 	Summary    string   // the latest summary of the thread; "" if none
 	Requests   []string // earlier requests in the thread, oldest first
@@ -63,16 +63,15 @@ func New(repo, prompt string) Task {
 // Result is what a task produced. Dir and LogPath are set even on failure,
 // so you can always read the log.
 type Result struct {
-	Dir         string // out/<task-id>
-	LogPath     string
-	PatchPath   string // "" if the agent changed nothing
-	BaseCommit  string // the commit the agent started from
-	Summary     string // the agent's conversation summary (PR tasks); "" if none
-	SummaryPath string
-	PRURL       string // the pull request, if one was opened or updated
-	PRNumber    int
-	PRBranch    string
-	PRError     string // why a requested pull request wasn't opened
+	Dir          string // out/<task-id>
+	LogPath      string
+	Diff         string // the changes (git diff --binary); "" if the agent changed nothing
+	BaseCommit   string // the commit the agent started from
+	Summary      string // the agent's conversation summary; "" if none
+	Branch       string // where the changes were pushed; "" if they weren't
+	PRURL        string // the pull request, if one was opened or updated
+	PRNumber     int
+	PublishError string // why the changes weren't pushed, or a wanted pull request wasn't opened
 }
 
 // Runner holds settings shared by every task.
@@ -92,8 +91,9 @@ type Runner struct {
 	// Snapshots, if set, saves the VM after each successful task so later
 	// tasks for the same repo can start from it. nil = no snapshots.
 	Snapshots Snapshotter
-	// Publisher, if set, opens pull requests for tasks that ask for one.
-	// nil = pull requests are off.
+	// Publisher, if set, pushes every task's changes to a branch and opens
+	// pull requests for tasks that ask for one. nil = changes stay in
+	// Result.Diff only (the CLI).
 	Publisher Publisher
 }
 
@@ -194,20 +194,15 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	if diff == "" {
 		step("agent made no changes")
 	} else {
-		res.PatchPath = filepath.Join(res.Dir, "changes.patch")
-		if err := os.WriteFile(res.PatchPath, []byte(diff), 0o644); err != nil {
-			return res, fmt.Errorf("saving patch: %w", err)
-		}
-		step("patch saved to %s", res.PatchPath)
-	}
-
-	if t.PR && res.PatchPath != "" {
-		r.summarize(ctx, ag, sb, t, &res, step) // before the snapshot cleanup wipes the chat
+		res.Diff = diff
+		files, _ := git("diff", "--cached", "--name-only")
+		step("changed %d file(s)", len(strings.Fields(files)))
+		// A summary for the pull request and as context for follow-ups;
+		// asked before the snapshot cleanup wipes the agent's chat.
+		r.summarize(ctx, ag, sb, t, &res, step)
 	}
 	r.saveSnapshot(ctx, ag, sb, t, step)
-	if t.PR {
-		r.publish(ctx, t, &res, step)
-	}
+	r.publish(ctx, t, &res, step)
 	return res, nil
 }
 
@@ -264,55 +259,58 @@ func (r *Runner) summarize(ctx context.Context, ag agent.Agent, sb *sandbox.Sand
 		return
 	}
 	res.Summary = summary
-	res.SummaryPath = filepath.Join(res.Dir, "summary.md")
-	if err := os.WriteFile(res.SummaryPath, []byte(summary+"\n"), 0o644); err != nil {
-		step("warning: saving summary: %v", err)
-		res.SummaryPath = ""
-		return
-	}
-	step("summary saved to %s", res.SummaryPath)
+	step("got a summary (%d lines)", strings.Count(summary, "\n")+1)
 }
 
-// publishTimeout bounds opening a pull request after the task.
+// publishTimeout bounds pushing and opening a pull request after the task.
 const publishTimeout = 2 * time.Minute
 
-// publish opens the pull request. The task has already succeeded, so a
-// failure only goes into res.PRError; the patch is still there.
+// publish pushes the changes to the thread's branch and opens or updates
+// its pull request. The task has already succeeded, so a failure only goes
+// into res.PublishError; the changes are still in res.Diff.
 func (r *Runner) publish(ctx context.Context, t Task, res *Result, step func(string, ...any)) {
 	switch {
-	case res.PatchPath == "":
-		res.PRError = "the agent made no changes, so there is nothing to publish"
+	case res.Diff == "":
+		if t.PR {
+			res.PublishError = "the agent made no changes, so there is nothing to push"
+		}
+		return
 	case r.Publisher == nil:
-		res.PRError = "pull requests are disabled on this server"
+		res.PublishError = "publishing is off: the changes were not pushed"
 	case ctx.Err() != nil:
-		res.PRError = "the task was cancelled before publishing"
+		res.PublishError = "the task was cancelled before publishing"
 	}
-	if res.PRError != "" {
-		step("no pull request: %s", res.PRError)
+	if res.PublishError != "" {
+		step("not pushed: %s", res.PublishError)
 		return
 	}
-	step("opening a pull request")
+	step("pushing the changes")
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishTimeout)
 	defer cancel()
 	req := PublishRequest{
-		TaskID: t.ID, Repo: t.Repo, BaseCommit: res.BaseCommit, PatchPath: res.PatchPath,
-		Prompt: t.Prompt, Summary: res.Summary, Requests: []string{t.Prompt},
+		TaskID: t.ID, Repo: t.Repo, BaseCommit: res.BaseCommit, Patch: res.Diff,
+		Prompt: t.Prompt, Summary: res.Summary, Requests: []string{t.Prompt}, OpenPR: t.PR,
 	}
 	if fu := t.FollowUp; fu != nil {
 		req.Branch, req.PRNumber = fu.Branch, fu.PRNumber
 		req.Requests = append(slices.Clone(fu.Requests), t.Prompt)
 	}
-	pr, err := r.Publisher.Publish(ctx, req)
+	pub, err := r.Publisher.Publish(ctx, req)
+	res.Branch, res.PRURL, res.PRNumber = pub.Branch, pub.PRURL, pub.PRNumber // set even on error: the push may have worked
+	if res.Branch != "" {
+		step("pushed to branch %s", res.Branch)
+	}
 	if err != nil {
-		res.PRError = err.Error()
-		step("warning: pull request not published: %v", err)
+		res.PublishError = err.Error()
+		step("warning: %v", err)
 		return
 	}
-	res.PRURL, res.PRNumber, res.PRBranch = pr.URL, pr.Number, pr.Branch
-	if t.FollowUp != nil {
-		step("pull request updated: %s", pr.URL)
-	} else {
-		step("pull request opened: %s", pr.URL)
+	switch {
+	case res.PRNumber == 0:
+	case req.PRNumber > 0:
+		step("pull request updated: %s", res.PRURL)
+	default:
+		step("pull request opened: %s", res.PRURL)
 	}
 }
 

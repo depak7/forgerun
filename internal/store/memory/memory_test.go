@@ -31,11 +31,11 @@ func TestLifecycleAndRules(t *testing.T) {
 		t.Error("second Claim should find the queue empty")
 	}
 
-	if err := s.Finish(ctx, tk.ID, store.Outcome{State: task.Succeeded, PatchPath: "p.patch"}); err != nil {
+	if err := s.Finish(ctx, tk.ID, store.Outcome{State: task.Succeeded, Diff: "+x\n"}); err != nil {
 		t.Fatal(err)
 	}
 	rec, _ = s.Get(ctx, tk.ID)
-	if rec.State != task.Succeeded || rec.PatchPath != "p.patch" || rec.FinishedAt == nil {
+	if rec.State != task.Succeeded || !rec.HasDiff || rec.FinishedAt == nil {
 		t.Errorf("after Finish: %+v", rec)
 	}
 	if _, err := s.Get(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {

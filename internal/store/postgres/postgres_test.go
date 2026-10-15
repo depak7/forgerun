@@ -68,18 +68,24 @@ func TestLifecycle(t *testing.T) {
 	if err := s.Start(ctx, tk.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Finish(ctx, tk.ID, store.Outcome{State: task.Succeeded, LogPath: "out/x/agent.log", PatchPath: "out/x/changes.patch"}); err != nil {
+	if err := s.Finish(ctx, tk.ID, store.Outcome{State: task.Succeeded, LogPath: "out/x/agent.log", Diff: "+x\n"}); err != nil {
 		t.Fatal(err)
 	}
 	rec, err = s.Get(ctx, tk.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.State != task.Succeeded || rec.PatchPath != "out/x/changes.patch" || rec.Error != "" {
+	if rec.State != task.Succeeded || !rec.HasDiff || rec.Error != "" {
 		t.Errorf("after Finish: %+v", rec)
 	}
 	if rec.StartedAt == nil || rec.FinishedAt == nil || rec.FinishedAt.Before(*rec.StartedAt) {
 		t.Errorf("timestamps wrong: started=%v finished=%v", rec.StartedAt, rec.FinishedAt)
+	}
+	if diff, err := s.Diff(ctx, tk.ID); err != nil || diff != "+x\n" {
+		t.Errorf("Diff = %q, %v", diff, err)
+	}
+	if _, err := s.Diff(ctx, "t-nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("Diff of an unknown task: %v", err)
 	}
 }
 

@@ -8,7 +8,8 @@ import { checkRepo, isGitHub, normalizeRepo } from "../format";
 import styles from "./NewTask.module.css";
 
 // NewTaskPage asks what an agent should do, on which repo, with which agent
-// and model, and whether to open a pull request.
+// and model, and whether to open a pull request (the changes go to a branch
+// either way).
 export function NewTaskPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -79,7 +80,7 @@ export function NewTaskPage() {
     },
   });
 
-  const blocked = blockedReason(repoProblem, agent, prompt, family);
+  const blocked = blockedReason(repoProblem, repo, agent, prompt, family);
   const submit = () => {
     if (!blocked && !create.isPending) create.mutate(body);
   };
@@ -281,8 +282,9 @@ export function NewTaskPage() {
 }
 
 // blockedReason explains why the task can't be started yet, or "".
-function blockedReason(repoProblem: string, agent: Agent | undefined, prompt: string, family: string): string {
+function blockedReason(repoProblem: string, repo: string, agent: Agent | undefined, prompt: string, family: string): string {
   if (repoProblem) return repoProblem;
+  if (!isGitHub(repo)) return "forgerun pushes each task's changes to a branch, so the repo must be on github.com.";
   if (!agent) return "Pick an agent.";
   if (!agent.runnable) return `forgerun has no adapter for ${agent.id}.`;
   if (agent.credential && !agent.credential.set) {
@@ -300,8 +302,8 @@ function agentNote(a: Agent): string {
 }
 
 function prNote(prs: { enabled: boolean; github_user: string } | undefined, repoProblem: string, repo: string): string {
-  if (!prs?.enabled) return "Pull requests are off on this server (no GITHUB_TOKEN). The task still produces a patch.";
+  if (!prs?.enabled) return "This server can't push (no GITHUB_TOKEN).";
   if (repoProblem) return "Enter a valid repo URL first.";
-  if (!isGitHub(repo)) return "Pull requests need a github.com repo. The task still produces a patch.";
-  return `Pushes forgerun/<task-id> as ${prs.github_user}. The agent's summary becomes the description; follow-ups add commits.`;
+  if (!isGitHub(repo)) return "Needs a github.com repo.";
+  return `The changes are pushed to a forgerun/… branch named after your prompt, as ${prs.github_user}, either way. On: also open a pull request with the agent's summary as its description.`;
 }

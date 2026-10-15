@@ -24,6 +24,7 @@ type modelKey struct{ agent, id string }
 type Store struct {
 	mu        sync.Mutex
 	tasks     map[string]*store.Record
+	diffs     map[string]string // by task id, kept apart like the diff column
 	models    map[modelKey]models.Variant
 	snapshots map[int64]*store.Snapshot
 	lastID    int64 // the last snapshot id handed out
@@ -35,7 +36,7 @@ var _ store.Store = (*Store)(nil)
 // Agents are implied by their models: an agent exists if any of vs belongs
 // to it, and its default is the variant marked AgentDefault.
 func New(vs ...models.Variant) *Store {
-	s := &Store{tasks: map[string]*store.Record{}, models: map[modelKey]models.Variant{},
+	s := &Store{tasks: map[string]*store.Record{}, diffs: map[string]string{}, models: map[modelKey]models.Variant{},
 		snapshots: map[int64]*store.Snapshot{}}
 	for _, v := range vs {
 		s.models[modelKey{v.AgentID, v.ID}] = v
@@ -74,7 +75,7 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 		}
 		rec.ParentID, rec.ThreadID = parent.ID, parent.ThreadID
 		rec.PR = parent.PR
-		rec.PR.Requested, rec.PR.Error = true, ""
+		rec.PR.Requested, rec.PR.Error = t.PR, ""
 	}
 	s.tasks[t.ID] = rec
 	return nil
@@ -228,7 +229,8 @@ func (s *Store) Finish(_ context.Context, id string, o store.Outcome) error {
 	if err != nil {
 		return err
 	}
-	r.Error, r.LogPath, r.PatchPath = o.Error, o.LogPath, o.PatchPath
+	r.Error, r.LogPath, r.HasDiff = o.Error, o.LogPath, o.Diff != ""
+	s.diffs[id] = o.Diff
 	r.BaseCommit, r.Summary, r.PR.Error = o.BaseCommit, o.Summary, o.PRError
 	// A follow-up inherited its thread's pull request; keep it if this run didn't publish.
 	r.PR.URL, r.PR.Number, r.PR.Branch = cmp.Or(o.PRURL, r.PR.URL), cmp.Or(o.PRNumber, r.PR.Number), cmp.Or(o.PRBranch, r.PR.Branch)
@@ -288,6 +290,15 @@ func (s *Store) Get(_ context.Context, id string) (store.Record, error) {
 		return store.Record{}, fmt.Errorf("%w: %s", store.ErrNotFound, id)
 	}
 	return *r, nil
+}
+
+func (s *Store) Diff(_ context.Context, id string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[id]; !ok {
+		return "", fmt.Errorf("%w: %s", store.ErrNotFound, id)
+	}
+	return s.diffs[id], nil
 }
 
 func (s *Store) List(_ context.Context, limit int) ([]store.Record, error) {

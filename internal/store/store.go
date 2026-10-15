@@ -47,7 +47,7 @@ type Record struct {
 	State      task.State
 	Error      string // "" unless Failed
 	LogPath    string
-	PatchPath  string // "" if no changes
+	HasDiff    bool   // the agent changed something; Store.Diff returns it
 	SnapshotID *int64 // the snapshot the task was restored from; nil = cold start
 	ParentID   string // the task this one continues; "" for a thread's first task
 	ThreadID   string // the thread's first task (its own ID for a first task)
@@ -99,14 +99,14 @@ func NormalizeRepo(repo string) string {
 	return strings.TrimSuffix(repo, ".git")
 }
 
-// PullRequest is a task's pull request: whether one was asked for, and
-// what happened.
+// PullRequest is where a task's changes went: the branch they were pushed
+// to, and the pull request if one was asked for.
 type PullRequest struct {
 	Requested bool
 	URL       string // "" until opened
 	Number    int    // 0 until opened
-	Branch    string // "" until opened
-	Error     string // why it wasn't opened; "" otherwise
+	Branch    string // "" until pushed
+	Error     string // why the changes weren't pushed or the pull request wasn't opened; "" otherwise
 }
 
 // Thread is a first task and its follow-ups, summarized for a list.
@@ -125,7 +125,7 @@ type Outcome struct {
 	State      task.State // Succeeded, Failed or Cancelled
 	Error      string
 	LogPath    string
-	PatchPath  string
+	Diff       string // "" if no changes
 	BaseCommit string
 	Summary    string
 	PRURL      string
@@ -137,7 +137,7 @@ type Outcome struct {
 type Store interface {
 	// Create saves a new task in the Queued state for agentID. An empty
 	// t.ModelID means the agent's default model. With t.ParentID set, the
-	// task joins the parent's thread and inherits its pull request; it
+	// task joins the parent's thread and inherits its branch and pull request; it
 	// fails with ErrNotLatest or ErrThreadBusy if the thread can't take it.
 	Create(ctx context.Context, t task.Task, agentID string) error
 	// ThreadTasks returns every task in a thread, oldest first.
@@ -160,6 +160,8 @@ type Store interface {
 	// startup to recover tasks orphaned by a crash (single-instance only).
 	FailRunning(ctx context.Context, reason string) (int64, error)
 	Get(ctx context.Context, id string) (Record, error)
+	// Diff returns a task's changes as git diff output; "" if it has none.
+	Diff(ctx context.Context, id string) (string, error)
 	// List returns the most recent tasks first.
 	List(ctx context.Context, limit int) ([]Record, error)
 	// GetAgent returns one agent, or ErrAgentNotFound.

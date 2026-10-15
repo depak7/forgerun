@@ -1,5 +1,6 @@
-// Package publish turns a task's changes into a pull request. It runs on
-// the forgerun host with the host's git; the token never enters a VM.
+// Package publish pushes a task's changes to a branch and opens or updates
+// its pull request. It runs on the forgerun host with the host's git; the
+// token never enters a VM.
 package publish
 
 import (
@@ -18,7 +19,8 @@ import (
 	"github.com/depak7/forgerun/internal/task"
 )
 
-// Publisher pushes a branch with a task's changes and opens a pull request.
+// Publisher pushes a branch with a task's changes and, when asked, opens or
+// updates a pull request.
 type Publisher struct {
 	Tokens forge.TokenSource
 	GitHub *forge.GitHub
@@ -37,37 +39,68 @@ const (
 	maxTitle    = 72 // characters, as git and GitHub display them comfortably
 )
 
-// Branch is the branch a task's changes are pushed to.
-func Branch(taskID string) string { return "forgerun/" + taskID }
+// maxSlug bounds the words of a branch name taken from the prompt.
+const maxSlug = 40
 
-// Publish commits the task's patch on top of the commit the task started
-// from and pushes it (never forced). A fresh task gets a new branch and a
-// pull request into the repo's default branch; a follow-up adds a commit to
-// its thread's branch and refreshes the pull request's description.
-func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.PublishedPR, error) {
+// Branch is the branch a thread's changes are pushed to: a few words of the
+// prompt and the end of the task ID, e.g. forgerun/add-a-hello-world-9fe9cc.
+// The ID's random tail keeps two tasks with the same prompt apart, so a push
+// never lands on someone else's branch (pushes are never forced).
+func Branch(taskID, prompt string) string {
+	slug := slugify(prompt)
+	suffix := taskID[max(0, len(taskID)-6):]
+	if slug == "" {
+		return "forgerun/" + suffix
+	}
+	return "forgerun/" + slug + "-" + suffix
+}
+
+// slugify keeps the first words of s as lower-case ASCII letters and
+// digits joined by "-", at most maxSlug bytes, cut at a word boundary.
+func slugify(s string) string {
+	var words []string
+	n := 0
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	}) {
+		if n+len(w) > maxSlug {
+			if n == 0 { // one very long word: cut it
+				words, n = append(words, w[:maxSlug]), maxSlug
+			}
+			break
+		}
+		words = append(words, w)
+		n += len(w) + 1
+	}
+	return strings.Join(words, "-")
+}
+
+// Publish commits the task's changes on top of the commit the task started
+// from and pushes them (never forced). A fresh task gets a new branch; a
+// follow-up adds a commit to its thread's branch. Then, if the thread has a
+// pull request, its description is refreshed; if not and one is wanted, it
+// is opened into the repo's default branch.
+func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.Published, error) {
 	repo, err := forge.ParseRepo(req.Repo)
 	if err != nil {
-		return task.PublishedPR{}, err
+		return task.Published{}, err
 	}
 	tok, err := p.Tokens.Token(ctx, repo)
 	if err != nil {
-		return task.PublishedPR{}, fmt.Errorf("getting a token for %s: %w", repo, err)
+		return task.Published{}, fmt.Errorf("getting a token for %s: %w", repo, err)
 	}
 
-	// git runs in a temporary directory, so the patch path must not be relative.
-	patch, err := filepath.Abs(req.PatchPath)
-	if err != nil {
-		return task.PublishedPR{}, err
-	}
 	dir, err := os.MkdirTemp("", "forgerun-publish-")
 	if err != nil {
-		return task.PublishedPR{}, err
+		return task.Published{}, err
 	}
 	defer os.RemoveAll(dir)
 	g := &git{ctx: ctx, dir: dir, env: authEnv(repo, tok), secret: tok.Reveal()}
+	// The patch goes inside .git, so it's never part of the commit.
+	patch := filepath.Join(dir, ".git", "forgerun.patch")
 
 	followUp := req.Branch != ""
-	branch := cmp.Or(req.Branch, Branch(req.TaskID))
+	branch := cmp.Or(req.Branch, Branch(req.TaskID, req.Prompt))
 	remote := "https://" + repo.Host + "/" + repo.Owner + "/" + repo.Name + ".git"
 	if p.RemoteURL != nil {
 		remote = p.RemoteURL(repo)
@@ -75,8 +108,13 @@ func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.
 	// Only the commit the task started from is needed: for a fresh task,
 	// even if the default branch has moved on since; for a follow-up, the
 	// branch's commit when the task began.
+	if _, err := g.run("init", "-q"); err != nil {
+		return task.Published{}, err
+	}
+	if err := os.WriteFile(patch, []byte(req.Patch), 0o600); err != nil {
+		return task.Published{}, err
+	}
 	steps := [][]string{
-		{"init", "-q"},
 		{"remote", "add", "origin", remote},
 		{"fetch", "-q", "--depth=1", "origin", req.BaseCommit},
 		{"checkout", "-q", "-b", branch, "FETCH_HEAD"},
@@ -85,40 +123,51 @@ func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.
 	}
 	for _, args := range steps {
 		if _, err := g.run(args...); err != nil {
-			return task.PublishedPR{}, err
+			return task.Published{}, err
 		}
 	}
 	files, err := g.run("diff", "--name-status", "-M", "HEAD~1", "HEAD")
 	if err != nil {
-		return task.PublishedPR{}, err
+		return task.Published{}, err
 	}
 	// No --force: if the branch has commits we don't have (someone pushed
 	// while the task ran), git refuses rather than overwrite them.
 	if _, err := g.run("push", "-q", "origin", "HEAD:refs/heads/"+branch); err != nil {
 		if followUp && strings.Contains(err.Error(), "rejected") {
-			return task.PublishedPR{}, fmt.Errorf("branch %s changed while the task ran (did someone push to it?); nothing was overwritten: %w", branch, err)
+			return task.Published{}, fmt.Errorf("branch %s changed while the task ran (did someone push to it?); nothing was overwritten: %w", branch, err)
 		}
-		return task.PublishedPR{}, err
+		return task.Published{}, err
 	}
+	pub := task.Published{Branch: branch}
 
 	body := p.body(req, files)
 	var pr forge.PullRequest
-	if followUp {
+	switch {
+	case req.PRNumber > 0:
 		pr, err = p.GitHub.UpdatePullRequestBody(ctx, tok, repo, req.PRNumber, body)
 		if err != nil {
-			return task.PublishedPR{}, fmt.Errorf("the commit was pushed to %s, but updating pull request #%d failed: %w", branch, req.PRNumber, err)
+			return pub, fmt.Errorf("the commit was pushed to %s, but updating pull request #%d failed: %w", branch, req.PRNumber, err)
 		}
-	} else {
+	case req.OpenPR:
 		base, err := p.GitHub.DefaultBranch(ctx, tok, repo)
 		if err != nil {
-			return task.PublishedPR{}, err
+			return pub, fmt.Errorf("branch %s was pushed, but opening the pull request failed: %w", branch, err)
 		}
-		pr, err = p.GitHub.OpenPullRequest(ctx, tok, repo, branch, base, title(req.Prompt), body)
+		// Named after the thread's first request: a pull request opened by
+		// a follow-up still covers the whole thread.
+		first := req.Prompt
+		if len(req.Requests) > 0 {
+			first = req.Requests[0]
+		}
+		pr, err = p.GitHub.OpenPullRequest(ctx, tok, repo, branch, base, title(first), body)
 		if err != nil {
-			return task.PublishedPR{}, fmt.Errorf("branch %s was pushed, but opening the pull request failed: %w", branch, err)
+			return pub, fmt.Errorf("branch %s was pushed, but opening the pull request failed: %w", branch, err)
 		}
+	default:
+		return pub, nil // a branch only
 	}
-	return task.PublishedPR{URL: pr.URL, Number: pr.Number, Branch: branch}, nil
+	pub.PRURL, pub.PRNumber = pr.URL, pr.Number
+	return pub, nil
 }
 
 // IsOpen reports whether a repo's pull request is still open, so a

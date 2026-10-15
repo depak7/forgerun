@@ -100,7 +100,7 @@ func TestGitHubTokens(t *testing.T) {
 		wantSource, wantErr bool
 		wantLog             []string
 	}{
-		{"no token: PRs off", "", "", false, false, []string{"pull requests disabled"}},
+		{"no token stops startup", "", "", false, true, nil},
 		{"valid token", secret, "2026-10-21 07:52:48 UTC", true, false, []string{"as=depak7", "token_expires=2026-10-21"}},
 		{"expires soon", secret, "2026-10-15 07:52:48 UTC", true, false, []string{"level=WARN", "expires soon"}},
 		{"rejected token stops startup", "github_pat_WRONG", "", false, true, nil},

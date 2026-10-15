@@ -249,17 +249,18 @@ func TestCancel(t *testing.T) {
 	})
 }
 
-func TestLogAndPatch(t *testing.T) {
+func TestLogAndDiff(t *testing.T) {
 	h, s, _ := setup(t)
 	ctx := context.Background()
-	dir := t.TempDir()
-	logPath, patchPath := filepath.Join(dir, "agent.log"), filepath.Join(dir, "changes.patch")
+	logPath := filepath.Join(t.TempDir(), "agent.log")
 	os.WriteFile(logPath, []byte("line1\nline2\n"), 0o644)
-	os.WriteFile(patchPath, []byte("+hello\n"), 0o644)
 
 	done := createTask(t, h)
 	s.Start(ctx, done.ID)
-	s.Finish(ctx, done.ID, store.Outcome{State: task.Succeeded, LogPath: logPath, PatchPath: patchPath})
+	s.Finish(ctx, done.ID, store.Outcome{State: task.Succeeded, LogPath: logPath, Diff: "+hello\n"})
+	if got, _ := s.Get(ctx, done.ID); !toJSON(got).HasDiff {
+		t.Error("has_diff = false for a task with changes")
+	}
 
 	rec := do(h, "GET", "/api/tasks/"+done.ID+"/log", "")
 	if rec.Code != http.StatusOK || rec.Body.String() != "line1\nline2\n" {
@@ -269,24 +270,24 @@ func TestLogAndPatch(t *testing.T) {
 	if rec.Code != http.StatusPartialContent || rec.Body.String() != "line2\n" {
 		t.Errorf("log range: %d %q", rec.Code, rec.Body)
 	}
-	rec = do(h, "GET", "/api/tasks/"+done.ID+"/patch", "")
+	rec = do(h, "GET", "/api/tasks/"+done.ID+"/diff", "")
 	if rec.Code != http.StatusOK || rec.Body.String() != "+hello\n" || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/x-diff") {
-		t.Errorf("patch: %d %q %s", rec.Code, rec.Body, rec.Header().Get("Content-Type"))
+		t.Errorf("diff: %d %q %s", rec.Code, rec.Body, rec.Header().Get("Content-Type"))
 	}
 
 	queued := createTask(t, h)
-	_, apiErr := decode(t, do(h, "GET", "/api/tasks/"+queued.ID+"/patch", ""), http.StatusNotFound)
+	_, apiErr := decode(t, do(h, "GET", "/api/tasks/"+queued.ID+"/diff", ""), http.StatusNotFound)
 	if apiErr.Message != "task has not finished" {
-		t.Errorf("patch on queued task: %q", apiErr.Message)
+		t.Errorf("diff of queued task: %q", apiErr.Message)
 	}
 	decode(t, do(h, "GET", "/api/tasks/"+queued.ID+"/log", ""), http.StatusNotFound)
 
 	failed := createTask(t, h)
 	s.Start(ctx, failed.ID)
 	s.Finish(ctx, failed.ID, store.Outcome{State: task.Failed, Error: "boom"})
-	_, apiErr = decode(t, do(h, "GET", "/api/tasks/"+failed.ID+"/patch", ""), http.StatusNotFound)
+	_, apiErr = decode(t, do(h, "GET", "/api/tasks/"+failed.ID+"/diff", ""), http.StatusNotFound)
 	if apiErr.Message != "task did not finish successfully" {
-		t.Errorf("patch on failed task: %q", apiErr.Message)
+		t.Errorf("diff of failed task: %q", apiErr.Message)
 	}
 	decode(t, do(h, "GET", "/api/tasks/bogus/log", ""), http.StatusNotFound)
 }
@@ -316,7 +317,7 @@ func TestTaskJSONShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"id", "repo", "prompt", "agent", "model", "effort", "thinking", "fast", "model_id",
-		"state", "error", "has_patch", "snapshot_id", "parent_id", "thread_id", "pr", "summary", "created_at", "started_at", "finished_at"} {
+		"state", "error", "has_diff", "snapshot_id", "parent_id", "thread_id", "pr", "summary", "created_at", "started_at", "finished_at"} {
 		if _, ok := fields[k]; !ok {
 			t.Errorf("task JSON missing %q", k)
 		}
@@ -532,10 +533,15 @@ func TestCreateWithPullRequest(t *testing.T) {
 		t.Error("store didn't record the PR request")
 	}
 
-	// Without "pr", nothing changes.
-	data, _ = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://gitlab.com/o/r","prompt":"fix it"}`), http.StatusCreated)
+	// Without "pr", no pull request; the changes still go to a branch, so
+	// the repo must still be one forgerun can push to.
+	data, _ = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"fix it"}`), http.StatusCreated)
 	if tk := decodeTask(t, data); tk.PR.Requested {
 		t.Error("PR requested without asking")
+	}
+	_, apiErr = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://gitlab.com/o/r","prompt":"fix it"}`), http.StatusBadRequest)
+	if !strings.Contains(apiErr.Message, "pushes each task's changes to a branch") {
+		t.Errorf("branch on unsupported host: %q", apiErr.Message)
 	}
 }
 
@@ -571,10 +577,10 @@ func TestFollowUps(t *testing.T) {
 		return do(h, "POST", "/api/tasks/"+id+"/followups", body)
 	}
 
-	// Not before it has finished and opened its pull request.
+	// Not before it has finished and pushed its branch.
 	_, apiErr := decode(t, follow(first.ID, `{"prompt":"more"}`), http.StatusConflict)
-	if !strings.Contains(apiErr.Message, "no pull request") {
-		t.Errorf("before PR: %q", apiErr.Message)
+	if !strings.Contains(apiErr.Message, "no branch") {
+		t.Errorf("before the push: %q", apiErr.Message)
 	}
 	finishWithPR(t, s, first.ID, task.Succeeded)
 
@@ -615,6 +621,28 @@ func TestFollowUps(t *testing.T) {
 	}
 }
 
+// A thread without a pull request can be followed up on its branch, and a
+// follow-up can ask to open the pull request then.
+func TestFollowUpOnBranchOnly(t *testing.T) {
+	// The pull request check would say "closed": it must not be asked.
+	h, s, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: false} })
+	ctx := context.Background()
+	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first"}`), http.StatusCreated))
+	s.Start(ctx, first.ID)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, PRBranch: "forgerun/first-1"})
+
+	second := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+first.ID+"/followups", `{"prompt":"second"}`), http.StatusCreated))
+	if second.PR.Requested || second.PR.Branch != "forgerun/first-1" || second.PR.Number != 0 {
+		t.Errorf("branch-only follow-up: pr = %+v", second.PR)
+	}
+	s.Start(ctx, second.ID)
+	s.Finish(ctx, second.ID, store.Outcome{State: task.Succeeded})
+	third := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+second.ID+"/followups", `{"prompt":"open it","pr":true}`), http.StatusCreated))
+	if !third.PR.Requested || third.PR.Branch != "forgerun/first-1" {
+		t.Errorf("follow-up asking for a PR: pr = %+v", third.PR)
+	}
+}
+
 func TestFollowUpRefusals(t *testing.T) {
 	prepare := func(t *testing.T, prs PRs) (http.Handler, string) {
 		h, s, _ := setup(t, func(c *Config) { c.PRs = prs })
@@ -644,10 +672,10 @@ func TestFollowUpRefusals(t *testing.T) {
 			}
 		})
 	}
-	t.Run("pull requests off", func(t *testing.T) {
+	t.Run("publishing off", func(t *testing.T) {
 		h, _, _ := setup(t)
 		_, apiErr := decode(t, do(h, "POST", "/api/tasks/t-x/followups", `{"prompt":"x"}`), http.StatusBadRequest)
-		if !strings.Contains(apiErr.Message, "disabled") {
+		if !strings.Contains(apiErr.Message, "doesn't push") {
 			t.Errorf("got %q", apiErr.Message)
 		}
 	})

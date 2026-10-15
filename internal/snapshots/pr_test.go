@@ -43,12 +43,16 @@ type fakePublisher struct {
 	err error
 }
 
-func (f *fakePublisher) Publish(_ context.Context, req task.PublishRequest) (task.PublishedPR, error) {
+func (f *fakePublisher) Publish(_ context.Context, req task.PublishRequest) (task.Published, error) {
 	f.got = append(f.got, req)
 	if f.err != nil {
-		return task.PublishedPR{}, f.err
+		return task.Published{}, f.err
 	}
-	return task.PublishedPR{URL: "https://github.com/o/r/pull/1", Number: 1, Branch: "forgerun/" + req.TaskID}, nil
+	pub := task.Published{Branch: "forgerun/" + req.TaskID}
+	if req.OpenPR {
+		pub.PRURL, pub.PRNumber = "https://github.com/o/r/pull/1", 1
+	}
+	return pub, nil
 }
 
 func prTask() task.Task {
@@ -71,17 +75,14 @@ func TestPullRequestTask(t *testing.T) {
 	if !strings.Contains(res.Summary, "chat said: chat") {
 		t.Errorf("summary = %q\nlog:\n%s", res.Summary, log)
 	}
-	if saved, _ := os.ReadFile(res.SummaryPath); strings.TrimSpace(string(saved)) != res.Summary {
-		t.Errorf("summary.md = %q", saved)
-	}
-	if res.PRURL != "https://github.com/o/r/pull/1" || res.PRError != "" {
-		t.Errorf("pr url %q, error %q", res.PRURL, res.PRError)
+	if res.PRURL != "https://github.com/o/r/pull/1" || res.Branch == "" || res.PublishError != "" {
+		t.Errorf("pr url %q, branch %q, error %q", res.PRURL, res.Branch, res.PublishError)
 	}
 	if len(pub.got) != 1 {
 		t.Fatalf("published %d times", len(pub.got))
 	}
 	got := pub.got[0]
-	if got.BaseCommit == "" || got.BaseCommit != res.BaseCommit || got.PatchPath != res.PatchPath ||
+	if got.BaseCommit == "" || got.BaseCommit != res.BaseCommit || got.Patch == "" || got.Patch != res.Diff || !got.OpenPR ||
 		got.Summary != res.Summary || got.Prompt != "edit the README" || got.Repo != testRepo {
 		t.Errorf("publish request = %+v", got)
 	}
@@ -97,6 +98,24 @@ func TestPullRequestTask(t *testing.T) {
 	}
 }
 
+// Without a pull request the changes are still pushed to a branch, with a
+// summary for follow-ups.
+func TestBranchOnlyTask(t *testing.T) {
+	r, _ := setup(t, messyAgent{})
+	pub := &fakePublisher{}
+	r.Publisher = pub
+	res, err := r.Run(context.Background(), task.New(testRepo, "edit the README"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pub.got) != 1 || pub.got[0].OpenPR || res.Branch == "" || res.PRURL != "" || res.PublishError != "" {
+		t.Errorf("published %+v; branch %q, url %q, error %q", pub.got, res.Branch, res.PRURL, res.PublishError)
+	}
+	if !strings.Contains(res.Summary, "chat said: chat") {
+		t.Errorf("summary = %q", res.Summary)
+	}
+}
+
 func TestPullRequestWithoutChanges(t *testing.T) {
 	r, _ := setup(t, idleAgent{})
 	pub := &fakePublisher{}
@@ -105,8 +124,8 @@ func TestPullRequestWithoutChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pub.got) != 0 || !strings.Contains(res.PRError, "made no changes") || res.Summary != "" {
-		t.Errorf("published %d, pr error %q, summary %q", len(pub.got), res.PRError, res.Summary)
+	if len(pub.got) != 0 || !strings.Contains(res.PublishError, "made no changes") || res.Summary != "" {
+		t.Errorf("published %d, error %q, summary %q", len(pub.got), res.PublishError, res.Summary)
 	}
 }
 
@@ -117,8 +136,8 @@ func TestPullRequestFailureKeepsTheTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task failed because publishing did: %v", err)
 	}
-	if res.PatchPath == "" || !strings.Contains(res.PRError, "HTTP 403") || res.PRURL != "" {
-		t.Errorf("patch %q, pr error %q, url %q", res.PatchPath, res.PRError, res.PRURL)
+	if res.Diff == "" || !strings.Contains(res.PublishError, "HTTP 403") || res.PRURL != "" {
+		t.Errorf("diff %q, error %q, url %q", res.Diff, res.PublishError, res.PRURL)
 	}
 }
 
@@ -144,8 +163,8 @@ func TestPullRequestsDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.PRError, "disabled") {
-		t.Errorf("pr error %q", res.PRError)
+	if !strings.Contains(res.PublishError, "not pushed") || res.Diff == "" {
+		t.Errorf("error %q, diff %q", res.PublishError, res.Diff)
 	}
 }
 

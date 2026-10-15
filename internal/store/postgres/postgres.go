@@ -49,13 +49,13 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	// An empty model id means the agent's default_model_id. If the agent has
 	// none (or doesn't exist), model_id is NULL and the insert fails.
 	// A follow-up (parent set) joins the parent's thread and inherits its
-	// pull request; if the parent doesn't exist, nothing is inserted.
+	// branch and pull request; if the parent doesn't exist, nothing is inserted.
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id, pr_requested,
 		                   parent_id, thread_id, pr_url, pr_number, pr_branch)
 		SELECT $1, $2, $3, $4, $5,
 		       COALESCE(NULLIF($6, ''), (SELECT default_model_id FROM agents WHERE id = $4)),
-		       $7 OR p.id IS NOT NULL,
+		       $7,
 		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch
 		FROM (SELECT NULLIF($8::text, '') AS parent) want
 		LEFT JOIN tasks p ON p.id = want.parent
@@ -173,12 +173,12 @@ func (s *Store) Start(ctx context.Context, id string) error {
 
 func (s *Store) Finish(ctx context.Context, id string, o store.Outcome) error {
 	return s.transition(ctx, id, task.Running, o.State,
-		`UPDATE tasks SET state = $3, error = $4, log_path = $5, patch_path = $6, finished_at = now(),
+		`UPDATE tasks SET state = $3, error = $4, log_path = $5, diff = $6, finished_at = now(),
 			base_commit = $7, summary = $8, pr_error = $10,
 			-- a follow-up inherited its thread's pull request; keep it if this run didn't publish
 			pr_url = COALESCE($9, pr_url), pr_number = COALESCE($11, pr_number), pr_branch = COALESCE($12, pr_branch)
 		 WHERE id = $1 AND state = $2`,
-		nullable(o.Error), nullable(o.LogPath), nullable(o.PatchPath),
+		nullable(o.Error), nullable(o.LogPath), nullable(o.Diff),
 		nullable(o.BaseCommit), nullable(o.Summary), nullable(o.PRURL), nullable(o.PRError),
 		nullableInt(o.PRNumber), nullable(o.PRBranch))
 }
@@ -249,7 +249,7 @@ const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, 
 	COALESCE(m.id = a.default_model_id, false), m.zdr`
 
 // selectColumns is the task (aliased t) plus its model.
-const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.patch_path,
+const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.diff IS NOT NULL,
 	t.snapshot_id, t.pr_requested, t.pr_url, t.pr_error, t.base_commit, t.summary,
 	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.created_at, t.started_at, t.finished_at, ` + modelColumns
 
@@ -264,6 +264,15 @@ func (s *Store) Get(ctx context.Context, id string) (store.Record, error) {
 		return store.Record{}, fmt.Errorf("%w: %s", store.ErrNotFound, id)
 	}
 	return rec, err
+}
+
+func (s *Store) Diff(ctx context.Context, id string) (string, error) {
+	var diff *string
+	err := s.pool.QueryRow(ctx, `SELECT diff FROM tasks WHERE id = $1`, id).Scan(&diff)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s", store.ErrNotFound, id)
+	}
+	return deref(diff), err
 }
 
 func (s *Store) List(ctx context.Context, limit int) ([]store.Record, error) {
@@ -458,14 +467,14 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	var (
 		rec                                 store.Record
 		state                               string
-		errMsg, logPath, patchPath          *string // nil = NULL
+		errMsg, logPath                     *string // nil = NULL
 		prURL, prError, baseCommit, summary *string
 		parentID, prBranch                  *string
 		prNumber                            *int
 		startedAt, finishedAt               *time.Time
 	)
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
-		&errMsg, &logPath, &patchPath, &rec.SnapshotID,
+		&errMsg, &logPath, &rec.HasDiff, &rec.SnapshotID,
 		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary,
 		&parentID, &rec.ThreadID, &prNumber, &prBranch, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
@@ -477,7 +486,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	if !rec.State.Valid() {
 		return store.Record{}, fmt.Errorf("task %s has unknown state %q", rec.ID, state)
 	}
-	rec.Error, rec.LogPath, rec.PatchPath = deref(errMsg), deref(logPath), deref(patchPath)
+	rec.Error, rec.LogPath = deref(errMsg), deref(logPath)
 	rec.PR.URL, rec.PR.Error = deref(prURL), deref(prError)
 	rec.BaseCommit, rec.Summary = deref(baseCommit), deref(summary)
 	rec.ParentID, rec.PR.Branch = deref(parentID), deref(prBranch)

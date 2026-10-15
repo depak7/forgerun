@@ -44,12 +44,8 @@ func TestRunEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	patch, err := os.ReadFile(res.PatchPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(patch), "+hello from forgerun") {
-		t.Errorf("patch missing our change:\n%s", patch)
+	if !strings.Contains(res.Diff, "+hello from forgerun") {
+		t.Errorf("diff missing our change:\n%s", res.Diff)
 	}
 	log, _ := os.ReadFile(res.LogPath)
 	if !strings.Contains(string(log), "running fake agent (model: auto)") {
@@ -101,7 +97,7 @@ func TestQuietButBusyAgentIsNotStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a busy agent was stopped: %v", err)
 	}
-	if res.PatchPath == "" {
+	if res.Diff == "" {
 		t.Error("its work was lost")
 	}
 }

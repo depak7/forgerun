@@ -4,8 +4,8 @@ import { formatBytes, formatDuration, formatWhen, repoName } from "../format";
 import styles from "./Settings.module.css";
 
 // SettingsPage shows how this server is set up: which agents can run and
-// whether their keys are set, the models each offers, pull requests and
-// snapshots. It changes nothing: all of it comes from .env and the flags
+// whether their keys are set, the models each offers, GitHub (branches and
+// pull requests) and snapshots. It changes nothing: all of it comes from .env and the flags
 // `forgerun serve` was started with.
 export function SettingsPage() {
   const { data: agents } = useAgents();
@@ -33,7 +33,7 @@ export function SettingsPage() {
 
       <section className={styles.section} aria-labelledby="prs">
         <h2 id="prs" className="label">
-          Pull requests
+          GitHub
         </h2>
         <div className={styles.card}>{status && <PullRequests status={status} />}</div>
       </section>
@@ -155,7 +155,7 @@ function PullRequests({ status }: { status: Status }) {
       <div className={styles.facts}>
         <span className={`${styles.tag} ${styles.bad}`}>OFF</span>
         <span>
-          Tasks end as a patch only. Add <code>GITHUB_TOKEN=…</code> to <code>.env</code> and restart to open pull requests.
+          Tasks can't push their changes. Add <code>GITHUB_TOKEN=…</code> to <code>.env</code> and restart.
         </span>
       </div>
     );
@@ -164,8 +164,8 @@ function PullRequests({ status }: { status: Status }) {
     <div className={styles.facts}>
       <span className={`${styles.tag} ${styles.good}`}>ON</span>
       <span>
-        Pushes <code>forgerun/&lt;task-id&gt;</code> branches as <strong>{prs.github_user}</strong>, on github.com repos the
-        token can write to.
+        Every task pushes its changes to a <code>forgerun/…</code> branch as <strong>{prs.github_user}</strong>; a pull request
+        is opened when you ask. Repos must be on github.com and writable by the token.
       </span>
     </div>
   );

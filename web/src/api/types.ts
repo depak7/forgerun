@@ -37,7 +37,7 @@ export interface Task {
   model_id: string;
   state: TaskState;
   error: string;
-  has_patch: boolean;
+  has_diff: boolean; // the agent changed something: GET /api/tasks/{id}/diff
   snapshot_id: number | null; // null = cold start
   parent_id: string | null; // null for a thread's first task
   thread_id: string;

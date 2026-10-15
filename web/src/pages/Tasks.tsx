@@ -24,7 +24,7 @@ export function TasksPage() {
         <div className={styles.headText}>
           <span className="label">01 | Tasks</span>
           <h1 className={styles.title}>Agents at work</h1>
-          <p className={styles.lede}>Each task runs in its own VM and ends as a patch or a pull request.</p>
+          <p className={styles.lede}>Each task runs in its own VM and pushes its changes to a branch, with a pull request if you ask.</p>
         </div>
         <Link to="/tasks/new" className={styles.primary}>
           [ new task ]
@@ -142,13 +142,13 @@ function NowRow({ thread }: { thread: Thread }) {
 function ThreadRow({ thread }: { thread: Thread }) {
   const t = thread.latest;
   const pr = prLabel(thread);
-  const prFailed = t.state === "succeeded" && t.pr.requested && t.pr.error !== "";
-  const note = t.state === "failed" ? t.error : prFailed ? `patch saved; ${t.pr.error}` : "";
+  const prFailed = t.state === "succeeded" && t.pr.error !== "";
+  const note = t.state === "failed" ? t.error : prFailed ? t.pr.error : "";
   return (
     <Link to={`/threads/${thread.id}`} className={styles.row}>
       <span className={styles.stateCol}>
         <StateLabel state={t.state} />
-        {prFailed && <span className={styles.problem}>PR NOT OPENED</span>}
+        {prFailed && <span className={styles.problem}>{t.pr.branch && t.has_diff ? "PR NOT OPENED" : "NOT PUSHED"}</span>}
       </span>
       <span className={styles.what}>
         <span className={styles.prompt}>{thread.title}</span>
@@ -176,7 +176,8 @@ function ThreadRow({ thread }: { thread: Thread }) {
 }
 
 function prLabel(thread: Thread): string | null {
-  return thread.latest.pr.number ? `PR #${thread.latest.pr.number}` : null;
+  const pr = thread.latest.pr;
+  return pr.number ? `PR #${pr.number}` : pr.branch ? "branch" : null;
 }
 
 function modelLabel(model: string, effort: string): string {
@@ -194,7 +195,7 @@ function FirstRun() {
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <span className="label">No tasks yet</span>
         <h2>Give an agent its first task</h2>
-        <p>Point it at a repo and say what to change. It works in its own VM; you watch the log live and get a patch or a pull request.</p>
+        <p>Point it at a repo and say what to change. It works in its own VM; you watch the log live and get a branch, or a pull request.</p>
       </div>
       <ol className={styles.steps}>
         <li>

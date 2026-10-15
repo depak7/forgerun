@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -93,11 +94,16 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	if res.PatchPath == "" {
+	if res.Diff == "" {
 		fmt.Println("result: no changes")
-	} else {
-		fmt.Println("result:", res.PatchPath)
+		return nil
 	}
+	// No database here: the changes go to a file next to the log.
+	path := filepath.Join(res.Dir, "changes.patch")
+	if err := os.WriteFile(path, []byte(res.Diff), 0o644); err != nil {
+		return err
+	}
+	fmt.Println("result:", path)
 	return nil
 }
 

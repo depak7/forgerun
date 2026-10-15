@@ -22,7 +22,7 @@ const agents = [
 function task(over: Partial<Task>): Task {
   return {
     id: "t-20261015-000000-aaaaaa", repo: "https://github.com/depak7/playground", prompt: "p", agent: "cursor", model: "auto",
-    effort: "", thinking: false, fast: false, model_id: "auto", state: "succeeded", error: "", has_patch: true, snapshot_id: null,
+    effort: "", thinking: false, fast: false, model_id: "auto", state: "succeeded", error: "", has_diff: true, snapshot_id: null,
     parent_id: null, thread_id: "t-20261015-000000-aaaaaa", pr: { requested: false, url: "", number: 0, branch: "", error: "" },
     summary: "", created_at: new Date().toISOString(), started_at: null, finished_at: null, ...over,
   };
@@ -73,8 +73,8 @@ describe("TasksPage", () => {
     fakeServer({ "/api/threads": threads, "/api/status": status, "/api/agents": agents });
     renderPage(<TasksPage />);
     const list = await screen.findByRole("region", { name: "Threads" });
-    expect(within(list).getByText("PR NOT OPENED")).toBeTruthy();
-    expect(within(list).getByText(/patch saved; the token needs: contents=write/)).toBeTruthy();
+    expect(within(list).getByText("NOT PUSHED")).toBeTruthy();
+    expect(within(list).getByText(/the token needs: contents=write/)).toBeTruthy();
     expect(within(list).getByText("cursor → claude-code → cursor")).toBeTruthy();
 
     fireEvent.click(within(list).getByRole("button", { name: /NEEDS ATTENTION · 2/ }));

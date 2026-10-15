@@ -78,7 +78,7 @@ describe("SettingsPage", () => {
   it("explains pull requests that are off", async () => {
     serve(status({ pull_requests: { enabled: false, github_user: "" } }));
     renderPage(<SettingsPage />);
-    expect(await screen.findByText(/Tasks end as a patch only/)).toBeTruthy();
+    expect(await screen.findByText(/Tasks can't push their changes/)).toBeTruthy();
   });
 
   it("shows snapshot usage, limits and the list", async () => {

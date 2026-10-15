@@ -21,30 +21,33 @@ Assumptions you made, open questions, and anything not done.
 
 Be concise. Do not change any files. forgerun commits your changes and opens or updates the pull request itself, so don't mention committing or pushing.`
 
-// Publisher turns a successful task's changes into a pull request.
-// publish.Publisher implements it; it runs on the host, never in a VM.
+// Publisher pushes a successful task's changes to a branch, and opens or
+// updates a pull request when one is wanted. publish.Publisher implements
+// it; it runs on the host, never in a VM.
 type Publisher interface {
-	Publish(ctx context.Context, req PublishRequest) (PublishedPR, error)
+	Publish(ctx context.Context, req PublishRequest) (Published, error)
 }
 
-// PublishedPR is the pull request a task opened or updated.
-type PublishedPR struct {
-	URL    string
-	Number int
-	Branch string
+// Published is where a task's changes went: always a branch, and a pull
+// request when one was opened or updated (PRNumber 0 = none).
+type Published struct {
+	Branch   string
+	PRURL    string
+	PRNumber int
 }
 
-// PublishRequest is what a pull request is made from.
+// PublishRequest is what a push (and maybe a pull request) is made from.
 type PublishRequest struct {
 	TaskID     string
 	Repo       string
 	BaseCommit string // the commit the task started from
-	PatchPath  string // the changes, as saved by the runner
+	Patch      string // the changes, as git diff --binary output
 	Prompt     string
 	Summary    string   // "" if the agent couldn't give one
 	Requests   []string // every request in the thread, oldest first, this one last
-	// For a follow-up: the existing branch and pull request to update.
-	// Branch "" means open a new one.
+	OpenPR     bool     // open a pull request if the thread has none yet
+	// For a follow-up: the thread's branch, and its pull request (0 = none
+	// yet). Branch "" means a new thread: a new branch is made.
 	Branch   string
 	PRNumber int
 }

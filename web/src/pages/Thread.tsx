@@ -2,10 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
-import { useAgents, useLiveLog, useLogTail, useModels, useNow, usePatch, useThread } from "../api/queries";
+import { useAgents, useLiveLog, useLogTail, useModels, useNow, useDiff, useThread } from "../api/queries";
 import type { Task } from "../api/types";
 import { StateLabel } from "../components/StateLabel";
-import { agentChain, formatElapsed, formatWhen, repoName, shortID } from "../format";
+import { agentChain, branchURL, formatElapsed, formatWhen, repoName, shortID } from "../format";
 import { parsePatch } from "../lib/diff";
 import { Summary } from "../lib/summary";
 import styles from "./Thread.module.css";
@@ -36,7 +36,7 @@ export function ThreadPage() {
 
   return (
     <div className={styles.page}>
-      <Header steps={steps} latest={latest} sel={sel} selNumber={selNumber} />
+      <Header steps={steps} latest={latest} />
       <div className={styles.split}>
         <section className={styles.conversation} aria-label="Conversation">
           <div className={styles.steps}>
@@ -45,7 +45,7 @@ export function ThreadPage() {
                 key={s.id}
                 step={s}
                 n={i + 1}
-                first={i === 0}
+                prevPR={i > 0 ? steps[i - 1].pr.number : 0}
                 selected={s.id === sel.id}
                 onSelect={() => setSelected(s.id)}
                 onRetry={() => setDraft(s.prompt)}
@@ -60,7 +60,7 @@ export function ThreadPage() {
   );
 }
 
-function Header({ steps, latest, sel, selNumber }: { steps: Task[]; latest: Task; sel: Task; selNumber: number }) {
+function Header({ steps, latest }: { steps: Task[]; latest: Task }) {
   const queryClient = useQueryClient();
   const cancel = useMutation({
     mutationFn: () => api<Task>(`/api/tasks/${encodeURIComponent(latest.id)}/cancel`, { method: "POST" }),
@@ -81,7 +81,7 @@ function Header({ steps, latest, sel, selNumber }: { steps: Task[]; latest: Task
           <h1 className={styles.title}>{steps[0].prompt}</h1>
           <div className={styles.facts}>
             <StateLabel state={latest.state} />
-            <span style={{ color: pr.number ? "var(--accent)" : undefined }}>{pr.number ? `PR #${pr.number}` : "no pull request"}</span>
+            <span style={{ color: pr.number ? "var(--accent)" : undefined }}>{pr.number ? `PR #${pr.number}` : pr.branch ? "branch only" : "not pushed"}</span>
             <span>
               {steps.length} {steps.length === 1 ? "step" : "steps"}
             </span>
@@ -94,9 +94,9 @@ function Header({ steps, latest, sel, selNumber }: { steps: Task[]; latest: Task
               [ cancel step {steps.length} ]
             </button>
           )}
-          {sel.has_patch && (
-            <a className={styles.btn} href={`/api/tasks/${encodeURIComponent(sel.id)}/patch`} download={`${sel.id}.patch`}>
-              [ patch · step {selNumber} ]
+          {pr.branch && (
+            <a className={styles.btn} href={branchURL(latest.repo, pr.branch)} target="_blank" rel="noreferrer" title={pr.branch}>
+              [ branch ↗ ]
             </a>
           )}
           {pr.url && (
@@ -111,7 +111,7 @@ function Header({ steps, latest, sel, selNumber }: { steps: Task[]; latest: Task
   );
 }
 
-function StepItem(props: { step: Task; n: number; first: boolean; selected: boolean; onSelect: () => void; onRetry: () => void }) {
+function StepItem(props: { step: Task; n: number; prevPR: number; selected: boolean; onSelect: () => void; onRetry: () => void }) {
   const { step: s, n } = props;
   const now = useNow();
   const { data: tail } = useLogTail(s.id, s.state === "running");
@@ -136,12 +136,12 @@ function StepItem(props: { step: Task; n: number; first: boolean; selected: bool
             {s.effort && ` · ${s.effort}`}
           </span>
           <StateLabel state={s.state} />
-          {prAction(s, props.first) && <span style={{ color: s.pr.error ? "var(--failed)" : "var(--accent)" }}>{prAction(s, props.first)}</span>}
+          {pushAction(s, props.prevPR) && <span style={{ color: s.pr.error ? "var(--failed)" : "var(--accent)" }}>{pushAction(s, props.prevPR)}</span>}
           <span>{timing(s, now)}</span>
         </span>
         <span className={styles.replyText}>{replyText(s, tail)}</span>
         {(s.state === "failed" || (s.state === "succeeded" && s.pr.error)) && (
-          <span className={styles.replyError}>{s.state === "failed" ? s.error : `pull request: ${s.pr.error}`}</span>
+          <span className={styles.replyError}>{s.state === "failed" ? s.error : s.pr.error}</span>
         )}
       </button>
       {s.state === "failed" && (
@@ -156,11 +156,14 @@ function StepItem(props: { step: Task; n: number; first: boolean; selected: bool
   );
 }
 
-function prAction(s: Task, first: boolean): string {
-  if (!s.pr.requested || s.state !== "succeeded") return "";
-  if (s.pr.error) return "PR NOT PUBLISHED";
-  if (!s.pr.url) return "";
-  return first ? `OPENED PR #${s.pr.number}` : `PUSHED TO PR #${s.pr.number}`;
+// pushAction says where a step's changes went. A follow-up inherits its
+// thread's branch and pull request, so prevPR tells opening from pushing.
+function pushAction(s: Task, prevPR: number): string {
+  if (s.state !== "succeeded") return "";
+  if (s.pr.error) return s.pr.branch && s.has_diff ? "PR NOT OPENED" : "NOT PUSHED";
+  if (!s.has_diff || !s.pr.branch) return "";
+  if (!s.pr.number) return "PUSHED TO BRANCH";
+  return s.pr.number !== prevPR ? `OPENED PR #${s.pr.number}` : `PUSHED TO PR #${s.pr.number}`;
 }
 
 function timing(s: Task, now: Date): string {
@@ -184,7 +187,7 @@ function replyText(s: Task, tail: string | undefined): string {
   }
   const done = sectionText(s.summary, "done");
   if (done) return done;
-  return s.has_patch ? "Finished; the changes are in the diff." : "Finished without changing any files.";
+  return s.has_diff ? "Finished; the changes are in the diff." : "Finished without changing any files.";
 }
 
 // sectionText is the first lines of one "## Heading" section of a summary.
@@ -207,6 +210,7 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
   const [agent, setAgent] = useState(latest.agent);
   const { data: models } = useModels(agent);
   const [model, setModel] = useState("");
+  const [openPR, setOpenPR] = useState(false);
   useEffect(() => {
     if (models) setModel(agent === latest.agent && models.models.some((m) => m.id === latest.model) ? latest.model : models.default);
   }, [models, agent, latest.agent, latest.model]);
@@ -215,7 +219,7 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
     mutationFn: () =>
       api<Task>(`/api/tasks/${encodeURIComponent(latest.id)}/followups`, {
         method: "POST",
-        body: JSON.stringify({ prompt: props.draft.trim(), agent, model }),
+        body: JSON.stringify({ prompt: props.draft.trim(), agent, model, ...(openPR ? { pr: true } : {}) }),
       }),
     onSuccess: () => {
       props.setDraft("");
@@ -259,14 +263,14 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
         }}
       >
         <label htmlFor="followup" className="sr-only">
-          Follow up on this pull request
+          Follow up on this thread
         </label>
         <textarea
           id="followup"
           rows={3}
           value={props.draft}
           onChange={(e) => props.setDraft(e.target.value)}
-          placeholder={`Ask for another change to PR #${latest.pr.number}…`}
+          placeholder={latest.pr.number ? `Ask for another change to PR #${latest.pr.number}…` : `Ask for another change on ${latest.pr.branch}…`}
         />
         <div className={styles.composerBar}>
           <label htmlFor="fu-agent" className="sr-only">
@@ -292,8 +296,15 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
               </option>
             ))}
           </select>
+          {!latest.pr.number && (
+            <label className={styles.composerCheck}>
+              <input type="checkbox" checked={openPR} onChange={(e) => setOpenPR(e.target.checked)} /> open a pull request
+            </label>
+          )}
           <span className={styles.composerHint}>
-            {missingKey ? `${agent} needs ${agentInfo?.credential?.name} on the server` : `starts on PR #${latest.pr.number}'s branch with the thread summary`}
+            {missingKey
+              ? `${agent} needs ${agentInfo?.credential?.name} on the server`
+              : `continues ${latest.pr.number ? `PR #${latest.pr.number}'s branch` : "the branch"} with the thread summary`}
           </span>
           <button type="submit" className={`${styles.btn} ${styles.btnPrimary} ${styles.send}`} disabled={!canSend}>
             {send.isPending ? "[ sending… ]" : "[ send ]"}
@@ -310,11 +321,11 @@ function closedReason(latest: Task, n: number): string {
   if (isLive(latest)) {
     return `Step ${n} is ${latest.state} on ${latest.agent}. You can follow up when it finishes, or cancel it from the header.`;
   }
-  if (!latest.pr.number) {
-    if (latest.pr.requested && latest.pr.error) {
-      return `This thread's pull request wasn't opened (${latest.pr.error}), so it can't take follow-ups. Start a new task to try again.`;
+  if (!latest.pr.branch) {
+    if (latest.pr.error) {
+      return `The changes weren't pushed (${latest.pr.error}), so there's no branch to continue. Start a new task to try again.`;
     }
-    return "This task didn't ask for a pull request, so it can't take follow-ups. Start a new task with \"Open a pull request\" on.";
+    return "The agent made no changes, so there's no branch to continue. Start a new task instead.";
   }
   return "";
 }
@@ -398,9 +409,9 @@ function logClass(line: string): string {
 
 function DiffView({ step }: { step: Task }) {
   const done = !isLive(step);
-  const { data: patch, isLoading, error } = usePatch(step.id, done && step.has_patch);
+  const { data: diff, isLoading, error } = useDiff(step.id, done && step.has_diff);
   if (!done) return <div className={styles.empty}>Changes appear here when the run finishes and forgerun collects them.</div>;
-  if (!step.has_patch) {
+  if (!step.has_diff) {
     return (
       <div className={styles.empty}>
         {step.state === "succeeded" ? "The agent made no changes." : "No changes were collected: the step didn't finish."}
@@ -408,10 +419,10 @@ function DiffView({ step }: { step: Task }) {
     );
   }
   if (isLoading) return <div className={styles.empty}>loading…</div>;
-  if (error) return <div className={styles.empty}>Couldn't load the patch: {error.message}</div>;
+  if (error) return <div className={styles.empty}>Couldn't load the diff: {error.message}</div>;
   return (
     <div className={styles.paneBody}>
-      {parsePatch(patch ?? "").map((f) => (
+      {parsePatch(diff ?? "").map((f) => (
         <div key={f.path} className={styles.file}>
           <div className={styles.fileHead}>
             <span>
@@ -451,7 +462,7 @@ function SummaryView({ step }: { step: Task }) {
   }
   let why = "No summary for this step.";
   if (isLive(step)) why = "The agent writes a summary of the whole thread when the run finishes.";
-  else if (!step.pr.requested) why = "Summaries are written for pull request tasks.";
   else if (step.state !== "succeeded") why = "No summary: the step didn't finish.";
+  else if (!step.has_diff) why = "No summary: the agent made no changes.";
   return <div className={styles.empty}>{why}</div>;
 }

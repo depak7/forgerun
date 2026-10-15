@@ -77,7 +77,7 @@ describe("NewTaskPage", () => {
     expect(runButton().disabled).toBe(true);
   });
 
-  it("checks the repo as you type and gates pull requests on GitHub", async () => {
+  it("checks the repo as you type and needs a GitHub repo to push to", async () => {
     server();
     renderNew("/tasks/new?prompt=x&repo=https://github.com/depak7/playground");
     expect(await screen.findByText("● WARM SNAPSHOT")).toBeTruthy();
@@ -89,8 +89,10 @@ describe("NewTaskPage", () => {
     expect(runButton().disabled).toBe(true);
 
     fireEvent.change(repoInput(), { target: { value: "https://gitlab.com/depak7/playground" } });
-    expect(screen.getByText(/Pull requests need a github.com repo/)).toBeTruthy();
+    expect(screen.getByText(/Needs a github.com repo/)).toBeTruthy();
+    expect(screen.getByText(/the repo must be on github.com/)).toBeTruthy();
     expect(prSwitch().disabled).toBe(true);
+    expect(runButton().disabled).toBe(true);
     expect(screen.getByText("COLD START")).toBeTruthy();
   });
 

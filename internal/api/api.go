@@ -77,7 +77,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/tasks/{id}/followups", srv.createFollowUp)
 	mux.HandleFunc("GET /api/tasks/{id}/thread", srv.getThread)
 	mux.HandleFunc("GET /api/tasks/{id}/log", srv.taskLog)
-	mux.HandleFunc("GET /api/tasks/{id}/patch", srv.taskPatch)
+	mux.HandleFunc("GET /api/tasks/{id}/diff", srv.taskDiff)
 	mux.HandleFunc("GET /api/agents", srv.listAgents)
 	mux.HandleFunc("GET /api/threads", srv.listThreads)
 	mux.HandleFunc("GET /api/status", srv.status)
@@ -102,12 +102,12 @@ type taskJSON struct {
 	ModelID    string     `json:"model_id"` // exact id passed to the agent
 	State      task.State `json:"state"`
 	Error      string     `json:"error"`
-	HasPatch   bool       `json:"has_patch"`
+	HasDiff    bool       `json:"has_diff"`    // the agent changed something: GET …/diff
 	SnapshotID *int64     `json:"snapshot_id"` // snapshot it was restored from; null = cold start
 	ParentID   *string    `json:"parent_id"`   // the task this one follows up; null for a thread's first task
 	ThreadID   string     `json:"thread_id"`   // the thread's first task
 	PR         prJSON     `json:"pr"`
-	Summary    string     `json:"summary"` // the agent's summary of the conversation (PR tasks); "" if none
+	Summary    string     `json:"summary"` // the agent's summary of the conversation; "" if none
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at"`  // null until running
 	FinishedAt *time.Time `json:"finished_at"` // null until finished
@@ -117,7 +117,7 @@ func toJSON(r store.Record) taskJSON {
 	return taskJSON{
 		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.AgentID,
 		Model: r.Model.Family, Effort: r.Model.Effort, Thinking: r.Model.Thinking, Fast: r.Model.Fast, ModelID: r.Model.ID,
-		State: r.State, Error: r.Error, HasPatch: r.PatchPath != "", SnapshotID: r.SnapshotID,
+		State: r.State, Error: r.Error, HasDiff: r.HasDiff, SnapshotID: r.SnapshotID,
 		PR:       prJSON{Requested: r.PR.Requested, URL: r.PR.URL, Number: r.PR.Number, Branch: r.PR.Branch, Error: r.PR.Error},
 		Summary:  r.Summary,
 		ParentID: optional(r.ParentID), ThreadID: r.ThreadID,
@@ -125,13 +125,14 @@ func toJSON(r store.Record) taskJSON {
 	}
 }
 
-// prJSON is a task's pull request in the API.
+// prJSON is where a task's changes went: its branch, and its pull request
+// if one was asked for.
 type prJSON struct {
 	Requested bool   `json:"requested"`
 	URL       string `json:"url"`    // "" until opened
 	Number    int    `json:"number"` // 0 until opened
-	Branch    string `json:"branch"` // "" until opened
-	Error     string `json:"error"`  // why it wasn't opened; "" otherwise
+	Branch    string `json:"branch"` // "" until pushed
+	Error     string `json:"error"`  // why the changes weren't pushed or the pull request wasn't opened; "" otherwise
 }
 
 // optional maps "" to a JSON null.
@@ -160,7 +161,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Effort   string `json:"effort"`
 		Thinking *bool  `json:"thinking"` // nil = not sent
 		Fast     *bool  `json:"fast"`
-		PR       bool   `json:"pr"`    // open a pull request with the changes
+		PR       bool   `json:"pr"`    // also open a pull request; the changes go to a branch either way
 		Agent    string `json:"agent"` // "" = the server's default agent
 	}
 	if !decodeBody(w, r, &req) {
@@ -174,16 +175,16 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
-	if req.PR {
-		// Refuse now rather than fail after the agent has done the work.
-		if s.prs == nil {
-			writeError(w, http.StatusBadRequest, "pull requests are disabled on this server (it has no GITHUB_TOKEN)")
-			return
-		}
+	// Refuse now rather than fail after the agent has done the work.
+	if s.prs != nil {
+		// Every task's changes are pushed to a branch, so the repo must be one we can push to.
 		if _, err := forge.ParseRepo(req.Repo); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, http.StatusBadRequest, "forgerun pushes each task's changes to a branch: "+err.Error())
 			return
 		}
+	} else if req.PR {
+		writeError(w, http.StatusBadRequest, "pull requests are disabled on this server (it has no GITHUB_TOKEN)")
+		return
 	}
 
 	agentID := cmp.Or(req.Agent, s.agent)
@@ -289,9 +290,10 @@ func (s *Server) runnable(agentID string) bool {
 	return err == nil
 }
 
-// createFollowUp continues a thread's pull request with a new request. The
-// agent works on the pull request's branch with the thread's summary as
-// context, and the result is pushed to the same pull request.
+// createFollowUp continues a thread with a new request. The agent works on
+// the thread's branch with the thread's summary as context, and the result
+// is pushed to the same branch: it updates the thread's pull request, or
+// opens one if asked and there is none yet.
 func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Prompt   string `json:"prompt"`
@@ -300,6 +302,7 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		Effort   string `json:"effort"`
 		Thinking *bool  `json:"thinking"`
 		Fast     *bool  `json:"fast"`
+		PR       *bool  `json:"pr"` // open a pull request if the thread has none; nil = as the thread asked
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -309,7 +312,7 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.prs == nil {
-		writeError(w, http.StatusBadRequest, "pull requests are disabled on this server (it has no GITHUB_TOKEN)")
+		writeError(w, http.StatusBadRequest, "follow-ups need a branch, and this server doesn't push (it has no GITHUB_TOKEN)")
 		return
 	}
 	parent, ok := s.getRecord(w, r)
@@ -317,8 +320,8 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Explain the thread rules in the user's terms; the store enforces them too.
-	if parent.PR.Number == 0 {
-		writeError(w, http.StatusConflict, "task "+parent.ID+" has no pull request to follow up on")
+	if parent.PR.Branch == "" {
+		writeError(w, http.StatusConflict, "task "+parent.ID+" has no branch to follow up on (it made no changes, or they weren't pushed)")
 		return
 	}
 	if !parent.State.Terminal() {
@@ -334,14 +337,16 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "follow up on the latest task in this thread: "+latest.ID)
 		return
 	}
-	open, err := s.prs.IsOpen(r.Context(), parent.Repo, parent.PR.Number)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "checking the pull request on GitHub: "+err.Error())
-		return
-	}
-	if !open {
-		writeError(w, http.StatusConflict, fmt.Sprintf("pull request #%d is closed or merged", parent.PR.Number))
-		return
+	if parent.PR.Number > 0 {
+		open, err := s.prs.IsOpen(r.Context(), parent.Repo, parent.PR.Number)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "checking the pull request on GitHub: "+err.Error())
+			return
+		}
+		if !open {
+			writeError(w, http.StatusConflict, fmt.Sprintf("pull request #%d is closed or merged", parent.PR.Number))
+			return
+		}
 	}
 
 	// A thread can switch agents: the context it carries is agent-neutral.
@@ -354,7 +359,11 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := task.New(parent.Repo, req.Prompt)
-	t.ModelID, t.PR, t.ParentID = v.ID, true, parent.ID
+	t.ModelID, t.ParentID = v.ID, parent.ID
+	t.PR = parent.PR.Requested
+	if req.PR != nil {
+		t.PR = *req.PR
+	}
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.storeError(w, r, err)
 		return
@@ -373,7 +382,7 @@ type threadJSON struct {
 	Steps          int       `json:"steps"`
 	Agents         []string  `json:"agents"` // each step's agent, oldest first
 	Latest         taskJSON  `json:"latest"`
-	NeedsAttention bool      `json:"needs_attention"` // the newest step failed, or its pull request didn't open
+	NeedsAttention bool      `json:"needs_attention"` // the newest step failed, or its changes weren't pushed or its pull request didn't open
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
@@ -393,7 +402,7 @@ func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
 		l := th.Latest
 		out[i] = threadJSON{ID: th.ID, Title: th.Title, Repo: th.Repo, Steps: th.Steps, Agents: th.Agents,
 			Latest: toJSON(l), UpdatedAt: th.UpdatedAt.UTC(),
-			NeedsAttention: l.State == task.Failed || (l.State == task.Succeeded && l.PR.Requested && l.PR.Error != "")}
+			NeedsAttention: l.State == task.Failed || (l.State == task.Succeeded && l.PR.Error != "")}
 	}
 	writeData(w, http.StatusOK, out)
 }
@@ -572,12 +581,21 @@ func (s *Server) taskLog(w http.ResponseWriter, r *http.Request) {
 	s.serveFile(w, r, path, "text/plain; charset=utf-8")
 }
 
-func (s *Server) taskPatch(w http.ResponseWriter, r *http.Request) {
+// taskDiff serves a task's changes as git diff text.
+func (s *Server) taskDiff(w http.ResponseWriter, r *http.Request) {
 	rec, ok := s.getRecord(w, r)
 	if !ok {
 		return
 	}
-	if rec.PatchPath == "" {
+	diff := ""
+	if rec.HasDiff {
+		var err error
+		if diff, err = s.store.Diff(r.Context(), rec.ID); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+	}
+	if diff == "" {
 		msg := "task made no changes"
 		switch {
 		case !rec.State.Terminal():
@@ -588,7 +606,8 @@ func (s *Server) taskPatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, msg)
 		return
 	}
-	s.serveFile(w, r, rec.PatchPath, "text/x-diff; charset=utf-8")
+	w.Header().Set("Content-Type", "text/x-diff; charset=utf-8")
+	http.ServeContent(w, r, "", *rec.FinishedAt, strings.NewReader(diff))
 }
 
 // catalog loads agentID's enabled models, minus those without zero data

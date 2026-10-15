@@ -231,6 +231,13 @@
   color: var(--text);
   font: inherit;
 }
+.composerCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  color: var(--muted);
+}
 .composerHint {
   color: var(--faint);
 }

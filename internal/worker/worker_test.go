@@ -84,12 +84,15 @@ func TestSuccess(t *testing.T) {
 	s := memory.New(fakeDefault)
 	tk := create(t, s)
 	startPool(t, s, fakeExec(func(context.Context, task.Task) (task.Result, error) {
-		return task.Result{LogPath: "a.log", PatchPath: "a.patch"}, nil
+		return task.Result{LogPath: "a.log", Diff: "diff --git a/x b/x\n", Branch: "forgerun/x-1"}, nil
 	}), 1, 10*time.Millisecond)
 
 	rec := waitState(t, s, tk.ID, task.Succeeded)
-	if rec.PatchPath != "a.patch" || rec.LogPath != "a.log" || rec.Error != "" {
+	if !rec.HasDiff || rec.LogPath != "a.log" || rec.Error != "" || rec.PR.Branch != "forgerun/x-1" {
 		t.Errorf("got %+v", rec)
+	}
+	if diff, err := s.Diff(context.Background(), tk.ID); err != nil || diff != "diff --git a/x b/x\n" {
+		t.Errorf("diff %q, %v", diff, err)
 	}
 }
 
@@ -289,7 +292,7 @@ func TestFollowUpContext(t *testing.T) {
 	second.ParentID = first.ID
 	finish(second, store.Outcome{State: task.Failed}) // no summary: the first one still counts
 	third := task.New("r", "rename both")
-	third.ParentID = second.ID
+	third.ParentID, third.PR = second.ID, true // as the API sets it for a thread with a pull request
 	if err := s.Create(ctx, third, "fake"); err != nil {
 		t.Fatal(err)
 	}
@@ -306,6 +309,37 @@ func TestFollowUpContext(t *testing.T) {
 			Summary: "summary 1", Requests: []string{"add greet", "add farewell"}}
 		if tk.ID != third.ID || tk.FollowUp == nil || !reflect.DeepEqual(*tk.FollowUp, want) || !tk.PR {
 			t.Errorf("follow-up = %+v / %+v", tk, tk.FollowUp)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follow-up never ran")
+	}
+}
+
+// A thread without a pull request can be followed up too: it has a branch.
+func TestFollowUpOnBranchOnlyThread(t *testing.T) {
+	s, ctx := memory.New(fakeDefault), context.Background()
+	first := task.New("r", "add greet")
+	if err := s.Create(ctx, first, "fake"); err != nil {
+		t.Fatal(err)
+	}
+	s.Start(ctx, first.ID)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, BaseCommit: "base0", Summary: "summary 1", PRBranch: "forgerun/add-greet-1"})
+	second := task.New("r", "add farewell")
+	second.ParentID = first.ID
+	if err := s.Create(ctx, second, "fake"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := make(chan task.Task, 1)
+	startPool(t, s, fakeExec(func(_ context.Context, tk task.Task) (task.Result, error) {
+		got <- tk
+		return task.Result{}, nil
+	}), 1, 10*time.Millisecond)
+	select {
+	case tk := <-got:
+		want := task.FollowUp{Branch: "forgerun/add-greet-1", ThreadBase: "base0", Summary: "summary 1", Requests: []string{"add greet"}}
+		if tk.FollowUp == nil || !reflect.DeepEqual(*tk.FollowUp, want) {
+			t.Errorf("follow-up = %+v", tk.FollowUp)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("follow-up never ran")

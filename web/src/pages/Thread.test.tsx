@@ -13,9 +13,9 @@ afterEach(() => {
 function task(over: Partial<Task>): Task {
   return {
     id: "t-1", repo: "https://github.com/depak7/playground", prompt: "Add a test", agent: "cursor", model: "auto",
-    effort: "", thinking: false, fast: false, model_id: "auto", state: "succeeded", error: "", has_patch: true,
+    effort: "", thinking: false, fast: false, model_id: "auto", state: "succeeded", error: "", has_diff: true,
     snapshot_id: null, parent_id: null, thread_id: "t-1",
-    pr: { requested: true, url: "https://github.com/depak7/playground/pull/5", number: 5, branch: "forgerun/t-1", error: "" },
+    pr: { requested: true, url: "https://github.com/depak7/playground/pull/5", number: 5, branch: "forgerun/add-a-test-t1", error: "" },
     summary: "## Done\n- Added a regression test", created_at: "2026-10-15T10:00:00Z",
     started_at: "2026-10-15T10:00:01Z", finished_at: "2026-10-15T10:02:01Z",
     ...over,
@@ -47,7 +47,7 @@ function server(steps: Task[]) {
         return ok(task({ id: "t-new", state: "queued" }));
       }
       if (url.endsWith("/thread")) return ok(steps);
-      if (url.endsWith("/patch")) return new Response(patch, { status: 200 });
+      if (url.endsWith("/diff")) return new Response(patch, { status: 200 });
       if (url.endsWith("/log")) return new Response(`==> cloning\nlog of ${url.split("/")[3]}\n`, { status: 200 });
       if (url.startsWith("/api/agents")) return ok(agents);
       if (url.startsWith("/api/models?agent=")) return ok(models(url.split("=")[1]));
@@ -70,14 +70,14 @@ function renderThread() {
   );
 }
 
-const followup = () => screen.getByLabelText("Follow up on this pull request") as HTMLTextAreaElement;
+const followup = () => screen.getByLabelText("Follow up on this thread") as HTMLTextAreaElement;
 const sendButton = () => screen.getByRole("button", { name: /send/ }) as HTMLButtonElement;
 
 describe("ThreadPage", () => {
   it("shows the newest step's output and switches when another step is picked", async () => {
     server([
       task({}),
-      task({ id: "t-2", parent_id: "t-1", prompt: "Also cover nil", agent: "claude-code", model: "sonnet", has_patch: false, summary: "", snapshot_id: 3 }),
+      task({ id: "t-2", parent_id: "t-1", prompt: "Also cover nil", agent: "claude-code", model: "sonnet", has_diff: false, summary: "", snapshot_id: 3 }),
     ]);
     renderThread();
     expect(await screen.findByRole("heading", { name: "Add a test" })).toBeTruthy();
@@ -89,14 +89,14 @@ describe("ThreadPage", () => {
     expect(await screen.findByText("log of t-1")).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "diff" }));
     expect(await screen.findByText("+// new test")).toBeTruthy();
-    expect(screen.getByRole("link", { name: /patch · step 1/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /branch ↗/ }).getAttribute("href")).toBe("https://github.com/depak7/playground/tree/forgerun/add-a-test-t1");
   });
 
   it("closes the follow-up box and offers cancel while a step runs", async () => {
-    const posted = server([task({}), task({ id: "t-2", parent_id: "t-1", state: "running", finished_at: null, has_patch: false, summary: "" })]);
+    const posted = server([task({}), task({ id: "t-2", parent_id: "t-1", state: "running", finished_at: null, has_diff: false, summary: "" })]);
     renderThread();
     expect(await screen.findByText(/Step 2 is running on cursor/)).toBeTruthy();
-    expect(screen.queryByLabelText("Follow up on this pull request")).toBeNull();
+    expect(screen.queryByLabelText("Follow up on this thread")).toBeNull();
     expect(screen.getByText("FOLLOWING LIVE OUTPUT")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /cancel step 2/ }));
@@ -104,17 +104,30 @@ describe("ThreadPage", () => {
     expect(posted[0].url).toBe("/api/tasks/t-2/cancel");
   });
 
-  it("explains why a thread without a pull request can't take follow-ups", async () => {
-    server([task({ pr: { requested: false, url: "", number: 0, branch: "", error: "" }, summary: "" })]);
+  it("explains why a thread without a branch can't take follow-ups", async () => {
+    server([task({ pr: { requested: false, url: "", number: 0, branch: "", error: "" }, has_diff: false, summary: "" })]);
     renderThread();
-    expect(await screen.findByText(/didn't ask for a pull request/)).toBeTruthy();
+    expect(await screen.findByText(/made no changes, so there's no branch to continue/)).toBeTruthy();
     expect(screen.getByRole("link", { name: /new task on this repo/ })).toBeTruthy();
+  });
+
+  it("follows up on a branch-only thread and can open its pull request", async () => {
+    const posted = server([task({ pr: { requested: false, url: "", number: 0, branch: "forgerun/add-a-test-t1", error: "" } })]);
+    renderThread();
+    expect(await screen.findByText("PUSHED TO BRANCH")).toBeTruthy();
+    expect(screen.getByText("branch only")).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("Follow up on this thread"), { target: { value: "Now open it" } });
+    fireEvent.click(screen.getByLabelText(/open a pull request/));
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0].body).toEqual({ prompt: "Now open it", agent: "cursor", model: "auto", pr: true });
   });
 
   it("retries a failed step and sends the follow-up with the chosen agent", async () => {
     const posted = server([
       task({}),
-      task({ id: "t-2", parent_id: "t-1", prompt: "Also cover nil", state: "failed", error: "agent exited 1", has_patch: false, summary: "" }),
+      task({ id: "t-2", parent_id: "t-1", prompt: "Also cover nil", state: "failed", error: "agent exited 1", has_diff: false, summary: "" }),
     ]);
     renderThread();
     expect(await screen.findByText("agent exited 1")).toBeTruthy();

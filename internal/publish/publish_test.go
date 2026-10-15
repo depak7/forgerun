@@ -109,25 +109,54 @@ func (f *fixture) publisher(token string) *Publisher {
 	}
 }
 
-func (f *fixture) request(summary string) task.PublishRequest {
-	return task.PublishRequest{TaskID: "t-1", Repo: "https://github.com/o/r", BaseCommit: f.base,
-		PatchPath: f.patch, Prompt: "Tidy up the files\nand more detail on a second line", Summary: summary}
+// read returns a file's contents, failing the test if it can't.
+func read(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+const prompt = "Tidy up the files\nand more detail on a second line"
+
+// request asks for the fixture's changes on a new branch with a pull request.
+func (f *fixture) request(t *testing.T, summary string) task.PublishRequest {
+	return task.PublishRequest{TaskID: "t-20261015-1", Repo: "https://github.com/o/r", BaseCommit: f.base,
+		Patch: read(t, f.patch), Prompt: prompt, Summary: summary, OpenPR: true}
+}
+
+func TestBranch(t *testing.T) {
+	tests := []struct{ id, prompt, want string }{
+		{"t-20261015-224534-9fe9cc", "Add a hello world program in Go", "forgerun/add-a-hello-world-program-in-go-9fe9cc"},
+		{"t-1-abcdef", "Fix the `parseDate()` bug!\nDetails: it's off by one.", "forgerun/fix-the-parsedate-bug-details-it-s-off-abcdef"},
+		{"t-1-abcdef", "Ünïcode only: 日本語", "forgerun/n-code-only-abcdef"},
+		{"t-1-abcdef", "!!!", "forgerun/abcdef"},
+		{"t-1-abcdef", strings.Repeat("x", 60), "forgerun/" + strings.Repeat("x", 40) + "-abcdef"},
+	}
+	for _, tc := range tests {
+		if got := Branch(tc.id, tc.prompt); got != tc.want {
+			t.Errorf("Branch(%q, %q) = %q, want %q", tc.id, tc.prompt, got, tc.want)
+		}
+	}
 }
 
 func TestPublish(t *testing.T) {
 	f := newFixture(t)
-	pr, err := f.publisher(secret).Publish(context.Background(), f.request("## Requested\nTidy up.\n\n## Done\nDid it.\n\n## Open\nNothing."))
+	pr, err := f.publisher(secret).Publish(context.Background(), f.request(t, "## Requested\nTidy up.\n\n## Done\nDid it.\n\n## Open\nNothing."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pr != (task.PublishedPR{URL: "https://github.com/o/r/pull/7", Number: 7, Branch: "forgerun/t-1"}) {
+	branch := Branch("t-20261015-1", prompt)
+	if pr != (task.Published{PRURL: "https://github.com/o/r/pull/7", PRNumber: 7, Branch: branch}) {
 		t.Errorf("published %+v", pr)
 	}
 
 	// The branch is on the remote: one commit on top of the task's base,
 	// with every kind of change, by forgerun.
 	check := t.TempDir()
-	sh(t, check, "git clone -q "+f.remote+" . && git checkout -q forgerun/t-1")
+	sh(t, check, "git clone -q "+f.remote+" . && git checkout -q "+branch)
 	if parent := sh(t, check, "git rev-parse HEAD~1"); parent != f.base {
 		t.Errorf("branch builds on %s, want the task's base %s", parent, f.base)
 	}
@@ -149,10 +178,10 @@ func TestPublish(t *testing.T) {
 		t.Fatalf("%d pull requests opened", len(f.pulls))
 	}
 	opened := f.pulls[0]
-	if opened["head"] != "forgerun/t-1" || opened["base"] != "main" || opened["title"] != "Tidy up the files" {
+	if opened["head"] != branch || opened["base"] != "main" || opened["title"] != "Tidy up the files" {
 		t.Errorf("pull request = %v", opened)
 	}
-	for _, s := range []string{"## Done\nDid it.", "(http://localhost:8080/api/tasks/t-1)", "Original request", "> Tidy up the files"} {
+	for _, s := range []string{"## Done\nDid it.", "(http://localhost:8080/api/tasks/t-20261015-1)", "Original request", "> Tidy up the files"} {
 		if !strings.Contains(opened["body"], s) {
 			t.Errorf("body lacks %q:\n%s", s, opened["body"])
 		}
@@ -161,7 +190,7 @@ func TestPublish(t *testing.T) {
 
 func TestPublishWithoutSummary(t *testing.T) {
 	f := newFixture(t)
-	if _, err := f.publisher(secret).Publish(context.Background(), f.request("")); err != nil {
+	if _, err := f.publisher(secret).Publish(context.Background(), f.request(t, "")); err != nil {
 		t.Fatal(err)
 	}
 	body := f.pulls[0]["body"]
@@ -177,8 +206,8 @@ func TestPublishFailures(t *testing.T) {
 
 	t.Run("branch already exists: never overwritten", func(t *testing.T) {
 		f := newFixture(t)
-		sh(t, filepath.Dir(f.remote), "git -C work push -q origin HEAD:refs/heads/forgerun/t-1")
-		_, err := f.publisher(secret).Publish(ctx, f.request(""))
+		sh(t, filepath.Dir(f.remote), "git -C work push -q origin HEAD:refs/heads/"+Branch("t-20261015-1", prompt))
+		_, err := f.publisher(secret).Publish(ctx, f.request(t, ""))
 		if err == nil || !strings.Contains(err.Error(), "git push") {
 			t.Errorf("got %v, want a rejected push", err)
 		}
@@ -186,7 +215,7 @@ func TestPublishFailures(t *testing.T) {
 	t.Run("pull request API fails after push", func(t *testing.T) {
 		f := newFixture(t)
 		f.apiStatus = http.StatusUnprocessableEntity
-		_, err := f.publisher(secret).Publish(ctx, f.request(""))
+		_, err := f.publisher(secret).Publish(ctx, f.request(t, ""))
 		if err == nil || !strings.Contains(err.Error(), "was pushed, but opening the pull request failed") ||
 			!strings.Contains(err.Error(), "A pull request already exists") {
 			t.Errorf("got %v", err)
@@ -194,14 +223,14 @@ func TestPublishFailures(t *testing.T) {
 	})
 	t.Run("rejected token", func(t *testing.T) {
 		f := newFixture(t)
-		_, err := f.publisher("github_pat_WRONG").Publish(ctx, f.request(""))
+		_, err := f.publisher("github_pat_WRONG").Publish(ctx, f.request(t, ""))
 		if err == nil || !strings.Contains(err.Error(), "Bad credentials") || strings.Contains(err.Error(), "WRONG") {
 			t.Errorf("got %v", err)
 		}
 	})
 	t.Run("unsupported host", func(t *testing.T) {
 		f := newFixture(t)
-		req := f.request("")
+		req := f.request(t, "")
 		req.Repo = "https://gitlab.com/o/r"
 		if _, err := f.publisher(secret).Publish(ctx, req); err == nil || !strings.Contains(err.Error(), "aren't supported") {
 			t.Errorf("got %v", err)
@@ -211,7 +240,7 @@ func TestPublishFailures(t *testing.T) {
 		f := newFixture(t)
 		p := f.publisher(secret)
 		p.RemoteURL = func(forge.Repo) string { return "file:///nonexistent/" + secret }
-		_, err := p.Publish(ctx, f.request(""))
+		_, err := p.Publish(ctx, f.request(t, ""))
 		if err == nil || strings.Contains(err.Error(), secret) {
 			t.Errorf("got %v", err)
 		}
@@ -238,7 +267,7 @@ func TestPublishFollowUp(t *testing.T) {
 	f := newFixture(t)
 	p := f.publisher(secret)
 	ctx := context.Background()
-	first, err := p.Publish(ctx, f.request("## Done\nfirst"))
+	first, err := p.Publish(ctx, f.request(t, "## Done\nfirst"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,14 +279,14 @@ func TestPublishFollowUp(t *testing.T) {
 	patch := filepath.Join(root, "followup.patch")
 	sh(t, work, `printf 'second round\n' >> new.txt && git add -A && git diff --cached --binary > `+patch)
 
-	req := task.PublishRequest{TaskID: "t-2", Repo: "https://github.com/o/r", BaseCommit: head, PatchPath: patch,
+	req := task.PublishRequest{TaskID: "t-2", Repo: "https://github.com/o/r", BaseCommit: head, Patch: read(t, patch),
 		Prompt: "also do more", Summary: "## Done\nfirst and second", Requests: []string{"Tidy up the files", "also do more"},
 		Branch: first.Branch, PRNumber: 7}
 	second, err := p.Publish(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second != (task.PublishedPR{URL: "https://github.com/o/r/pull/7", Number: 7, Branch: first.Branch}) {
+	if second != (task.Published{PRURL: "https://github.com/o/r/pull/7", PRNumber: 7, Branch: first.Branch}) {
 		t.Errorf("follow-up published %+v", second)
 	}
 	if len(f.pulls) != 1 || len(f.updates) != 1 {
@@ -285,7 +314,7 @@ func TestPublishFollowUp(t *testing.T) {
 	patch3 := filepath.Join(root, "third.patch")
 	sh(t, check, `printf 'third\n' > third.txt && git add -A && git diff --cached --binary > `+patch3+` && git reset -q --hard`)
 	sh(t, work, "git checkout -q -- . && git pull -q && printf 'human\n' > human.txt && git add -A && git commit -qm human && git push -q origin HEAD:"+first.Branch)
-	req.TaskID, req.BaseCommit, req.PatchPath = "t-3", third, patch3
+	req.TaskID, req.BaseCommit, req.Patch = "t-3", third, read(t, patch3)
 	if _, err := p.Publish(ctx, req); err == nil || !strings.Contains(err.Error(), "changed while the task ran") {
 		t.Errorf("moved branch: got %v", err)
 	}
@@ -305,18 +334,37 @@ func TestIsOpen(t *testing.T) {
 	}
 }
 
-// The real run's bug: serve's -out is relative ("out"), but git runs in a
-// temporary directory. A relative patch path must still work.
-func TestPublishWithRelativePatchPath(t *testing.T) {
+// Without a pull request the branch is still pushed; a later follow-up
+// on that branch can open the pull request, titled after the first request.
+func TestPublishBranchOnlyThenPR(t *testing.T) {
 	f := newFixture(t)
-	wd, _ := os.Getwd()
-	rel, err := filepath.Rel(wd, f.patch)
-	if err != nil || filepath.IsAbs(rel) {
-		t.Fatalf("can't make a relative path: %q, %v", rel, err)
+	p := f.publisher(secret)
+	ctx := context.Background()
+	req := f.request(t, "")
+	req.OpenPR = false
+	first, err := p.Publish(ctx, req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	req := f.request("")
-	req.PatchPath = rel
-	if _, err := f.publisher(secret).Publish(context.Background(), req); err != nil {
-		t.Fatalf("relative patch path %s: %v", rel, err)
+	if first != (task.Published{Branch: Branch("t-20261015-1", prompt)}) || len(f.pulls) != 0 {
+		t.Fatalf("branch only: published %+v, opened %d pull requests", first, len(f.pulls))
+	}
+	check := t.TempDir()
+	sh(t, check, "git clone -q "+f.remote+" . && git checkout -q "+first.Branch)
+	head := sh(t, check, "git rev-parse HEAD")
+	patch := filepath.Join(check, "..", "next.patch")
+	sh(t, check, `printf 'next\n' > next.txt && git add -A && git diff --cached --binary > `+patch+` && git reset -q --hard`)
+
+	second, err := p.Publish(ctx, task.PublishRequest{TaskID: "t-2", Repo: "https://github.com/o/r", BaseCommit: head,
+		Patch: read(t, patch), Prompt: "now open it", Requests: []string{"Tidy up the files", "now open it"},
+		Branch: first.Branch, OpenPR: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != (task.Published{Branch: first.Branch, PRURL: "https://github.com/o/r/pull/7", PRNumber: 7}) {
+		t.Errorf("follow-up published %+v", second)
+	}
+	if len(f.pulls) != 1 || f.pulls[0]["head"] != first.Branch || f.pulls[0]["title"] != "Tidy up the files" {
+		t.Errorf("pull requests opened: %v", f.pulls)
 	}
 }
