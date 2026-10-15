@@ -25,9 +25,15 @@ type Request struct {
 // output to logs. It must not commit; the task pipeline collects changes
 // from the working tree.
 type Agent interface {
-	ID() string                // matches agents.id in the database, e.g. "cursor"
-	Image() string             // guest image that has this agent's CLI installed
-	Secrets() []sandbox.Secret // credentials to inject via the proxy, never as plain env
+	ID() string    // matches agents.id in the database, e.g. "cursor"
+	Image() string // guest image that has this agent's CLI installed
+	// Credential names the agent's credential, e.g. "CURSOR_API_KEY": the
+	// variable it's configured in on the host and the placeholder it
+	// appears as inside the VM. "" if the agent needs none.
+	Credential() string
+	// Secrets turns the credential's value into secrets for the proxy to
+	// inject; the value itself never enters the VM.
+	Secrets(credential string) []sandbox.Secret
 	// StatePaths are paths in the VM where the agent keeps per-run state
 	// (chat history, sessions, config written by Run). They're deleted
 	// before a VM is snapshotted, so the next task starts clean.

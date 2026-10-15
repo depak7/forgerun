@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/depak7/forgerun/internal/agent"
 	"github.com/depak7/forgerun/internal/models"
+	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/memory"
 	"github.com/depak7/forgerun/internal/task"
@@ -56,7 +59,8 @@ func (p *fakePool) Cancel(id string) bool {
 func setup(t *testing.T, opts ...func(*Config)) (http.Handler, *memory.Store, *fakePool) {
 	t.Helper()
 	s, p := memory.New(testModels...), &fakePool{running: map[string]bool{}}
-	cfg := Config{Store: s, Pool: p, Agent: "cursor", Log: slog.New(slog.DiscardHandler)}
+	cfg := Config{Store: s, Pool: p, Agent: "cursor", Log: slog.New(slog.DiscardHandler),
+		Agents: agent.NewSet(agent.StaticCredentials{"CURSOR_API_KEY": "k"}, &agent.Cursor{}, otherAgent{})}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -453,7 +457,7 @@ func TestListModelsForAgent(t *testing.T) {
 	h, _, _ := setup(t, func(c *Config) { c.DefaultModel = "claude-opus-5-5" })
 	data, _ := decode(t, do(h, "GET", "/api/models?agent=other-agent", ""), http.StatusOK)
 	got := decodeModels(t, data)
-	if got.Agent != "other-agent" || got.Runnable || got.Default != "other-x" ||
+	if got.Agent != "other-agent" || !got.Runnable || got.Default != "other-x" ||
 		!slices.Equal(familyIDs(got.Models), []string{"other-x"}) {
 		t.Errorf("other-agent listing = %+v", got)
 	}
@@ -485,10 +489,18 @@ func TestListAgents(t *testing.T) {
 	}
 	want := []agentJSON{
 		{ID: "cursor", Name: "cursor", DefaultModel: "auto", Runnable: true},
-		{ID: "other-agent", Name: "other-agent", DefaultModel: "other-x", Runnable: false},
+		{ID: "other-agent", Name: "other-agent", DefaultModel: "other-x", Runnable: true},
 	}
 	if !slices.Equal(agents, want) {
 		t.Errorf("agents = %+v\nwant     %+v", agents, want)
+	}
+
+	// An agent in the database that forgerun has no adapter for is listed,
+	// but not runnable.
+	h, _, _ = setup(t, func(c *Config) { c.Agents = agent.NewSet(nil, &agent.Cursor{}) })
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/agents", ""), http.StatusOK), &agents)
+	if !slices.ContainsFunc(agents, func(a agentJSON) bool { return a.ID == "other-agent" && !a.Runnable }) {
+		t.Errorf("agent without an adapter: %+v", agents)
 	}
 }
 
@@ -615,7 +627,8 @@ func TestFollowUpRefusals(t *testing.T) {
 	}{
 		{"closed pull request", `{"prompt":"x"}`, fakePRs{open: false}, http.StatusConflict, "closed or merged"},
 		{"GitHub unreachable", `{"prompt":"x"}`, fakePRs{err: errors.New("dial tcp: timeout")}, http.StatusBadGateway, "timeout"},
-		{"other agent", `{"prompt":"x","agent":"claude-code"}`, fakePRs{open: true}, http.StatusBadRequest, "runs the cursor agent"},
+		{"agent without an adapter", `{"prompt":"x","agent":"no-such-agent"}`, fakePRs{open: true}, http.StatusBadRequest, "isn't available"},
+		{"agent without a credential", `{"prompt":"x","agent":"other-agent"}`, fakePRs{open: true}, http.StatusBadRequest, "set OTHER_KEY"},
 		{"no prompt", `{"prompt":" "}`, fakePRs{open: true}, http.StatusBadRequest, "prompt is required"},
 		{"bad model", `{"prompt":"x","model":"nope"}`, fakePRs{open: true}, http.StatusBadRequest, "nope"},
 	}
@@ -646,4 +659,78 @@ func mustData(t *testing.T, rec *httptest.ResponseRecorder, status int) json.Raw
 	t.Helper()
 	data, _ := decode(t, rec, status)
 	return data
+}
+
+// otherAgent is a second agent, whose credential is OTHER_KEY.
+type otherAgent struct{}
+
+func (otherAgent) ID() string         { return "other-agent" }
+func (otherAgent) Image() string      { return "img" }
+func (otherAgent) Credential() string { return "OTHER_KEY" }
+func (otherAgent) Secrets(v string) []sandbox.Secret {
+	return []sandbox.Secret{{EnvVar: "OTHER_KEY", Value: v}}
+}
+func (otherAgent) StatePaths() []string { return nil }
+func (otherAgent) Run(context.Context, *sandbox.Sandbox, agent.Request, io.Writer) error {
+	return nil
+}
+
+// The request picks the agent; a missing credential refuses only tasks for
+// that agent, at creation, and never hides the agent.
+func TestCreateOnChosenAgent(t *testing.T) {
+	h, s, _ := setup(t)
+	_, apiErr := decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://x.com/r","prompt":"p","agent":"other-agent"}`), http.StatusBadRequest)
+	if !strings.Contains(apiErr.Message, "no credential configured for other-agent: set OTHER_KEY") {
+		t.Errorf("no credential: %q", apiErr.Message)
+	}
+	// Still listed and runnable: a missing key hides nothing.
+	var agents []agentJSON
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/agents", ""), http.StatusOK), &agents)
+	if !slices.ContainsFunc(agents, func(a agentJSON) bool { return a.ID == "other-agent" && a.Runnable }) {
+		t.Errorf("other-agent hidden or not runnable: %+v", agents)
+	}
+
+	h, s, _ = setup(t, func(c *Config) {
+		c.Agents = agent.NewSet(agent.StaticCredentials{"CURSOR_API_KEY": "k", "OTHER_KEY": "o"}, &agent.Cursor{}, otherAgent{})
+	})
+	tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://x.com/r","prompt":"p","agent":"other-agent"}`), http.StatusCreated))
+	if tk.Agent != "other-agent" || tk.ModelID != "other-x" {
+		t.Errorf("task on agent %q, model %q; want other-agent, its default other-x", tk.Agent, tk.ModelID)
+	}
+	if rec, _ := s.Get(context.Background(), tk.ID); rec.AgentID != "other-agent" {
+		t.Errorf("stored agent %q", rec.AgentID)
+	}
+	// Models are resolved against the chosen agent.
+	_, apiErr = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://x.com/r","prompt":"p","agent":"other-agent","model":"claude-opus-5-5"}`), http.StatusBadRequest)
+	if apiErr.Message == "" {
+		t.Error("another agent's model was accepted")
+	}
+	// Without "agent", the server's default agent.
+	if tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://x.com/r","prompt":"p"}`), http.StatusCreated)); tk.Agent != "cursor" {
+		t.Errorf("default agent = %q", tk.Agent)
+	}
+	_, apiErr = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://x.com/r","prompt":"p","agent":"no-such-agent"}`), http.StatusBadRequest)
+	if !strings.Contains(apiErr.Message, "isn't available") {
+		t.Errorf("unknown agent: %q", apiErr.Message)
+	}
+}
+
+// A thread can switch agents; a follow-up without "agent" keeps the
+// previous task's.
+func TestFollowUpSwitchesAgent(t *testing.T) {
+	h, s, _ := setup(t, func(c *Config) {
+		c.PRs = fakePRs{open: true}
+		c.Agents = agent.NewSet(agent.StaticCredentials{"CURSOR_API_KEY": "k", "OTHER_KEY": "o"}, &agent.Cursor{}, otherAgent{})
+	})
+	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first","pr":true}`), http.StatusCreated))
+	finishWithPR(t, s, first.ID, task.Succeeded)
+	second := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+first.ID+"/followups", `{"prompt":"second","agent":"other-agent"}`), http.StatusCreated))
+	if second.Agent != "other-agent" || second.ModelID != "other-x" || second.ThreadID != first.ID {
+		t.Errorf("switched follow-up = agent %q model %q thread %q", second.Agent, second.ModelID, second.ThreadID)
+	}
+	finishWithPR(t, s, second.ID, task.Succeeded)
+	third := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+second.ID+"/followups", `{"prompt":"third"}`), http.StatusCreated))
+	if third.Agent != "other-agent" {
+		t.Errorf("follow-up without agent ran on %q, want the previous task's other-agent", third.Agent)
+	}
 }

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"io"
 	"strings"
 
@@ -11,31 +10,23 @@ import (
 
 // ClaudeCode runs Anthropic's Claude Code CLI, authenticated with a
 // subscription token from `claude setup-token`.
-type ClaudeCode struct {
-	token string
-}
+type ClaudeCode struct{}
 
 var (
 	_ Agent     = (*ClaudeCode)(nil)
 	_ Continuer = (*ClaudeCode)(nil)
 )
 
-// NewClaudeCode needs the token from `claude setup-token`. It reaches the
-// VM only as a placeholder; the proxy adds it for api.anthropic.com.
-func NewClaudeCode(token string) (*ClaudeCode, error) {
-	if token == "" {
-		return nil, errors.New("claude code needs a token from `claude setup-token` (CLAUDE_CODE_OAUTH_TOKEN)")
-	}
-	return &ClaudeCode{token: token}, nil
-}
+func (c *ClaudeCode) ID() string         { return "claude-code" }
+func (c *ClaudeCode) Image() string      { return "depak7/forgerun-agent-claude:dev" }
+func (c *ClaudeCode) Credential() string { return "CLAUDE_CODE_OAUTH_TOKEN" }
 
-func (c *ClaudeCode) ID() string    { return "claude-code" }
-func (c *ClaudeCode) Image() string { return "depak7/forgerun-agent-claude:dev" }
-
-func (c *ClaudeCode) Secrets() []sandbox.Secret {
+// Secrets: the token reaches the VM only as a placeholder; the proxy adds
+// it for api.anthropic.com.
+func (c *ClaudeCode) Secrets(token string) []sandbox.Secret {
 	return []sandbox.Secret{{
-		EnvVar:     "CLAUDE_CODE_OAUTH_TOKEN",
-		Value:      c.token,
+		EnvVar:     c.Credential(),
+		Value:      token,
 		AllowHosts: []string{"api.anthropic.com"},
 	}}
 }

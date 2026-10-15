@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -16,26 +15,18 @@ import (
 const cliConfig = `{"network":{"useHttp1ForAgent":true}}`
 
 // Cursor drives the Cursor CLI ("agent") in headless mode.
-type Cursor struct {
-	apiKey string
-}
+type Cursor struct{}
 
 var _ Agent = (*Cursor)(nil)
 
-func NewCursor(apiKey string) (*Cursor, error) {
-	if apiKey == "" {
-		return nil, errors.New("cursor: API key is empty (set CURSOR_API_KEY)")
-	}
-	return &Cursor{apiKey: apiKey}, nil
-}
+func (c *Cursor) ID() string         { return "cursor" }
+func (c *Cursor) Image() string      { return "depak7/forgerun-agent-cursor:dev" }
+func (c *Cursor) Credential() string { return "CURSOR_API_KEY" }
 
-func (c *Cursor) ID() string    { return "cursor" }
-func (c *Cursor) Image() string { return "depak7/forgerun-agent-cursor:dev" }
-
-func (c *Cursor) Secrets() []sandbox.Secret {
+func (c *Cursor) Secrets(apiKey string) []sandbox.Secret {
 	return []sandbox.Secret{{
-		EnvVar:     "CURSOR_API_KEY",
-		Value:      c.apiKey,
+		EnvVar:     c.Credential(),
+		Value:      apiKey,
 		AllowHosts: []string{"*.cursor.sh", "*.cursor.com"},
 	}}
 }

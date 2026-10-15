@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,10 +45,12 @@ func usage() {
   forgerun serve [-addr 127.0.0.1:8080] [-workers 2] [-timeout 15m] [-agent-idle 10m] [-out out] [-db url]
                  [-model family] [-require-zdr] [-snapshots=false]
                  [-snapshot-max-age 168h] [-snapshot-budget 20GB] [-snapshot-sweep 10m]
-  forgerun run   -repo <git-url> -prompt <task> [-timeout 15m] [-out out]
+  forgerun run   -repo <git-url> -prompt <task> [-agent cursor] [-model m] [-effort e] [-timeout 15m] [-out out]
 
 The database URL defaults to $FORGERUN_DATABASE_URL, then the docker-compose dev database.
-serve reads CURSOR_API_KEY, and GITHUB_TOKEN (optional) to open pull requests.
+Agents read their credential when a task needs it: CURSOR_API_KEY (cursor),
+CLAUDE_CODE_OAUTH_TOKEN (claude-code, from claude setup-token). serve also
+reads GITHUB_TOKEN (optional) to open pull requests.
 `)
 	os.Exit(64)
 }
@@ -56,7 +59,9 @@ func runCmd(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	repo := fs.String("repo", "", "git URL of the repo to work on")
 	prompt := fs.String("prompt", "", "task for the agent")
-	model := fs.String("model", "", "exact agent model id, e.g. claude-opus-5-5-high (default: the agent's own choice)")
+	agentID := fs.String("agent", "cursor", "agent to run: "+strings.Join(agent.NewSet(nil, agent.Builtin()...).IDs(), ", "))
+	model := fs.String("model", "", "model: an exact id for cursor (e.g. claude-opus-5-5-high), an alias for claude-code (e.g. opus); default: the agent's own")
+	effort := fs.String("effort", "", "effort, for agents that take it separately (claude-code: low … max)")
 	timeout := fs.Duration("timeout", 15*time.Minute, "max time for the whole task")
 	out := fs.String("out", "out", "directory for task results")
 	fs.Parse(args)
@@ -72,17 +77,15 @@ func runCmd(args []string) error {
 		stop() // a second Ctrl-C now force-quits
 	}()
 
-	ag, err := agent.NewCursor(os.Getenv("CURSOR_API_KEY"))
-	if err != nil {
-		return err
-	}
 	if err := sandbox.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
 
-	r := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: os.Stdout}
+	// The agent's credential is read from its environment variable when the task starts.
+	agents := agent.NewSet(agent.EnvCredentials{}, agent.Builtin()...)
+	r := &task.Runner{Agents: agents, DefaultAgent: *agentID, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: os.Stdout}
 	t := task.New(*repo, *prompt)
-	t.ModelID = *model
+	t.ModelID, t.Family, t.Effort = *model, *model, *effort
 	res, err := r.Run(ctx, t)
 	if res.LogPath != "" {
 		fmt.Println("log:", res.LogPath)

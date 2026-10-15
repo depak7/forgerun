@@ -35,7 +35,8 @@ func serveCmd(args []string) error {
 	timeout := fs.Duration("timeout", 15*time.Minute, "max time per task")
 	agentIdle := fs.Duration("agent-idle", 10*time.Minute, "stop an agent that prints nothing and changes no files for this long (0 = never)")
 	out := fs.String("out", "out", "directory for task results")
-	defaultModel := fs.String("model", "", "default model family for requests that name none (default: the agent's own)")
+	defaultAgent := fs.String("agent", "cursor", "agent for requests that name none")
+	defaultModel := fs.String("model", "", "default model family of the default agent (default: the agent's own)")
 	requireZDR := fs.Bool("require-zdr", false, "offer only models with zero data retention")
 	useSnapshots := fs.Bool("snapshots", true, "start tasks from their repo's snapshot, and save one after each successful task")
 	snapshotMaxAge := fs.Duration("snapshot-max-age", 7*24*time.Hour, "delete a repo's snapshot when no task has used it for this long (0 = never)")
@@ -55,23 +56,28 @@ func serveCmd(args []string) error {
 		stop()
 	}()
 
-	ag, err := agent.NewCursor(os.Getenv("CURSOR_API_KEY"))
-	if err != nil {
-		return err
-	}
+	// Every agent forgerun has an adapter for. Requests choose among them;
+	// credentials are read from the environment only when a task needs one.
+	agents := agent.NewSet(agent.EnvCredentials{}, agent.Builtin()...)
 	db, err := postgres.Open(ctx, *dbURL)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	if err := checkAgent(ctx, db, ag.ID()); err != nil {
+	if err := checkAgent(ctx, db, *defaultAgent); err != nil {
 		return err
 	}
-	effective, families, err := checkModels(ctx, db, ag.ID(), *defaultModel, *requireZDR)
+	if _, err := agents.Get(*defaultAgent); err != nil {
+		return fmt.Errorf("-agent: %w", err)
+	}
+	effective, families, err := checkModels(ctx, db, *defaultAgent, *defaultModel, *requireZDR)
 	if err != nil {
 		return err
 	}
-	log.Info("models loaded", "agent", ag.ID(), "families", families, "default", effective, "require_zdr", *requireZDR)
+	log.Info("models loaded", "default_agent", *defaultAgent, "families", families, "default", effective, "require_zdr", *requireZDR)
+	if err := logAgents(ctx, db, agents, log); err != nil {
+		return err
+	}
 	prTokens, err := githubTokens(ctx, os.Getenv("GITHUB_TOKEN"), &forge.GitHub{}, time.Now(), log)
 	if err != nil {
 		return err
@@ -97,7 +103,7 @@ func serveCmd(args []string) error {
 		log.Warn("marked orphaned running tasks as failed", "count", n)
 	}
 
-	runner := &task.Runner{Agent: ag, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, AgentIdle: *agentIdle, Stdout: io.Discard}
+	runner := &task.Runner{Agents: agents, DefaultAgent: *defaultAgent, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, AgentIdle: *agentIdle, Stdout: io.Discard}
 	var prs api.PRs // stays a nil interface when PRs are off (a nil *Publisher in it wouldn't be)
 	var publisher *publish.Publisher
 	if prTokens != nil {
@@ -126,7 +132,7 @@ func serveCmd(args []string) error {
 	}
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
-		Handler: api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agent: ag.ID(),
+		Handler: api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
 			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Log: log})),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -186,6 +192,29 @@ func githubTokens(ctx context.Context, value string, gh *forge.GitHub, now time.
 		log.Warn("github token expires soon; pull requests will fail after that", "expires", id.Expires.Format(time.DateTime))
 	}
 	return forge.NewStaticToken(tok), nil
+}
+
+// logAgents reports each agent forgerun can run and whether its credential
+// is set. This is information only: a missing credential refuses tasks for
+// that agent when they're created, and nothing else. An adapter without a
+// row in the agents table is a setup error (migrations not applied).
+func logAgents(ctx context.Context, db store.Store, agents agent.Set, log *slog.Logger) error {
+	for _, id := range agents.IDs() {
+		a, err := db.GetAgent(ctx, id)
+		if errors.Is(err, store.ErrAgentNotFound) {
+			return fmt.Errorf("agent %q has no row in the agents table; are the migrations applied?", id)
+		}
+		if err != nil {
+			return err
+		}
+		ag, _ := agents.Get(id)
+		credential := "set"
+		if err := agents.Check(ctx, id); err != nil {
+			credential = "missing (" + ag.Credential() + "); its tasks will be refused"
+		}
+		log.Info("agent", "id", id, "enabled", a.Enabled, "credential", credential)
+	}
+	return nil
 }
 
 // checkAgent makes sure the database knows the agent this server runs and

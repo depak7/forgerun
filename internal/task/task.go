@@ -31,6 +31,7 @@ type Task struct {
 	ID      string
 	Repo    string // git URL
 	Prompt  string
+	AgentID string // which agent runs it; "" = Runner.DefaultAgent
 	ModelID string // exact agent model id; "" or "auto" lets the agent choose
 	Family  string // the model's family, e.g. "opus"; "" if unknown
 	Effort  string // the model's effort, e.g. "high"; "" = the agent's default
@@ -76,12 +77,15 @@ type Result struct {
 
 // Runner holds settings shared by every task.
 type Runner struct {
-	Agent   agent.Agent
-	OutDir  string
-	CPUs    uint8
-	MemMiB  uint32
-	Timeout time.Duration
-	Stdout  io.Writer // live progress; also saved to the log file
+	// Agents are the agents tasks can run on, with their credentials.
+	Agents agent.Set
+	// DefaultAgent runs tasks that name no agent (e.g. from the CLI).
+	DefaultAgent string
+	OutDir       string
+	CPUs         uint8
+	MemMiB       uint32
+	Timeout      time.Duration
+	Stdout       io.Writer // live progress; also saved to the log file
 	// AgentIdle stops an agent that produces no output and changes no
 	// files for this long, failing the task early. 0 = never.
 	AgentIdle time.Duration
@@ -111,18 +115,27 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 
 	step := func(format string, a ...any) { fmt.Fprintf(logs, "==> "+format+"\n", a...) }
 
+	ag, err := r.Agents.Get(cmp.Or(t.AgentID, r.DefaultAgent))
+	if err != nil {
+		return res, err
+	}
+	// The credential is fetched now, for this task only.
+	secrets, err := r.Agents.Secrets(ctx, ag)
+	if err != nil {
+		return res, err
+	}
 	cfg := sandbox.Config{
-		Image:       r.Agent.Image(),
+		Image:       ag.Image(),
 		CPUs:        r.CPUs,
 		MemoryMiB:   r.MemMiB,
 		MaxLifetime: r.Timeout + snapshotTimeout + 2*time.Minute, // backstop if we crash
-		Secrets:     r.Agent.Secrets(),
+		Secrets:     secrets,
 	}
 	start := time.Now()
-	sb := r.restore(ctx, t, cfg, step)
+	sb := r.restore(ctx, ag, t, cfg, step)
 	warm := sb != nil
 	if !warm {
-		step("creating sandbox %s (%s)", t.ID, r.Agent.Image())
+		step("creating sandbox %s (%s)", t.ID, ag.Image())
 		if sb, err = sandbox.New(ctx, t.ID, cfg); err != nil {
 			return res, err
 		}
@@ -156,8 +169,8 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	}
 	res.BaseCommit = strings.TrimSpace(res.BaseCommit)
 
-	step("running %s agent (model: %s)", r.Agent.ID(), cmp.Or(t.ModelID, "auto"))
-	if err := r.runAgent(ctx, sb, t, logs, step); err != nil {
+	step("running %s agent (model: %s)", ag.ID(), cmp.Or(t.ModelID, "auto"))
+	if err := r.runAgent(ctx, ag, sb, t, logs, step); err != nil {
 		return res, fmt.Errorf("agent: %w", err)
 	}
 
@@ -183,9 +196,9 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	}
 
 	if t.PR && res.PatchPath != "" {
-		r.summarize(ctx, sb, t, &res, step) // before the snapshot cleanup wipes the chat
+		r.summarize(ctx, ag, sb, t, &res, step) // before the snapshot cleanup wipes the chat
 	}
-	r.saveSnapshot(ctx, sb, t, step)
+	r.saveSnapshot(ctx, ag, sb, t, step)
 	if t.PR {
 		r.publish(ctx, t, &res, step)
 	}
@@ -193,17 +206,17 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 }
 
 // runAgent runs the agent, under a watchdog when AgentIdle is set.
-func (r *Runner) runAgent(ctx context.Context, sb *sandbox.Sandbox, t Task, logs io.Writer, step func(string, ...any)) error {
+func (r *Runner) runAgent(ctx context.Context, ag agent.Agent, sb *sandbox.Sandbox, t Task, logs io.Writer, step func(string, ...any)) error {
 	req := agent.Request{Dir: repoDir, Prompt: prompt(t), ModelID: t.ModelID, Family: t.Family, Effort: t.Effort}
 	if r.AgentIdle <= 0 {
-		return r.Agent.Run(ctx, sb, req, logs)
+		return ag.Run(ctx, sb, req, logs)
 	}
 	agentCtx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	dog := newWatchdog(r.AgentIdle, fileProbe(sb, append([]string{repoDir}, r.Agent.StatePaths()...)))
+	dog := newWatchdog(r.AgentIdle, fileProbe(sb, append([]string{repoDir}, ag.StatePaths()...)))
 	go dog.Watch(agentCtx, stop)
 
-	err := r.Agent.Run(agentCtx, sb, req, dog.Writer(logs))
+	err := ag.Run(agentCtx, sb, req, dog.Writer(logs))
 	if cause := context.Cause(agentCtx); errors.Is(cause, errStalled) {
 		step("stopped the agent: %v", cause)
 		return cause
@@ -228,10 +241,10 @@ func fileProbe(sb *sandbox.Sandbox, paths []string) func(context.Context) bool {
 // summarize asks the agent, in its own conversation, for a summary of what
 // was asked and done. Agents that can't continue a conversation give none;
 // the pull request then describes the request and the changed files.
-func (r *Runner) summarize(ctx context.Context, sb *sandbox.Sandbox, t Task, res *Result, step func(string, ...any)) {
-	c, ok := r.Agent.(agent.Continuer)
+func (r *Runner) summarize(ctx context.Context, ag agent.Agent, sb *sandbox.Sandbox, t Task, res *Result, step func(string, ...any)) {
+	c, ok := ag.(agent.Continuer)
 	if !ok {
-		step("%s agent can't continue its conversation; no summary", r.Agent.ID())
+		step("%s agent can't continue its conversation; no summary", ag.ID())
 		return
 	}
 	step("asking the agent for a summary")
@@ -298,12 +311,12 @@ func (r *Runner) publish(ctx context.Context, t Task, res *Result, step func(str
 // restore returns a VM started from the repo's snapshot, ready to run the
 // agent, or nil if the task must start cold: snapshots are off, the repo
 // has none yet, or it couldn't be used. A snapshot never fails a task.
-func (r *Runner) restore(ctx context.Context, t Task, cfg sandbox.Config, step func(string, ...any)) *sandbox.Sandbox {
+func (r *Runner) restore(ctx context.Context, ag agent.Agent, t Task, cfg sandbox.Config, step func(string, ...any)) *sandbox.Sandbox {
 	if r.Snapshots == nil {
 		return nil
 	}
 	sb, err := r.Snapshots.Restore(ctx, RestoreRequest{
-		TaskID: t.ID, Repo: t.Repo, AgentID: r.Agent.ID(), RepoDir: repoDir, Config: cfg,
+		TaskID: t.ID, Repo: t.Repo, AgentID: ag.ID(), RepoDir: repoDir, Config: cfg,
 	}, step)
 	switch {
 	case errors.Is(err, ErrNoSnapshot):
@@ -318,7 +331,7 @@ func (r *Runner) restore(ctx context.Context, t Task, cfg sandbox.Config, step f
 
 // saveSnapshot keeps the VM as the repo's snapshot. The task has already
 // succeeded, so a failure here is only a warning in the log.
-func (r *Runner) saveSnapshot(ctx context.Context, sb *sandbox.Sandbox, t Task, step func(string, ...any)) {
+func (r *Runner) saveSnapshot(ctx context.Context, ag agent.Agent, sb *sandbox.Sandbox, t Task, step func(string, ...any)) {
 	if r.Snapshots == nil || ctx.Err() != nil { // off, or the task was cancelled
 		return
 	}
@@ -327,7 +340,7 @@ func (r *Runner) saveSnapshot(ctx context.Context, sb *sandbox.Sandbox, t Task, 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotTimeout)
 	defer cancel()
 	err := r.Snapshots.Save(ctx, sb, SnapshotRequest{
-		TaskID: t.ID, Repo: t.Repo, AgentID: r.Agent.ID(), RepoDir: repoDir, StatePaths: r.Agent.StatePaths(),
+		TaskID: t.ID, Repo: t.Repo, AgentID: ag.ID(), RepoDir: repoDir, StatePaths: ag.StatePaths(),
 	}, step)
 	if err != nil {
 		step("warning: snapshot not saved: %v", err)

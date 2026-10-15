@@ -25,10 +25,11 @@ const testRepo = "https://github.com/octocat/Hello-World" // tiny; default branc
 // and state in its own home folder. If fail is set, it then fails.
 type messyAgent struct{ fail bool }
 
-func (messyAgent) ID() string                { return "fake" }
-func (messyAgent) Image() string             { return "depak7/forgerun-agent-cursor:dev" }
-func (messyAgent) Secrets() []sandbox.Secret { return nil }
-func (messyAgent) StatePaths() []string      { return []string{"/root/.fake-agent"} }
+func (messyAgent) ID() string                      { return "fake" }
+func (messyAgent) Image() string                   { return "depak7/forgerun-agent-cursor:dev" }
+func (messyAgent) Credential() string              { return "" }
+func (messyAgent) Secrets(string) []sandbox.Secret { return nil }
+func (messyAgent) StatePaths() []string            { return []string{"/root/.fake-agent"} }
 func (a messyAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
 	// The first two lines report what the task started with, for the tests.
 	script := `set -e
@@ -62,7 +63,7 @@ func setup(t *testing.T, a agent.Agent) (*task.Runner, *memory.Store) {
 			sandbox.DeleteSnapshot(context.Background(), snap.Ref)
 		}
 	})
-	r := &task.Runner{Agent: a, OutDir: t.TempDir(), CPUs: 1, MemMiB: 1024, Timeout: 5 * time.Minute,
+	r := &task.Runner{Agents: agent.NewSet(nil, a), DefaultAgent: a.ID(), OutDir: t.TempDir(), CPUs: 1, MemMiB: 1024, Timeout: 5 * time.Minute,
 		Stdout: io.Discard, Snapshots: &Manager{Store: s, Prefix: testPrefix}}
 	return r, s
 }

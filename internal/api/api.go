@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/depak7/forgerun/internal/agent"
 	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
@@ -32,10 +33,11 @@ type Pool interface {
 type Config struct {
 	Store        store.Store
 	Pool         Pool
-	Agent        string // id of the agent new tasks run on, e.g. "cursor"; only its models are offered
-	DefaultModel string // model family used when a request names none; "" = the agent's own default
-	RequireZDR   bool   // offer only models with zero data retention
-	PRs          PRs    // pull requests; nil = off (the server has no GitHub token)
+	Agents       agent.Set // the agents tasks can run on, and their credentials
+	Agent        string    // the agent for requests that name none, e.g. "cursor"
+	DefaultModel string    // model family used when a request names none; "" = the agent's own default
+	RequireZDR   bool      // offer only models with zero data retention
+	PRs          PRs       // pull requests; nil = off (the server has no GitHub token)
 	Log          *slog.Logger
 }
 
@@ -47,6 +49,7 @@ type PRs interface {
 }
 
 type Server struct {
+	agents       agent.Set
 	store        store.Store
 	pool         Pool
 	agent        string
@@ -58,7 +61,7 @@ type Server struct {
 
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
-	srv := &Server{store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
+	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
 		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
@@ -148,7 +151,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Effort   string `json:"effort"`
 		Thinking *bool  `json:"thinking"` // nil = not sent
 		Fast     *bool  `json:"fast"`
-		PR       bool   `json:"pr"` // open a pull request with the changes
+		PR       bool   `json:"pr"`    // open a pull request with the changes
+		Agent    string `json:"agent"` // "" = the server's default agent
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -173,14 +177,18 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	v, ok := s.resolveModel(w, r, models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast})
+	agentID := cmp.Or(req.Agent, s.agent)
+	if !s.checkAgent(w, r, agentID) {
+		return
+	}
+	v, ok := s.resolveModel(w, r, agentID, models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast})
 	if !ok {
 		return
 	}
 
 	t := task.New(req.Repo, req.Prompt)
 	t.ModelID, t.PR = v.ID, req.PR
-	if err := s.store.Create(r.Context(), t, s.agent); err != nil {
+	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
@@ -208,13 +216,13 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 
 // resolveModel turns a request's model choice into an exact model of the
 // server's agent, writing the error response itself if it can't.
-func (s *Server) resolveModel(w http.ResponseWriter, r *http.Request, ch models.Choice) (models.Variant, bool) {
-	cat, err := s.catalog(r.Context(), s.agent)
+func (s *Server) resolveModel(w http.ResponseWriter, r *http.Request, agentID string, ch models.Choice) (models.Variant, bool) {
+	cat, err := s.catalog(r.Context(), agentID)
 	if err != nil {
 		s.internalError(w, r, err)
 		return models.Variant{}, false
 	}
-	v, err := cat.Resolve(ch, s.defaultModel)
+	v, err := cat.Resolve(ch, s.defaultFamily(agentID, cat))
 	if errors.Is(err, models.ErrInvalidChoice) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return models.Variant{}, false
@@ -226,13 +234,44 @@ func (s *Server) resolveModel(w http.ResponseWriter, r *http.Request, ch models.
 	return v, true
 }
 
+// checkAgent makes sure a task can run on agentID now: forgerun has an
+// adapter for it, it's enabled, and its credential is configured. It writes
+// the error response itself if not.
+func (s *Server) checkAgent(w http.ResponseWriter, r *http.Request, agentID string) bool {
+	if _, err := s.agents.Get(agentID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return false
+	}
+	a, err := s.store.GetAgent(r.Context(), agentID)
+	if errors.Is(err, store.ErrAgentNotFound) || (err == nil && !a.Enabled) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("agent %q is not enabled", agentID))
+		return false
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return false
+	}
+	// Checked now so the user hears at once, not after the task waits in the queue.
+	if err := s.agents.Check(r.Context(), agentID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return false
+	}
+	return true
+}
+
+// runnable reports whether forgerun has an adapter for the agent.
+func (s *Server) runnable(agentID string) bool {
+	_, err := s.agents.Get(agentID)
+	return err == nil
+}
+
 // createFollowUp continues a thread's pull request with a new request. The
 // agent works on the pull request's branch with the thread's summary as
 // context, and the result is pushed to the same pull request.
 func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Prompt   string `json:"prompt"`
-		Agent    string `json:"agent"` // "" = the server's agent
+		Agent    string `json:"agent"` // "" = the agent of the task it follows
 		Model    string `json:"model"`
 		Effort   string `json:"effort"`
 		Thinking *bool  `json:"thinking"`
@@ -243,10 +282,6 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
 		writeError(w, http.StatusBadRequest, "prompt is required")
-		return
-	}
-	if req.Agent != "" && req.Agent != s.agent {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("this server runs the %s agent; %q isn't available here", s.agent, req.Agent))
 		return
 	}
 	if s.prs == nil {
@@ -285,13 +320,18 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	v, ok := s.resolveModel(w, r, models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast})
+	// A thread can switch agents: the context it carries is agent-neutral.
+	agentID := cmp.Or(req.Agent, parent.AgentID)
+	if !s.checkAgent(w, r, agentID) {
+		return
+	}
+	v, ok := s.resolveModel(w, r, agentID, models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast})
 	if !ok {
 		return
 	}
 	t := task.New(parent.Repo, req.Prompt)
 	t.ModelID, t.PR, t.ParentID = v.ID, true, parent.ID
-	if err := s.store.Create(r.Context(), t, s.agent); err != nil {
+	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.storeError(w, r, err)
 		return
 	}
@@ -431,7 +471,7 @@ func (s *Server) models(ctx context.Context) ([]models.Variant, error) {
 }
 
 // defaultFamily is the model family used when a request names none. The
-// server's DefaultModel applies only to the agent this server runs.
+// server's DefaultModel applies only to its default agent.
 func (s *Server) defaultFamily(agentID string, cat *models.Catalog) string {
 	if agentID == s.agent && s.defaultModel != "" {
 		return s.defaultModel
@@ -443,7 +483,7 @@ type agentJSON struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	DefaultModel string `json:"default_model"` // model family
-	Runnable     bool   `json:"runnable"`      // this server can run tasks with it
+	Runnable     bool   `json:"runnable"`      // forgerun has an adapter for it (a credential is checked per task)
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
@@ -460,7 +500,7 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 	out := make([]agentJSON, 0, len(agents))
 	for _, a := range agents {
 		cat := models.NewCatalog(a.ID, vs)
-		out = append(out, agentJSON{ID: a.ID, Name: a.Name, DefaultModel: s.defaultFamily(a.ID, cat), Runnable: a.ID == s.agent})
+		out = append(out, agentJSON{ID: a.ID, Name: a.Name, DefaultModel: s.defaultFamily(a.ID, cat), Runnable: s.runnable(a.ID)})
 	}
 	writeData(w, http.StatusOK, out)
 }
@@ -508,7 +548,7 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 		Runnable bool         `json:"runnable"` // this server can run tasks with this agent
 		Default  string       `json:"default"`
 		Models   []familyJSON `json:"models"`
-	}{agentID, agentID == s.agent, s.defaultFamily(agentID, cat), out})
+	}{agentID, s.runnable(agentID), s.defaultFamily(agentID, cat), out})
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

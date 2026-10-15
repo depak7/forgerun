@@ -9,23 +9,11 @@ import (
 	"testing"
 )
 
-func TestNewClaudeCodeRequiresToken(t *testing.T) {
-	if _, err := NewClaudeCode(""); err == nil {
-		t.Fatal("expected an error for an empty token")
-	}
-	c, err := NewClaudeCode("tok")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.ID() != "claude-code" || c.Image() == "" {
-		t.Errorf("ID %q, image %q", c.ID(), c.Image())
-	}
-}
-
 func TestClaudeCodeTokenGoesThroughSecrets(t *testing.T) {
-	c, _ := NewClaudeCode("tok")
-	s := c.Secrets()
-	if len(s) != 1 || s[0].EnvVar != "CLAUDE_CODE_OAUTH_TOKEN" || s[0].Value != "tok" {
+	c := &ClaudeCode{}
+	s := c.Secrets("tok")
+	if c.ID() != "claude-code" || c.Credential() != "CLAUDE_CODE_OAUTH_TOKEN" ||
+		len(s) != 1 || s[0].EnvVar != "CLAUDE_CODE_OAUTH_TOKEN" || s[0].Value != "tok" {
 		t.Fatalf("Secrets() = %+v", s)
 	}
 	if !slices.Equal(s[0].AllowHosts, []string{"api.anthropic.com"}) {

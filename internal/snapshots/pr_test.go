@@ -152,10 +152,11 @@ func TestPullRequestsDisabled(t *testing.T) {
 // promptAgent records what it was asked and where it ran, then edits a file.
 type promptAgent struct{ asked *[]string }
 
-func (promptAgent) ID() string                { return "fake" }
-func (promptAgent) Image() string             { return "depak7/forgerun-agent-cursor:dev" }
-func (promptAgent) Secrets() []sandbox.Secret { return nil }
-func (promptAgent) StatePaths() []string      { return nil }
+func (promptAgent) ID() string                      { return "fake" }
+func (promptAgent) Image() string                   { return "depak7/forgerun-agent-cursor:dev" }
+func (promptAgent) Credential() string              { return "" }
+func (promptAgent) Secrets(string) []sandbox.Secret { return nil }
+func (promptAgent) StatePaths() []string            { return nil }
 func (a promptAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
 	*a.asked = append(*a.asked, req.Prompt)
 	// Show the branch, prove the diff command from the prompt works, then edit.
