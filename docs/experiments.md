@@ -352,6 +352,30 @@ with a dummy token first, then the owner's real token.
 - Because effort is a separate flag, the agent request carries the model's family and
   effort, not just its ID.
 
+## 10. Rolling snapshots grow even when nothing changes
+
+**Question.** The playground/cursor snapshot grew on every task (20.6 → 31.4 → 73 → 84 MB),
+even for tasks that changed nothing. What is growing?
+
+**Test** (a throwaway program in `out/snapexp`): restore the current snapshot into a test VM,
+measure what's in it, try to give freed space back, snapshot it into a test group, compare.
+
+**Results.**
+- Inside the VM, `df /` reported **7 MB** used; the snapshot's layer files took **71 MB**.
+- `/` is an overlay; its writable layer is an ext4 disk (`/dev/vdb`) the runtime mounts out of
+  the agent's view. `fstrim` on the overlay fails ("discard not supported"); mounting `/dev/vdb`
+  and trimming it reports 3.9 GiB trimmed, yet the new snapshot was **still 71.8 MB**.
+- So the qcow2 layers keep every block ever written: each task's temporary files (git objects,
+  agent state, caches), deleted by the cleanup, stay in the snapshot. Compaction merges layers
+  but doesn't drop freed blocks. The SDK (v0.7.7) has no discard or sparsify option.
+
+**Decision.** forgerun works around it: after saving, it compares the snapshot's size with
+the VM's used bytes and drops the snapshot when it's over 2× plus 64 MB; the next task starts
+cold and saves a compact one (real run: 84.5 MB dropped → cold start → 16.8 MB). The proper
+fix is in microsandbox (pass discards through to the layer files); worth reporting upstream.
+
+---
+
 ## Researched, not yet tested: Claude Code authentication
 
 Based on community guides and issue reports (not official docs), to be confirmed by

@@ -328,3 +328,21 @@ func readyLine(log string) string {
 	}
 	return "(no ready line)"
 }
+
+func TestBloated(t *testing.T) {
+	const mb = 1 << 20
+	tests := []struct {
+		size, used int64
+		want       bool
+	}{
+		{21 * mb, 7 * mb, false},     // a fresh snapshot of a small repo: filesystem overhead only
+		{82 * mb, 7 * mb, true},      // the same repo after a few rolling saves: mostly freed space
+		{1050 * mb, 500 * mb, false}, // a big repo, some growth
+		{1100 * mb, 500 * mb, true},  // more than twice its files, plus slack
+	}
+	for _, tc := range tests {
+		if got := bloated(tc.size, tc.used); got != tc.want {
+			t.Errorf("bloated(%d MB on disk, %d MB used) = %v, want %v", tc.size/mb, tc.used/mb, got, tc.want)
+		}
+	}
+}

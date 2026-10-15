@@ -80,6 +80,10 @@ func (m *Manager) Save(ctx context.Context, sb *sandbox.Sandbox, req task.Snapsh
 	if err != nil {
 		return err
 	}
+	used, err := usedBytes(ctx, sb)
+	if err != nil {
+		logf("warning: measuring the VM's files: %v", err) // only the bloat check is skipped
+	}
 
 	before, after, err := sb.Compact(ctx)
 	if err != nil {
@@ -108,6 +112,16 @@ func (m *Manager) Save(ctx context.Context, sb *sandbox.Sandbox, req task.Snapsh
 			logf("warning: previous snapshot %d not deleted: %v", retired.ID, err)
 		} else {
 			logf("previous snapshot %d deleted", retired.ID)
+		}
+	}
+	if used > 0 && bloated(saved.SizeBytes, used) {
+		// Space freed inside the VM is never given back by the disk files,
+		// so a rolling snapshot only grows. Drop it: the next task starts
+		// cold and saves a compact one.
+		if err := m.remove(ctx, saved); err != nil {
+			logf("warning: snapshot %d is bloated but couldn't be dropped: %v", saved.ID, err)
+		} else {
+			logf("snapshot %d dropped: %s on disk for %s of files; the next task starts fresh", saved.ID, size(saved.SizeBytes), size(used))
 		}
 	}
 	return nil
@@ -235,6 +249,35 @@ func slug(s string) string {
 		}
 	}
 	return strings.TrimSuffix(b.String(), "-")
+}
+
+// bloatSlack is disk a snapshot may use beyond twice its files before it's
+// replaced: a fresh snapshot already carries filesystem overhead (about
+// 15 MB on a small repo), and a cold start shouldn't be forced for little.
+const bloatSlack = 64 << 20
+
+// bloated reports whether a snapshot of sizeBytes on disk holds so little
+// live data (usedBytes) that starting fresh is better than keeping it.
+func bloated(sizeBytes, usedBytes int64) bool {
+	return sizeBytes > 2*usedBytes+bloatSlack
+}
+
+// usedBytes is the space the VM's files really use, as df reports for its
+// root filesystem.
+func usedBytes(ctx context.Context, sb *sandbox.Sandbox) (int64, error) {
+	out, err := sb.Run(ctx, sandbox.Cmd{Name: "df", Args: []string{"-B1", "--output=used", "/"}})
+	if err != nil {
+		return 0, err
+	}
+	fields := strings.Fields(out) // "Used" then the number
+	if len(fields) < 2 {
+		return 0, fmt.Errorf("unexpected df output %q", out)
+	}
+	var n int64
+	if _, err := fmt.Sscan(fields[len(fields)-1], &n); err != nil {
+		return 0, fmt.Errorf("unexpected df output %q", out)
+	}
+	return n, nil
 }
 
 // size formats bytes for the log, e.g. "39.2 MB" or "3.1 GB".
