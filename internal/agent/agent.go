@@ -19,6 +19,10 @@ type Request struct {
 	// high). Agents whose IDs already encode them (Cursor) ignore these.
 	Family string
 	Effort string
+	// Continue asks the agent to carry on the conversation an earlier Run
+	// started in this VM, so it remembers what was said and done. Only
+	// agents that are Continuers honour it; the caller checks that.
+	Continue bool
 }
 
 // Agent edits the repository at req.Dir according to req.Prompt, streaming its
@@ -41,11 +45,12 @@ type Agent interface {
 	Run(ctx context.Context, sb *sandbox.Sandbox, req Request, logs io.Writer) error
 }
 
-// Continuer is an optional Agent capability: sending one more prompt to the
-// conversation the last Run started, in the same VM, and returning the
-// reply. forgerun uses it to ask for a summary of the conversation, which
-// only the agent's own chat can give (what the user asked for as well as
-// what was done). It must not change files.
+// Continuer is an optional Agent capability: carrying on the conversation
+// the last Run started in the same VM. A Continuer honours Request.Continue
+// in Run, and Continue sends one read-only prompt and returns the reply;
+// forgerun uses that for summaries, which only the agent's own chat can
+// give (what the user asked for as well as what was done). Continue must
+// not change files.
 //
 // Check for it with a type assertion: if c, ok := a.(Continuer); ok { ... }
 type Continuer interface {

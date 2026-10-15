@@ -31,9 +31,9 @@ func TestPublishToGitHub(t *testing.T) {
 	p := &Publisher{Tokens: forge.NewStaticToken(forge.NewToken(token)), GitHub: &forge.GitHub{}}
 	id := "test-" + time.Now().Format("20060102-150405") // a new branch every run
 	pr, err := p.Publish(context.Background(), task.PublishRequest{
-		TaskID: id, Repo: repo, BaseCommit: base, Patch: read(t, patch), OpenPR: true,
-		Prompt:  "Publish test: append a line to the README",
-		Summary: "## Requested\nAppend a line to the README.\n\n## Done\nAppended it and added forgerun-test.txt.\n\n## Open\nNothing; this is a test.",
+		ThreadID: id, Repo: repo, BaseCommit: base, Patches: []string{read(t, patch)}, OpenPR: true,
+		Requests: []string{"Publish test: append a line to the README"},
+		Summary:  "## Requested\nAppend a line to the README.\n\n## Done\nAppended it and added forgerun-test.txt.\n\n## Open\nNothing; this is a test.",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -45,12 +45,11 @@ func TestPublishToGitHub(t *testing.T) {
 
 	// A follow-up: a commit on top of the branch, and a refreshed description.
 	work := filepath.Join(dir, "fu")
-	head := sh(t, dir, "git clone -q --depth=1 --branch "+pr.Branch+" "+repo+" fu && git -C fu rev-parse HEAD")
+	sh(t, dir, "git clone -q --depth=1 --branch "+pr.Branch+" "+repo+" fu")
 	patch2 := filepath.Join(dir, "followup.patch")
 	sh(t, work, `printf 'Second round.\n' >> forgerun-test.txt && git add -A && git diff --cached --binary > `+patch2)
 	again, err := p.Publish(context.Background(), task.PublishRequest{
-		TaskID: id + "-2", Repo: repo, BaseCommit: head, Patch: read(t, patch2),
-		Prompt:   "Publish test: a second round",
+		ThreadID: id, Repo: repo, BaseCommit: base, Patches: []string{read(t, patch2)},
 		Summary:  "## Requested\nBoth rounds.\n\n## Done\nAppended a line, then a second round.\n\n## Open\nNothing.",
 		Requests: []string{"Publish test: append a line to the README", "Publish test: a second round"},
 		Branch:   pr.Branch, PRNumber: pr.PRNumber,

@@ -24,25 +24,25 @@ function task(over: Partial<Task>): Task {
     id: "t-20261015-000000-aaaaaa", repo: "https://github.com/depak7/playground", prompt: "p", agent: "cursor", model: "auto",
     effort: "", thinking: false, fast: false, model_id: "auto", state: "succeeded", error: "", has_diff: true, snapshot_id: null,
     parent_id: null, thread_id: "t-20261015-000000-aaaaaa", pr: { requested: false, url: "", number: 0, branch: "", error: "" },
-    summary: "", created_at: new Date().toISOString(), started_at: null, finished_at: null, ...over,
+    summary: "", reply: "", pushed: false, created_at: new Date().toISOString(), started_at: null, finished_at: null, ...over,
   };
 }
 
 const threads: Thread[] = [
   {
     id: "t-1", title: "Add a CONTRIBUTING.md", repo: "https://github.com/depak7/playground", steps: 3, agents: ["cursor", "claude-code", "cursor"],
-    needs_attention: false, updated_at: new Date().toISOString(),
+    needs_attention: false, session_open: false, updated_at: new Date().toISOString(),
     latest: task({ id: "t-20261015-140200-6a2c11", prompt: "Add a reporting contact", state: "running", started_at: new Date(Date.now() - 134_000).toISOString(),
       pr: { requested: true, url: "u", number: 5, branch: "b", error: "" } }),
   },
   {
     id: "t-2", title: "Document the sweep flags", repo: "https://github.com/depak7/forgerun", steps: 1, agents: ["claude-code"],
-    needs_attention: true, updated_at: new Date().toISOString(),
+    needs_attention: true, session_open: false, updated_at: new Date().toISOString(),
     latest: task({ agent: "claude-code", pr: { requested: true, url: "", number: 0, branch: "", error: "the token needs: contents=write" } }),
   },
   {
     id: "t-3", title: "Upgrade the test runner", repo: "https://github.com/depak7/playground", steps: 1, agents: ["cursor"],
-    needs_attention: true, updated_at: new Date().toISOString(),
+    needs_attention: true, session_open: false, updated_at: new Date().toISOString(),
     latest: task({ state: "failed", error: "agent stalled: no output or file changes for 10m" }),
   },
 ];
@@ -73,7 +73,7 @@ describe("TasksPage", () => {
     fakeServer({ "/api/threads": threads, "/api/status": status, "/api/agents": agents });
     renderPage(<TasksPage />);
     const list = await screen.findByRole("region", { name: "Threads" });
-    expect(within(list).getByText("NOT PUSHED")).toBeTruthy();
+    expect(within(list).getByText("PUSH FAILED")).toBeTruthy();
     expect(within(list).getByText(/the token needs: contents=write/)).toBeTruthy();
     expect(within(list).getByText("cursor → claude-code → cursor")).toBeTruthy();
 

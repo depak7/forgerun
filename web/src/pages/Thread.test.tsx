@@ -16,7 +16,7 @@ function task(over: Partial<Task>): Task {
     effort: "", thinking: false, fast: false, model_id: "auto", state: "succeeded", error: "", has_diff: true,
     snapshot_id: null, parent_id: null, thread_id: "t-1",
     pr: { requested: true, url: "https://github.com/depak7/playground/pull/5", number: 5, branch: "forgerun/add-a-test-t1", error: "" },
-    summary: "## Done\n- Added a regression test", created_at: "2026-10-15T10:00:00Z",
+    summary: "", reply: "Added a **regression** test in `x_test.go`.", pushed: true, created_at: "2026-10-15T10:00:00Z",
     started_at: "2026-10-15T10:00:01Z", finished_at: "2026-10-15T10:02:01Z",
     ...over,
   };
@@ -34,8 +34,8 @@ const models = (agent: string) => ({
 });
 const patch = "diff --git a/x_test.go b/x_test.go\n--- a/x_test.go\n+++ b/x_test.go\n@@ -1,1 +1,2 @@\n package x\n+// new test\n";
 
-// server answers by path and records follow-up POSTs.
-function server(steps: Task[]) {
+// server answers by path and records POSTs.
+function server(steps: Task[], session = { open: true, busy: false, idle_until: "2026-10-16T12:30:00Z" }) {
   const posted: { url: string; body: unknown }[] = [];
   vi.stubGlobal(
     "fetch",
@@ -47,6 +47,7 @@ function server(steps: Task[]) {
         return ok(task({ id: "t-new", state: "queued" }));
       }
       if (url.endsWith("/thread")) return ok(steps);
+      if (url.endsWith("/session")) return ok(session);
       if (url.endsWith("/diff")) return new Response(patch, { status: 200 });
       if (url.endsWith("/log")) return new Response(`==> cloning\nlog of ${url.split("/")[3]}\n`, { status: 200 });
       if (url.startsWith("/api/agents")) return ok(agents);
@@ -82,7 +83,7 @@ describe("ThreadPage", () => {
     renderThread();
     expect(await screen.findByRole("heading", { name: "Add a test" })).toBeTruthy();
     expect(screen.getByText("cursor → claude-code")).toBeTruthy();
-    expect(screen.getByText("Added a regression test")).toBeTruthy(); // step 1's reply excerpt
+    expect(screen.getAllByText("Added a regression test in x_test.go.").length).toBeGreaterThan(0); // step 1's reply, as plain text
     expect(await screen.findByText("log of t-2")).toBeTruthy(); // the newest step is selected
 
     fireEvent.click(screen.getByRole("button", { name: "Show step 1 output" }));
@@ -104,30 +105,39 @@ describe("ThreadPage", () => {
     expect(posted[0].url).toBe("/api/tasks/t-2/cancel");
   });
 
-  it("explains why a thread without a branch can't take follow-ups", async () => {
-    server([task({ pr: { requested: false, url: "", number: 0, branch: "", error: "" }, has_diff: false, summary: "" })]);
+  it("shows the open session and pushes unpushed changes with a pull request", async () => {
+    const posted = server([
+      task({ pr: { requested: false, url: "", number: 0, branch: "", error: "" }, pushed: false }),
+      task({ id: "t-2", parent_id: "t-1", prompt: "Also cover nil", pushed: false, pr: { requested: false, url: "", number: 0, branch: "", error: "" } }),
+    ]);
     renderThread();
-    expect(await screen.findByText(/made no changes, so there's no branch to continue/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: /new task on this repo/ })).toBeTruthy();
+    expect(await screen.findByText(/session open · closes/)).toBeTruthy();
+    expect(screen.getByText("2 unpushed")).toBeTruthy();
+    expect(screen.getAllByText("NOT PUSHED YET")).toHaveLength(2);
+    expect(screen.getByText(/continues the agent's conversation in its open session/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /push & open PR/ }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toEqual({ url: "/api/threads/t-1/push", body: { pr: true } });
+
+    fireEvent.click(screen.getByRole("button", { name: /end session/ }));
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[1].url).toBe("/api/threads/t-1/end");
   });
 
-  it("follows up on a branch-only thread and can open its pull request", async () => {
-    const posted = server([task({ pr: { requested: false, url: "", number: 0, branch: "forgerun/add-a-test-t1", error: "" } })]);
+  it("offers only push to the PR once there is one, and says a closed session reopens", async () => {
+    server([task({ pushed: false })], { open: false, busy: false, idle_until: null as unknown as string });
     renderThread();
-    expect(await screen.findByText("PUSHED TO BRANCH")).toBeTruthy();
-    expect(screen.getByText("branch only")).toBeTruthy();
-    fireEvent.change(await screen.findByLabelText("Follow up on this thread"), { target: { value: "Now open it" } });
-    fireEvent.click(screen.getByLabelText(/open a pull request/));
-    await waitFor(() => expect(sendButton().disabled).toBe(false));
-    fireEvent.click(sendButton());
-    await waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0].body).toEqual({ prompt: "Now open it", agent: "cursor", model: "auto", pr: true });
+    expect(await screen.findByRole("button", { name: /push to PR #5/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /open PR/ })).toBeNull();
+    expect(await screen.findByText("session closed")).toBeTruthy();
+    expect(screen.getByText(/reopens the session/)).toBeTruthy();
   });
 
   it("retries a failed step and sends the follow-up with the chosen agent", async () => {
     const posted = server([
       task({}),
-      task({ id: "t-2", parent_id: "t-1", prompt: "Also cover nil", state: "failed", error: "agent exited 1", has_diff: false, summary: "" }),
+      task({ id: "t-2", parent_id: "t-1", prompt: "Also cover nil", state: "failed", error: "agent exited 1", has_diff: false, reply: "" }),
     ]);
     renderThread();
     expect(await screen.findByText("agent exited 1")).toBeTruthy();

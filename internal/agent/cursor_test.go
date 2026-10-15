@@ -32,4 +32,7 @@ func TestCursorArgs(t *testing.T) {
 			t.Errorf("model %q: got %v, want %v", tc.modelID, got, tc.want)
 		}
 	}
+	if got := cursorArgs(Request{Prompt: "fix it", Continue: true}); !slices.Equal(got, append(slices.Clone(base), "--continue")) {
+		t.Errorf("continue: got %v", got)
+	}
 }

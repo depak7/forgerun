@@ -14,6 +14,7 @@ export interface Status {
     sweep_seconds: number;
   };
   require_zdr: boolean; // only zero-data-retention models are accepted
+  sessions: { open: number; max: number; idle_seconds: number }; // 0 = no limit / never
   tasks: { queued: number; running: number };
 }
 
@@ -42,7 +43,9 @@ export interface Task {
   parent_id: string | null; // null for a thread's first task
   thread_id: string;
   pr: { requested: boolean; url: string; number: number; branch: string; error: string };
-  summary: string;
+  summary: string; // the agent's summary of the thread, taken when it was pushed
+  reply: string; // the end of what the agent wrote
+  pushed: boolean; // its changes are on the thread's branch
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -56,6 +59,7 @@ export interface Thread {
   agents: string[]; // each step's agent, oldest first
   latest: Task;
   needs_attention: boolean;
+  session_open: boolean;
   updated_at: string;
 }
 
@@ -97,5 +101,11 @@ export interface NewTask {
   effort?: string;
   thinking?: boolean;
   fast?: boolean;
-  pr: boolean;
+}
+
+// A thread's session: its VM, kept between messages.
+export interface Session {
+  open: boolean;
+  busy: boolean; // a step or a summary is running in it
+  idle_until: string | null; // when it closes if left idle
 }

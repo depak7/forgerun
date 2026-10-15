@@ -59,7 +59,7 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 		return fmt.Errorf("creating task %s: no model %q for agent %s", t.ID, t.ModelID, agentID)
 	}
 	rec := &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, AgentID: agentID,
-		Model: m, State: task.Queued, PR: store.PullRequest{Requested: t.PR}, ThreadID: t.ID, CreatedAt: time.Now()}
+		Model: m, State: task.Queued, ThreadID: t.ID, CreatedAt: time.Now()}
 	if t.ParentID != "" { // mirrors the Postgres thread rules and indexes
 		parent, ok := s.tasks[t.ParentID]
 		if !ok {
@@ -74,8 +74,8 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 			}
 		}
 		rec.ParentID, rec.ThreadID = parent.ID, parent.ThreadID
-		rec.PR = parent.PR
-		rec.PR.Requested, rec.PR.Error = t.PR, ""
+		rec.PR = parent.PR // the thread's branch and pull request
+		rec.PR.Error = ""
 	}
 	s.tasks[t.ID] = rec
 	return nil
@@ -231,11 +231,27 @@ func (s *Store) Finish(_ context.Context, id string, o store.Outcome) error {
 	}
 	r.Error, r.LogPath, r.HasDiff = o.Error, o.LogPath, o.Diff != ""
 	s.diffs[id] = o.Diff
-	r.BaseCommit, r.Summary, r.PR.Error = o.BaseCommit, o.Summary, o.PRError
-	// A follow-up inherited its thread's pull request; keep it if this run didn't publish.
-	r.PR.URL, r.PR.Number, r.PR.Branch = cmp.Or(o.PRURL, r.PR.URL), cmp.Or(o.PRNumber, r.PR.Number), cmp.Or(o.PRBranch, r.PR.Branch)
+	r.BaseCommit, r.Reply = o.BaseCommit, o.Reply
 	now := time.Now()
 	r.FinishedAt = &now
+	return nil
+}
+
+func (s *Store) RecordPush(_ context.Context, threadID string, p store.Push) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.tasks {
+		if r.ThreadID != threadID {
+			continue
+		}
+		r.PR = p.PR
+		if slices.Contains(p.Pushed, r.ID) {
+			r.Pushed = true
+		}
+		if r.ID == p.LatestID && p.Summary != "" {
+			r.Summary = p.Summary
+		}
+	}
 	return nil
 }
 

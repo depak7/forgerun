@@ -42,6 +42,9 @@ func TestClaudeArgs(t *testing.T) {
 			t.Errorf("%s/%s: got %v, want %v", tc.family, tc.effort, got, tc.want)
 		}
 	}
+	if got := claudeArgs(Request{Prompt: "fix it", Continue: true}); !slices.Equal(got, append(slices.Clone(base), "--continue")) {
+		t.Errorf("continue: got %v", got)
+	}
 }
 
 // The wrapper must hand every argument to claude unchanged, however odd the

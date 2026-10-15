@@ -508,79 +508,92 @@ func TestListAgents(t *testing.T) {
 	}
 }
 
-func TestCreateWithPullRequest(t *testing.T) {
-	const body = `{"repo":"https://github.com/o/r","prompt":"fix it","pr":true}`
-
-	// Without a GitHub token, refuse up front instead of failing after the work.
-	h, _, _ := setup(t)
-	_, apiErr := decode(t, do(h, "POST", "/api/tasks", body), http.StatusBadRequest)
-	if !strings.Contains(apiErr.Message, "pull requests are disabled") {
-		t.Errorf("no token: %q", apiErr.Message)
-	}
-
-	h, s, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
-	_, apiErr = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://gitlab.com/o/r","prompt":"fix it","pr":true}`), http.StatusBadRequest)
-	if !strings.Contains(apiErr.Message, "aren't supported") {
+// A server that pushes accepts only repos it can push to, and refuses the
+// others before any work is done.
+func TestCreateNeedsAPushableRepo(t *testing.T) {
+	h, _, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
+	_, apiErr := decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://gitlab.com/o/r","prompt":"fix it"}`), http.StatusBadRequest)
+	if !strings.Contains(apiErr.Message, "pushes the changes to a branch") {
 		t.Errorf("unsupported host: %q", apiErr.Message)
 	}
-
-	data, _ := decode(t, do(h, "POST", "/api/tasks", body), http.StatusCreated)
-	tk := decodeTask(t, data)
-	if !tk.PR.Requested || tk.PR.URL != "" || tk.PR.Error != "" || tk.Summary != "" {
-		t.Errorf("new PR task: pr=%+v summary=%q", tk.PR, tk.Summary)
+	tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"fix it"}`), http.StatusCreated))
+	if tk.PR.Requested || tk.PR.Branch != "" || tk.Pushed {
+		t.Errorf("new task: pr=%+v pushed=%v", tk.PR, tk.Pushed)
 	}
-	if rec, _ := s.Get(context.Background(), tk.ID); !rec.PR.Requested {
-		t.Error("store didn't record the PR request")
-	}
-
-	// Without "pr", no pull request; the changes still go to a branch, so
-	// the repo must still be one forgerun can push to.
-	data, _ = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"fix it"}`), http.StatusCreated)
-	if tk := decodeTask(t, data); tk.PR.Requested {
-		t.Error("PR requested without asking")
-	}
-	_, apiErr = decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://gitlab.com/o/r","prompt":"fix it"}`), http.StatusBadRequest)
-	if !strings.Contains(apiErr.Message, "pushes each task's changes to a branch") {
-		t.Errorf("branch on unsupported host: %q", apiErr.Message)
-	}
+	// Asking for a pull request up front is gone: it's opened when pushing.
+	decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"fix it","pr":true}`), http.StatusBadRequest)
 }
 
-// fakePRs answers whether a pull request is open.
+// fakePRs answers whether a pull request is open, and publishes by
+// recording the request and answering pub (or pubErr).
 type fakePRs struct {
-	open bool
-	err  error
+	open   bool
+	err    error
+	pub    task.Published
+	pubErr error
+	got    *[]task.PublishRequest
 }
 
 func (f fakePRs) IsOpen(context.Context, string, int) (bool, error) { return f.open, f.err }
 
-// finishWithPR moves a task to finished with an opened pull request, as a
-// worker would.
+func (f fakePRs) Publish(_ context.Context, req task.PublishRequest) (task.Published, error) {
+	if f.got != nil {
+		*f.got = append(*f.got, req)
+	}
+	return f.pub, f.pubErr
+}
+
+// fakeSessions is a session holder with fixed answers.
+type fakeSessions struct {
+	info     task.SessionInfo
+	closeErr error
+	summary  string
+	closed   *[]string
+}
+
+func (f fakeSessions) Session(string) task.SessionInfo { return f.info }
+func (f fakeSessions) OpenSessions() int               { return 3 }
+func (f fakeSessions) Summarize(context.Context, string) (string, error) {
+	return f.summary, nil
+}
+func (f fakeSessions) CloseSession(thread string) error {
+	if f.closed != nil {
+		*f.closed = append(*f.closed, thread)
+	}
+	return f.closeErr
+}
+
+// finishWithPR finishes a task as a worker would and, if it succeeded,
+// records its thread as pushed with an open pull request.
 func finishWithPR(t *testing.T, s *memory.Store, id string, state task.State) {
 	t.Helper()
 	ctx := context.Background()
 	if err := s.Start(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	o := store.Outcome{State: state, Summary: "summary of " + id}
-	if state == task.Succeeded {
-		o.PRURL, o.PRNumber, o.PRBranch = "https://github.com/o/r/pull/9", 9, "forgerun/"+id
-	}
-	if err := s.Finish(ctx, id, o); err != nil {
+	if err := s.Finish(ctx, id, store.Outcome{State: state, BaseCommit: "base-" + id}); err != nil {
 		t.Fatal(err)
+	}
+	if state == task.Succeeded {
+		rec, _ := s.Get(ctx, id)
+		pr := store.PullRequest{Requested: true, URL: "https://github.com/o/r/pull/9", Number: 9, Branch: "forgerun/" + rec.ThreadID}
+		if err := s.RecordPush(ctx, rec.ThreadID, store.Push{PR: pr, Pushed: []string{id}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
 func TestFollowUps(t *testing.T) {
 	h, s, pool := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
-	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first","pr":true}`), http.StatusCreated))
+	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first"}`), http.StatusCreated))
 	follow := func(id, body string) *httptest.ResponseRecorder {
 		return do(h, "POST", "/api/tasks/"+id+"/followups", body)
 	}
 
-	// Not before it has finished and pushed its branch.
+	// Not before it has finished.
 	_, apiErr := decode(t, follow(first.ID, `{"prompt":"more"}`), http.StatusConflict)
-	if !strings.Contains(apiErr.Message, "no branch") {
-		t.Errorf("before the push: %q", apiErr.Message)
+	if !strings.Contains(apiErr.Message, "still queued") {
+		t.Errorf("before it finished: %q", apiErr.Message)
 	}
 	finishWithPR(t, s, first.ID, task.Succeeded)
 
@@ -621,32 +634,24 @@ func TestFollowUps(t *testing.T) {
 	}
 }
 
-// A thread without a pull request can be followed up on its branch, and a
-// follow-up can ask to open the pull request then.
-func TestFollowUpOnBranchOnly(t *testing.T) {
-	// The pull request check would say "closed": it must not be asked.
-	h, s, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: false} })
+// A thread that was never pushed can be followed up: its work is in the
+// session (or the database), not on a branch.
+func TestFollowUpBeforeAnyPush(t *testing.T) {
+	h, s, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: false} }) // must not be asked
 	ctx := context.Background()
-	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first"}`), http.StatusCreated))
+	first := createTask(t, h)
 	s.Start(ctx, first.ID)
-	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, PRBranch: "forgerun/first-1"})
-
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, Diff: "+a\n"})
 	second := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+first.ID+"/followups", `{"prompt":"second"}`), http.StatusCreated))
-	if second.PR.Requested || second.PR.Branch != "forgerun/first-1" || second.PR.Number != 0 {
-		t.Errorf("branch-only follow-up: pr = %+v", second.PR)
-	}
-	s.Start(ctx, second.ID)
-	s.Finish(ctx, second.ID, store.Outcome{State: task.Succeeded})
-	third := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+second.ID+"/followups", `{"prompt":"open it","pr":true}`), http.StatusCreated))
-	if !third.PR.Requested || third.PR.Branch != "forgerun/first-1" {
-		t.Errorf("follow-up asking for a PR: pr = %+v", third.PR)
+	if second.PR.Requested || second.PR.Branch != "" || second.ThreadID != first.ID {
+		t.Errorf("follow-up: %+v", second)
 	}
 }
 
 func TestFollowUpRefusals(t *testing.T) {
 	prepare := func(t *testing.T, prs PRs) (http.Handler, string) {
 		h, s, _ := setup(t, func(c *Config) { c.PRs = prs })
-		tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first","pr":true}`), http.StatusCreated))
+		tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first"}`), http.StatusCreated))
 		finishWithPR(t, s, tk.ID, task.Succeeded)
 		return h, tk.ID
 	}
@@ -672,13 +677,6 @@ func TestFollowUpRefusals(t *testing.T) {
 			}
 		})
 	}
-	t.Run("publishing off", func(t *testing.T) {
-		h, _, _ := setup(t)
-		_, apiErr := decode(t, do(h, "POST", "/api/tasks/t-x/followups", `{"prompt":"x"}`), http.StatusBadRequest)
-		if !strings.Contains(apiErr.Message, "doesn't push") {
-			t.Errorf("got %q", apiErr.Message)
-		}
-	})
 	t.Run("unknown task", func(t *testing.T) {
 		h, _, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
 		decode(t, do(h, "POST", "/api/tasks/t-nope/followups", `{"prompt":"x"}`), http.StatusNotFound)
@@ -753,7 +751,7 @@ func TestFollowUpSwitchesAgent(t *testing.T) {
 		c.PRs = fakePRs{open: true}
 		c.Agents = agent.NewSet(agent.StaticCredentials{"CURSOR_API_KEY": "k", "OTHER_KEY": "o"}, &agent.Cursor{}, otherAgent{})
 	})
-	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first","pr":true}`), http.StatusCreated))
+	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first"}`), http.StatusCreated))
 	finishWithPR(t, s, first.ID, task.Succeeded)
 	second := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+first.ID+"/followups", `{"prompt":"second","agent":"other-agent"}`), http.StatusCreated))
 	if second.Agent != "other-agent" || second.ModelID != "other-x" || second.ThreadID != first.ID {
@@ -793,14 +791,15 @@ func TestLogWhileRunning(t *testing.T) {
 func TestListThreads(t *testing.T) {
 	h, s, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
 	ctx := context.Background()
-	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first","pr":true}`), http.StatusCreated))
+	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first"}`), http.StatusCreated))
 	finishWithPR(t, s, first.ID, task.Succeeded)
 	follow := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+first.ID+"/followups", `{"prompt":"second"}`), http.StatusCreated))
 	finishWithPR(t, s, follow.ID, task.Failed)
 	// A task that succeeded but whose pull request didn't open also needs attention.
-	lonely := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"lonely","pr":true}`), http.StatusCreated))
+	lonely := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"lonely"}`), http.StatusCreated))
 	s.Start(ctx, lonely.ID)
-	s.Finish(ctx, lonely.ID, store.Outcome{State: task.Succeeded, PRError: "the token needs: contents=write"})
+	s.Finish(ctx, lonely.ID, store.Outcome{State: task.Succeeded, Diff: "+x\n"})
+	s.RecordPush(ctx, lonely.ID, store.Push{PR: store.PullRequest{Error: "the token needs: contents=write"}})
 
 	var threads []threadJSON
 	if err := json.Unmarshal(mustData(t, do(h, "GET", "/api/threads", ""), http.StatusOK), &threads); err != nil {
@@ -826,6 +825,7 @@ func TestStatus(t *testing.T) {
 		c.PRs, c.GitHubUser = fakePRs{open: true}, "depak7"
 		c.Snapshots = &SnapshotSettings{BudgetBytes: 20e9, MaxAge: 7 * 24 * time.Hour, SweepEvery: 10 * time.Minute}
 		c.RequireZDR = true
+		c.Sessions, c.MaxSessions, c.SessionIdle = fakeSessions{}, 4, 30*time.Minute
 	})
 	ctx := context.Background()
 	s.ReplaceSnapshot(ctx, store.Snapshot{Repo: "https://github.com/o/r", AgentID: "cursor", Ref: "/a", Commit: "c", SizeBytes: 6e6})
@@ -844,6 +844,9 @@ func TestStatus(t *testing.T) {
 	}
 	if !st.RequireZDR {
 		t.Error("require_zdr = false, want true")
+	}
+	if st.Sessions.Open != 3 || st.Sessions.Max != 4 || st.Sessions.IdleSeconds != 1800 {
+		t.Errorf("sessions = %+v", st.Sessions)
 	}
 	if st.Tasks.Running != 1 || st.Tasks.Queued != 1 {
 		t.Errorf("tasks = %+v", st.Tasks)

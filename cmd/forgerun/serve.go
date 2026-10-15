@@ -33,13 +33,15 @@ func serveCmd(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on")
 	workers := fs.Int("workers", 2, "how many tasks may run at once")
-	timeout := fs.Duration("timeout", 15*time.Minute, "max time per task")
+	timeout := fs.Duration("timeout", 15*time.Minute, "max time per turn")
+	sessionIdle := fs.Duration("session-idle", 30*time.Minute, "close a thread's session (its VM) after this long without a message (0 = never)")
+	maxSessions := fs.Int("sessions", 4, "most sessions open at once; the least recently used idle one closes to make room (0 = no limit)")
 	agentIdle := fs.Duration("agent-idle", 10*time.Minute, "stop an agent that prints nothing and changes no files for this long (0 = never)")
 	out := fs.String("out", "out", "directory for task results")
 	defaultAgent := fs.String("agent", "cursor", "agent for requests that name none")
 	defaultModel := fs.String("model", "", "default model family of the default agent (default: the agent's own)")
 	requireZDR := fs.Bool("require-zdr", false, "offer only models with zero data retention")
-	useSnapshots := fs.Bool("snapshots", true, "start tasks from their repo's snapshot, and save one after each successful task")
+	useSnapshots := fs.Bool("snapshots", true, "open sessions from their repo's snapshot, and save one when a session closes")
 	snapshotMaxAge := fs.Duration("snapshot-max-age", 7*24*time.Hour, "delete a repo's snapshot when no task has used it for this long (0 = never)")
 	snapshotBudget := byteSize(20e9)
 	fs.Var(&snapshotBudget, "snapshot-budget", "total disk for snapshots, e.g. 500MB or 20GB; least recently used are deleted first (0 = no limit)")
@@ -104,7 +106,13 @@ func serveCmd(args []string) error {
 		log.Warn("marked orphaned running tasks as failed", "count", n)
 	}
 
-	runner := &task.Runner{Agents: agents, DefaultAgent: *defaultAgent, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, AgentIdle: *agentIdle, Stdout: io.Discard}
+	if *maxSessions > 0 && *maxSessions < *workers {
+		// Every running turn holds a session: fewer would starve the workers.
+		log.Warn("-sessions is below -workers; raising it", "sessions", *maxSessions, "workers", *workers)
+		*maxSessions = *workers
+	}
+	runner := &task.Runner{Agents: agents, DefaultAgent: *defaultAgent, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout,
+		AgentIdle: *agentIdle, Stdout: io.Discard, Log: log, SessionIdle: *sessionIdle, MaxSessions: *maxSessions}
 	var prs api.PRs // stays a nil interface when PRs are off (a nil *Publisher in it wouldn't be)
 	var publisher *publish.Publisher
 	if prTokens != nil {
@@ -114,7 +122,7 @@ func serveCmd(args []string) error {
 			return fmt.Errorf("pull requests need git installed on this host: %w", err)
 		}
 		publisher = &publish.Publisher{Tokens: prTokens, GitHub: &forge.GitHub{}}
-		runner.Publisher, prs = publisher, publisher
+		prs = publisher
 	}
 	sweepsDone := make(chan struct{})
 	var snapshotSettings *api.SnapshotSettings // nil = snapshots off
@@ -136,7 +144,8 @@ func serveCmd(args []string) error {
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
 		Handler: api.LogRequests(log, routes(api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
-			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, OutDir: *out, GitHubUser: githubUser, Snapshots: snapshotSettings, Log: log}))),
+			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, OutDir: *out, GitHubUser: githubUser,
+			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Log: log}))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -145,6 +154,7 @@ func serveCmd(args []string) error {
 		pool.Run(ctx)
 		close(poolDone)
 	}()
+	go runner.RunSessions(ctx) // closes idle sessions
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 	log.Info("forgerun serving", "addr", ln.Addr().String(), "workers", *workers)
@@ -163,8 +173,10 @@ func serveCmd(args []string) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("http shutdown", "err", err)
 	}
-	<-poolDone   // every running task has recorded its outcome and destroyed its VM
-	<-sweepsDone // no snapshot sweep is half done
+	<-poolDone // every running turn has recorded its outcome
+	log.Info("closing open sessions")
+	runner.CloseAll() // saves each session's VM as a snapshot; the work in progress is in the database
+	<-sweepsDone      // no snapshot sweep is half done
 	log.Info("stopped")
 	return runErr
 }

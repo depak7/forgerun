@@ -84,11 +84,11 @@ func TestSuccess(t *testing.T) {
 	s := memory.New(fakeDefault)
 	tk := create(t, s)
 	startPool(t, s, fakeExec(func(context.Context, task.Task) (task.Result, error) {
-		return task.Result{LogPath: "a.log", Diff: "diff --git a/x b/x\n", Branch: "forgerun/x-1"}, nil
+		return task.Result{LogPath: "a.log", Diff: "diff --git a/x b/x\n", Reply: "Done.", BaseCommit: "abc"}, nil
 	}), 1, 10*time.Millisecond)
 
 	rec := waitState(t, s, tk.ID, task.Succeeded)
-	if !rec.HasDiff || rec.LogPath != "a.log" || rec.Error != "" || rec.PR.Branch != "forgerun/x-1" {
+	if !rec.HasDiff || rec.LogPath != "a.log" || rec.Error != "" || rec.Reply != "Done." || rec.BaseCommit != "abc" {
 		t.Errorf("got %+v", rec)
 	}
 	if diff, err := s.Diff(context.Background(), tk.ID); err != nil || diff != "diff --git a/x b/x\n" {
@@ -241,39 +241,9 @@ func TestPassesModelToExecutor(t *testing.T) {
 	}
 }
 
-// The PR request reaches the executor, and the result's PR fields are saved;
-// a PR task that fails says why it has no pull request.
-func TestPullRequestTasks(t *testing.T) {
-	s := memory.New(fakeDefault)
-	ok, failing := task.New("r", "ok"), task.New("r", "fail")
-	ok.PR, failing.PR = true, true
-	for _, tk := range []task.Task{ok, failing} {
-		if err := s.Create(context.Background(), tk, "fake"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	startPool(t, s, fakeExec(func(_ context.Context, tk task.Task) (task.Result, error) {
-		if !tk.PR {
-			return task.Result{}, errors.New("executor wasn't told about the PR")
-		}
-		if tk.Prompt == "fail" {
-			return task.Result{}, errors.New("agent: exit code 1")
-		}
-		return task.Result{BaseCommit: "abc", Summary: "sum", PRURL: "https://github.com/o/r/pull/1"}, nil
-	}), 1, 10*time.Millisecond)
-
-	rec := waitState(t, s, ok.ID, task.Succeeded)
-	if rec.PR.URL != "https://github.com/o/r/pull/1" || rec.Summary != "sum" || rec.BaseCommit != "abc" {
-		t.Errorf("succeeded: %+v", rec)
-	}
-	rec = waitState(t, s, failing.ID, task.Failed)
-	if rec.PR.Error != "no pull request: the task failed" {
-		t.Errorf("failed: PR error %q", rec.PR.Error)
-	}
-}
-
-// A follow-up gets its thread's context: the pull request, where the thread
-// started, the latest summary, and the earlier requests.
+// A follow-up gets what its session needs if it must be rebuilt: the
+// commit the thread started from, and the earlier turns (prompts, replies,
+// and the changes of the ones that succeeded), loaded only when asked.
 func TestFollowUpContext(t *testing.T) {
 	s, ctx := memory.New(fakeDefault), context.Background()
 	finish := func(tk task.Task, o store.Outcome) {
@@ -285,14 +255,12 @@ func TestFollowUpContext(t *testing.T) {
 		s.Finish(ctx, tk.ID, o)
 	}
 	first := task.New("r", "add greet")
-	first.PR = true
-	finish(first, store.Outcome{State: task.Succeeded, BaseCommit: "base0", Summary: "summary 1",
-		PRURL: "u", PRNumber: 9, PRBranch: "forgerun/" + first.ID})
+	finish(first, store.Outcome{State: task.Succeeded, BaseCommit: "base0", Reply: "Added greet.", Diff: "+greet\n"})
 	second := task.New("r", "add farewell")
 	second.ParentID = first.ID
-	finish(second, store.Outcome{State: task.Failed}) // no summary: the first one still counts
+	finish(second, store.Outcome{State: task.Failed, Reply: "oops", Diff: "+half\n"}) // its changes were discarded
 	third := task.New("r", "rename both")
-	third.ParentID, third.PR = second.ID, true // as the API sets it for a thread with a pull request
+	third.ParentID = second.ID
 	if err := s.Create(ctx, third, "fake"); err != nil {
 		t.Fatal(err)
 	}
@@ -305,41 +273,16 @@ func TestFollowUpContext(t *testing.T) {
 
 	select {
 	case tk := <-got:
-		want := task.FollowUp{Branch: "forgerun/" + first.ID, PRNumber: 9, ThreadBase: "base0",
-			Summary: "summary 1", Requests: []string{"add greet", "add farewell"}}
-		if tk.ID != third.ID || tk.FollowUp == nil || !reflect.DeepEqual(*tk.FollowUp, want) || !tk.PR {
-			t.Errorf("follow-up = %+v / %+v", tk, tk.FollowUp)
+		if tk.ID != third.ID || tk.ThreadID != first.ID || tk.ParentID != second.ID || tk.ThreadBase != "base0" || tk.History == nil {
+			t.Fatalf("follow-up = %+v", tk)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("follow-up never ran")
-	}
-}
-
-// A thread without a pull request can be followed up too: it has a branch.
-func TestFollowUpOnBranchOnlyThread(t *testing.T) {
-	s, ctx := memory.New(fakeDefault), context.Background()
-	first := task.New("r", "add greet")
-	if err := s.Create(ctx, first, "fake"); err != nil {
-		t.Fatal(err)
-	}
-	s.Start(ctx, first.ID)
-	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, BaseCommit: "base0", Summary: "summary 1", PRBranch: "forgerun/add-greet-1"})
-	second := task.New("r", "add farewell")
-	second.ParentID = first.ID
-	if err := s.Create(ctx, second, "fake"); err != nil {
-		t.Fatal(err)
-	}
-
-	got := make(chan task.Task, 1)
-	startPool(t, s, fakeExec(func(_ context.Context, tk task.Task) (task.Result, error) {
-		got <- tk
-		return task.Result{}, nil
-	}), 1, 10*time.Millisecond)
-	select {
-	case tk := <-got:
-		want := task.FollowUp{Branch: "forgerun/add-greet-1", ThreadBase: "base0", Summary: "summary 1", Requests: []string{"add greet"}}
-		if tk.FollowUp == nil || !reflect.DeepEqual(*tk.FollowUp, want) {
-			t.Errorf("follow-up = %+v", tk.FollowUp)
+		history, err := tk.History(ctx)
+		want := []task.Turn{
+			{Prompt: "add greet", Reply: "Added greet.", Diff: "+greet\n"},
+			{Prompt: "add farewell", Reply: "oops", Failed: true},
+		}
+		if err != nil || !reflect.DeepEqual(history, want) {
+			t.Errorf("history = %+v, %v", history, err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("follow-up never ran")

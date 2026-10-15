@@ -142,13 +142,14 @@ function NowRow({ thread }: { thread: Thread }) {
 function ThreadRow({ thread }: { thread: Thread }) {
   const t = thread.latest;
   const pr = prLabel(thread);
-  const prFailed = t.state === "succeeded" && t.pr.error !== "";
-  const note = t.state === "failed" ? t.error : prFailed ? t.pr.error : "";
+  const pushFailed = t.state === "succeeded" && t.pr.error !== "";
+  const note = t.state === "failed" ? t.error : pushFailed ? t.pr.error : "";
   return (
     <Link to={`/threads/${thread.id}`} className={styles.row}>
       <span className={styles.stateCol}>
         <StateLabel state={t.state} />
-        {prFailed && <span className={styles.problem}>{t.pr.branch && t.has_diff ? "PR NOT OPENED" : "NOT PUSHED"}</span>}
+        {pushFailed && <span className={styles.problem}>PUSH FAILED</span>}
+        {thread.session_open && <span className={styles.session}>● SESSION OPEN</span>}
       </span>
       <span className={styles.what}>
         <span className={styles.prompt}>{thread.title}</span>
@@ -177,7 +178,9 @@ function ThreadRow({ thread }: { thread: Thread }) {
 
 function prLabel(thread: Thread): string | null {
   const pr = thread.latest.pr;
-  return pr.number ? `PR #${pr.number}` : pr.branch ? "branch" : null;
+  if (pr.number) return `PR #${pr.number}`;
+  if (pr.branch) return "branch pushed";
+  return thread.latest.has_diff && !thread.latest.pushed ? "not pushed yet" : null;
 }
 
 function modelLabel(model: string, effort: string): string {

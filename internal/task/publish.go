@@ -4,8 +4,8 @@ import (
 	"context"
 )
 
-// SummaryPrompt is what forgerun asks an agent at the end of a pull request
-// task, by continuing its own conversation. The same words go to every
+// SummaryPrompt is what forgerun asks an agent before pushing a thread with
+// a pull request, by continuing its own conversation. The same words go to every
 // agent. The summary becomes the pull request's description, and follow-ups
 // will carry it forward as context.
 const SummaryPrompt = `Summarize this whole conversation for a pull request description. Use Markdown with exactly three sections:
@@ -21,9 +21,9 @@ Assumptions you made, open questions, and anything not done.
 
 Be concise. Do not change any files. forgerun commits your changes and opens or updates the pull request itself, so don't mention committing or pushing.`
 
-// Publisher pushes a successful task's changes to a branch, and opens or
-// updates a pull request when one is wanted. publish.Publisher implements
-// it; it runs on the host, never in a VM.
+// Publisher pushes a thread's unpushed changes to its branch as one
+// commit, and opens or updates its pull request when one is wanted.
+// publish.Publisher implements it; it runs on the host, never in a VM.
 type Publisher interface {
 	Publish(ctx context.Context, req PublishRequest) (Published, error)
 }
@@ -38,16 +38,20 @@ type Published struct {
 
 // PublishRequest is what a push (and maybe a pull request) is made from.
 type PublishRequest struct {
-	TaskID     string
-	Repo       string
-	BaseCommit string // the commit the task started from
-	Patch      string // the changes, as git diff --binary output
-	Prompt     string
-	Summary    string   // "" if the agent couldn't give one
-	Requests   []string // every request in the thread, oldest first, this one last
-	OpenPR     bool     // open a pull request if the thread has none yet
-	// For a follow-up: the thread's branch, and its pull request (0 = none
-	// yet). Branch "" means a new thread: a new branch is made.
+	ThreadID string
+	Repo     string
+	// BaseCommit is the commit the thread started from: a new branch is
+	// built on it. An existing branch is built on its own head instead.
+	BaseCommit string
+	// Patches are the turns' unpushed changes (git diff --binary), oldest
+	// first; they're applied in order and pushed as one commit. None =
+	// nothing to push (e.g. only opening a pull request for the branch).
+	Patches  []string
+	Summary  string   // "" if the agent couldn't give one
+	Requests []string // every request in the thread, oldest first
+	OpenPR   bool     // open a pull request if the thread has none yet
+	// The thread's branch ("" = none yet: one is made) and pull request
+	// (0 = none yet).
 	Branch   string
 	PRNumber int
 }

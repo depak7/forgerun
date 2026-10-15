@@ -105,7 +105,7 @@ func (f *fixture) publisher(token string) *Publisher {
 		Tokens:    forge.NewStaticToken(forge.NewToken(token)),
 		GitHub:    &forge.GitHub{BaseURL: f.api.URL},
 		RemoteURL: func(forge.Repo) string { return "file://" + f.remote },
-		TaskURL:   func(id string) string { return "http://localhost:8080/api/tasks/" + id },
+		ThreadURL: func(id string) string { return "http://localhost:8080/threads/" + id },
 	}
 }
 
@@ -123,8 +123,8 @@ const prompt = "Tidy up the files\nand more detail on a second line"
 
 // request asks for the fixture's changes on a new branch with a pull request.
 func (f *fixture) request(t *testing.T, summary string) task.PublishRequest {
-	return task.PublishRequest{TaskID: "t-20261015-1", Repo: "https://github.com/o/r", BaseCommit: f.base,
-		Patch: read(t, f.patch), Prompt: prompt, Summary: summary, OpenPR: true}
+	return task.PublishRequest{ThreadID: "t-20261015-1", Repo: "https://github.com/o/r", BaseCommit: f.base,
+		Patches: []string{read(t, f.patch)}, Requests: []string{prompt}, Summary: summary, OpenPR: true}
 }
 
 func TestBranch(t *testing.T) {
@@ -181,7 +181,7 @@ func TestPublish(t *testing.T) {
 	if opened["head"] != branch || opened["base"] != "main" || opened["title"] != "Tidy up the files" {
 		t.Errorf("pull request = %v", opened)
 	}
-	for _, s := range []string{"## Done\nDid it.", "(http://localhost:8080/api/tasks/t-20261015-1)", "Original request", "> Tidy up the files"} {
+	for _, s := range []string{"## Done\nDid it.", "(http://localhost:8080/threads/t-20261015-1)", "Original request", "> Tidy up the files"} {
 		if !strings.Contains(opened["body"], s) {
 			t.Errorf("body lacks %q:\n%s", s, opened["body"])
 		}
@@ -216,7 +216,7 @@ func TestPublishFailures(t *testing.T) {
 		f := newFixture(t)
 		f.apiStatus = http.StatusUnprocessableEntity
 		_, err := f.publisher(secret).Publish(ctx, f.request(t, ""))
-		if err == nil || !strings.Contains(err.Error(), "was pushed, but opening the pull request failed") ||
+		if err == nil || !strings.Contains(err.Error(), "is pushed, but opening the pull request failed") ||
 			!strings.Contains(err.Error(), "A pull request already exists") {
 			t.Errorf("got %v", err)
 		}
@@ -263,7 +263,9 @@ func TestTitle(t *testing.T) {
 
 // A follow-up adds a commit to the thread's branch and refreshes the
 // description; the pull request is not opened again.
-func TestPublishFollowUp(t *testing.T) {
+// A later push builds on the branch's head, adds one commit, and refreshes
+// the pull request's description; commits someone else pushed are kept.
+func TestPublishOnExistingBranch(t *testing.T) {
 	f := newFixture(t)
 	p := f.publisher(secret)
 	ctx := context.Background()
@@ -272,54 +274,69 @@ func TestPublishFollowUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The follow-up's changes, made on top of the branch as the runner would.
+	// Someone pushes to the branch; then the next turn's changes, made
+	// from the thread's own state (without that commit).
 	root := filepath.Dir(f.remote)
 	work := filepath.Join(root, "fu")
-	head := sh(t, root, "git clone -q remote.git fu && git -C fu checkout -q "+first.Branch+" && git -C fu rev-parse HEAD")
+	sh(t, root, "git clone -q remote.git fu && git -C fu checkout -q "+first.Branch)
 	patch := filepath.Join(root, "followup.patch")
-	sh(t, work, `printf 'second round\n' >> new.txt && git add -A && git diff --cached --binary > `+patch)
+	sh(t, work, `printf 'second round\n' >> new.txt && git add -A && git diff --cached --binary > `+patch+` && git reset -q --hard`)
+	sh(t, work, "printf 'human\n' > human.txt && git add -A && git commit -qm human && git push -q origin HEAD:"+first.Branch)
+	human := sh(t, work, "git rev-parse HEAD")
 
-	req := task.PublishRequest{TaskID: "t-2", Repo: "https://github.com/o/r", BaseCommit: head, Patch: read(t, patch),
-		Prompt: "also do more", Summary: "## Done\nfirst and second", Requests: []string{"Tidy up the files", "also do more"},
-		Branch: first.Branch, PRNumber: 7}
+	req := task.PublishRequest{ThreadID: "t-20261015-1", Repo: "https://github.com/o/r", BaseCommit: f.base, Patches: []string{read(t, patch)},
+		Summary: "## Done\nfirst and second", Requests: []string{"Tidy up the files", "also do more"}, Branch: first.Branch, PRNumber: 7}
 	second, err := p.Publish(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second != (task.Published{PRURL: "https://github.com/o/r/pull/7", PRNumber: 7, Branch: first.Branch}) {
-		t.Errorf("follow-up published %+v", second)
+		t.Errorf("second push %+v", second)
 	}
 	if len(f.pulls) != 1 || len(f.updates) != 1 {
 		t.Fatalf("opened %d, updated %d; want 1 and 1", len(f.pulls), len(f.updates))
 	}
-	body := f.updates[0]["body"]
 	for _, s := range []string{"first and second", "Requests (2)", "1.\n> Tidy up the files", "2.\n> also do more"} {
-		if !strings.Contains(body, s) {
-			t.Errorf("updated body lacks %q:\n%s", s, body)
+		if !strings.Contains(f.updates[0]["body"], s) {
+			t.Errorf("updated body lacks %q:\n%s", s, f.updates[0]["body"])
 		}
 	}
-	// The branch now has the first commit plus the follow-up on top.
 	check := t.TempDir()
 	sh(t, check, "git clone -q "+f.remote+" . && git checkout -q "+first.Branch)
-	if parent := sh(t, check, "git rev-parse HEAD~1"); parent != head {
-		t.Errorf("follow-up commit's parent = %s, want the branch head %s", parent, head)
+	if parent := sh(t, check, "git rev-parse HEAD~1"); parent != human {
+		t.Errorf("new commit's parent = %s, want the branch head %s", parent, human)
 	}
-	if got := sh(t, check, "cat new.txt"); got != "new\nsecond round" {
-		t.Errorf("new.txt = %q", got)
+	if got := sh(t, check, "cat new.txt human.txt"); got != "new\nsecond round\nhuman" {
+		t.Errorf("files = %q", got)
 	}
+	if msg := sh(t, check, "git log -1 --format=%B"); !strings.Contains(msg, "- also do more") {
+		t.Errorf("commit message lacks the requests:\n%s", msg)
+	}
+}
 
-	// A third task starts from the branch's head with its own changes, but
-	// someone pushes to the branch while it runs: refused, not overwritten.
-	third := sh(t, check, "git rev-parse HEAD")
-	patch3 := filepath.Join(root, "third.patch")
-	sh(t, check, `printf 'third\n' > third.txt && git add -A && git diff --cached --binary > `+patch3+` && git reset -q --hard`)
-	sh(t, work, "git checkout -q -- . && git pull -q && printf 'human\n' > human.txt && git add -A && git commit -qm human && git push -q origin HEAD:"+first.Branch)
-	req.TaskID, req.BaseCommit, req.Patch = "t-3", third, read(t, patch3)
-	if _, err := p.Publish(ctx, req); err == nil || !strings.Contains(err.Error(), "changed while the task ran") {
-		t.Errorf("moved branch: got %v", err)
+// Several turns' changes are pushed as one commit.
+func TestPublishSquashesTurns(t *testing.T) {
+	f := newFixture(t)
+	root := filepath.Dir(f.remote)
+	sh(t, root, "git clone -q remote.git turns && git -C turns checkout -q "+f.base)
+	work := filepath.Join(root, "turns")
+	p1, p2 := filepath.Join(root, "1.patch"), filepath.Join(root, "2.patch")
+	sh(t, work, `printf 'one\n' > one.txt && git add -A && git diff --cached --binary > `+p1+` && git -c user.name=t -c user.email=t@t commit -qm 1`)
+	sh(t, work, `printf 'two\n' >> one.txt && printf 'x\n' > two.txt && git add -A && git diff --cached --binary > `+p2)
+
+	req := f.request(t, "")
+	req.Patches, req.OpenPR = []string{read(t, p1), read(t, p2)}, false
+	pub, err := f.publisher(secret).Publish(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := sh(t, check, "git fetch -q && git log -1 --format=%s origin/"+first.Branch); got != "human" {
-		t.Errorf("branch head is %q, want the human commit kept", got)
+	check := t.TempDir()
+	sh(t, check, "git clone -q "+f.remote+" . && git checkout -q "+pub.Branch)
+	if n := sh(t, check, "git rev-list --count "+f.base+"..HEAD"); n != "1" {
+		t.Errorf("%s commits on the branch, want 1", n)
+	}
+	if got := sh(t, check, "cat one.txt two.txt"); got != "one\ntwo\nx" {
+		t.Errorf("files = %q", got)
 	}
 }
 
@@ -334,9 +351,9 @@ func TestIsOpen(t *testing.T) {
 	}
 }
 
-// Without a pull request the branch is still pushed; a later follow-up
-// on that branch can open the pull request, titled after the first request.
-func TestPublishBranchOnlyThenPR(t *testing.T) {
+// Without a pull request only the branch is pushed; later, the pull
+// request can be opened for it with nothing new to push.
+func TestPublishBranchThenOpenPR(t *testing.T) {
 	f := newFixture(t)
 	p := f.publisher(secret)
 	ctx := context.Background()
@@ -349,22 +366,25 @@ func TestPublishBranchOnlyThenPR(t *testing.T) {
 	if first != (task.Published{Branch: Branch("t-20261015-1", prompt)}) || len(f.pulls) != 0 {
 		t.Fatalf("branch only: published %+v, opened %d pull requests", first, len(f.pulls))
 	}
-	check := t.TempDir()
-	sh(t, check, "git clone -q "+f.remote+" . && git checkout -q "+first.Branch)
-	head := sh(t, check, "git rev-parse HEAD")
-	patch := filepath.Join(check, "..", "next.patch")
-	sh(t, check, `printf 'next\n' > next.txt && git add -A && git diff --cached --binary > `+patch+` && git reset -q --hard`)
+	head := sh(t, t.TempDir(), "git ls-remote "+f.remote+" refs/heads/"+first.Branch+" | cut -f1")
 
-	second, err := p.Publish(ctx, task.PublishRequest{TaskID: "t-2", Repo: "https://github.com/o/r", BaseCommit: head,
-		Patch: read(t, patch), Prompt: "now open it", Requests: []string{"Tidy up the files", "now open it"},
-		Branch: first.Branch, OpenPR: true})
+	req.Patches, req.OpenPR, req.Branch = nil, true, first.Branch
+	second, err := p.Publish(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second != (task.Published{Branch: first.Branch, PRURL: "https://github.com/o/r/pull/7", PRNumber: 7}) {
-		t.Errorf("follow-up published %+v", second)
+		t.Errorf("opening the PR: %+v", second)
 	}
 	if len(f.pulls) != 1 || f.pulls[0]["head"] != first.Branch || f.pulls[0]["title"] != "Tidy up the files" {
 		t.Errorf("pull requests opened: %v", f.pulls)
+	}
+	if now := sh(t, t.TempDir(), "git ls-remote "+f.remote+" refs/heads/"+first.Branch+" | cut -f1"); now != head {
+		t.Errorf("the branch moved (%s → %s) with nothing to push", head, now)
+	}
+	// Nothing to push and no branch yet: an error, not an empty branch.
+	req.Branch = ""
+	if _, err := p.Publish(ctx, req); err == nil || !strings.Contains(err.Error(), "nothing to push") {
+		t.Errorf("empty push: %v", err)
 	}
 }

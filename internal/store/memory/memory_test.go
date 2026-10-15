@@ -156,30 +156,31 @@ func TestSnapshots(t *testing.T) {
 	}
 }
 
-func TestPullRequestFields(t *testing.T) {
+func TestTurnsAndPushes(t *testing.T) {
 	s, ctx := New(fakeDefault), context.Background()
-	tk := task.New("r", "p")
-	tk.PR = true
-	s.Create(ctx, tk, "fake")
-	s.Start(ctx, tk.ID)
-	s.Finish(ctx, tk.ID, store.Outcome{State: task.Succeeded, BaseCommit: "abc", Summary: "sum", PRError: "denied"})
-	rec, _ := s.Get(ctx, tk.ID)
-	if rec.PR != (store.PullRequest{Requested: true, Error: "denied"}) || rec.BaseCommit != "abc" || rec.Summary != "sum" {
-		t.Errorf("got pr=%+v base=%q summary=%q", rec.PR, rec.BaseCommit, rec.Summary)
+	first := task.New("r", "p")
+	s.Create(ctx, first, "fake")
+	s.Start(ctx, first.ID)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, BaseCommit: "abc", Reply: "Added it.", Diff: "+a\n"})
+	pr := store.PullRequest{Requested: true, URL: "u", Number: 1, Branch: "b"}
+	s.RecordPush(ctx, first.ID, store.Push{Pushed: []string{first.ID}, PR: pr, LatestID: first.ID, Summary: "sum"})
+	rec, _ := s.Get(ctx, first.ID)
+	if rec.PR != pr || !rec.Pushed || rec.Reply != "Added it." || rec.BaseCommit != "abc" || rec.Summary != "sum" {
+		t.Errorf("got %+v", rec)
 	}
 }
 
 func TestThreads(t *testing.T) {
 	s, ctx := New(fakeDefault), context.Background()
 	first := task.New("r", "p")
-	first.PR = true
 	s.Create(ctx, first, "fake")
 	s.Start(ctx, first.ID)
-	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, PRURL: "u", PRNumber: 9, PRBranch: "b"})
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded})
+	s.RecordPush(ctx, first.ID, store.Push{PR: store.PullRequest{Requested: true, URL: "u", Number: 9, Branch: "b"}})
 
 	follow := func(parent string) (task.Task, error) {
 		tk := task.New("r", "p")
-		tk.PR, tk.ParentID = true, parent
+		tk.ParentID = parent
 		return tk, s.Create(ctx, tk, "fake")
 	}
 	second, err := follow(first.ID)
@@ -211,10 +212,10 @@ func TestThreads(t *testing.T) {
 func TestListThreadsAndCounts(t *testing.T) {
 	s, ctx := New(fakeDefault), context.Background()
 	first := task.New("r", "first")
-	first.PR = true
 	s.Create(ctx, first, "fake")
 	s.Start(ctx, first.ID)
-	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, PRURL: "u", PRNumber: 5, PRBranch: "b"})
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded})
+	s.RecordPush(ctx, first.ID, store.Push{PR: store.PullRequest{Requested: true, URL: "u", Number: 5, Branch: "b"}})
 	follow := task.New("r", "second")
 	follow.ParentID = first.ID
 	s.Create(ctx, follow, "fake")

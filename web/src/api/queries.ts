@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "./client";
-import type { Agent, ModelList, Snapshot, Status, Task, Thread } from "./types";
+import type { Agent, ModelList, Session, Snapshot, Status, Task, Thread } from "./types";
 
 // Hooks for the data screens share. TanStack Query caches each by its key,
 // so the strip, sidebar and pages share one request, refreshed while the
@@ -39,6 +39,15 @@ export function useThread(id: string) {
     queryKey: ["thread", id],
     queryFn: () => api<Task[]>(`/api/tasks/${encodeURIComponent(id)}/thread`),
     refetchInterval: (q) => (q.state.data?.some((t) => t.state === "queued" || t.state === "running") ? 2000 : 10000),
+  });
+}
+
+// useSession is a thread's session, refreshed while the page is open.
+export function useSession(threadId: string) {
+  return useQuery({
+    queryKey: ["session", threadId],
+    queryFn: () => api<Session>(`/api/threads/${encodeURIComponent(threadId)}/session`),
+    refetchInterval: 5000,
   });
 }
 

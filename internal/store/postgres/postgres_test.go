@@ -659,40 +659,58 @@ func TestReplaceSnapshotIsAtomic(t *testing.T) {
 	}
 }
 
-func TestPullRequestFields(t *testing.T) {
+// Turns keep their reply and diff; a push records the thread's branch and
+// pull request on every turn, marks the pushed ones, and keeps the summary
+// on the newest. A later follow-up inherits the branch and pull request.
+func TestTurnsAndPushes(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
-	tk := task.New("https://github.com/o/r", "p")
-	tk.PR = true
-	if err := s.Create(ctx, tk, "cursor"); err != nil {
+	first := prTask(t, s, "")
+	finishTask(t, s, first.ID, store.Outcome{State: task.Succeeded, BaseCommit: "abc123", Reply: "Added it.", Diff: "+a\n"})
+	second := prTask(t, s, first.ID)
+	finishTask(t, s, second.ID, store.Outcome{State: task.Succeeded, Diff: "+b\n"})
+	if rec, _ := s.Get(ctx, first.ID); rec.Reply != "Added it." || rec.BaseCommit != "abc123" || rec.Pushed || rec.PR.Branch != "" {
+		t.Fatalf("before the push: %+v", rec)
+	}
+
+	pr := store.PullRequest{Requested: true, URL: "https://github.com/o/r/pull/1", Number: 1, Branch: "forgerun/x-abc"}
+	if err := s.RecordPush(ctx, first.ID, store.Push{Pushed: []string{first.ID, second.ID}, PR: pr, LatestID: second.ID, Summary: "## Done\nx"}); err != nil {
 		t.Fatal(err)
 	}
-	if rec, _ := s.Get(ctx, tk.ID); !rec.PR.Requested || rec.PR.URL != "" || rec.Summary != "" || rec.BaseCommit != "" {
-		t.Fatalf("after Create: %+v", rec)
+	for _, id := range []string{first.ID, second.ID} {
+		rec, _ := s.Get(ctx, id)
+		if rec.PR != pr || !rec.Pushed {
+			t.Errorf("%s after the push: pr=%+v pushed=%v", id, rec.PR, rec.Pushed)
+		}
 	}
-	s.Start(ctx, tk.ID)
-	o := store.Outcome{State: task.Succeeded, BaseCommit: "abc123", Summary: "## Requested\nx",
-		PRURL: "https://github.com/o/r/pull/1"}
-	if err := s.Finish(ctx, tk.ID, o); err != nil {
+	if a, _ := s.Get(ctx, first.ID); a.Summary != "" {
+		t.Errorf("summary on the first turn: %q", a.Summary)
+	}
+	if b, _ := s.Get(ctx, second.ID); b.Summary != "## Done\nx" {
+		t.Errorf("summary on the newest turn: %q", b.Summary)
+	}
+	third := prTask(t, s, second.ID)
+	if rec, _ := s.Get(ctx, third.ID); rec.PR != pr || rec.Pushed {
+		t.Errorf("follow-up after the push: pr=%+v pushed=%v", rec.PR, rec.Pushed)
+	}
+
+	// A failed push records why, without marking anything pushed.
+	finishTask(t, s, third.ID, store.Outcome{State: task.Succeeded, Diff: "+c\n"})
+	failed := pr
+	failed.Error = "git push: rejected"
+	if err := s.RecordPush(ctx, first.ID, store.Push{PR: failed, LatestID: third.ID}); err != nil {
 		t.Fatal(err)
 	}
-	rec, _ := s.Get(ctx, tk.ID)
-	if rec.PR != (store.PullRequest{Requested: true, URL: "https://github.com/o/r/pull/1"}) ||
-		rec.BaseCommit != "abc123" || rec.Summary != "## Requested\nx" {
-		t.Errorf("after Finish: pr=%+v base=%q summary=%q", rec.PR, rec.BaseCommit, rec.Summary)
-	}
-	other := task.New("r", "p") // no PR asked
-	s.Create(ctx, other, "cursor")
-	if rec, _ := s.Get(ctx, other.ID); rec.PR.Requested {
-		t.Error("PR requested without asking")
+	if rec, _ := s.Get(ctx, third.ID); rec.PR.Error != "git push: rejected" || rec.Pushed {
+		t.Errorf("after a failed push: pr=%+v pushed=%v", rec.PR, rec.Pushed)
 	}
 }
 
-// prTask creates a task that finished with an opened pull request.
+// prTask creates a task, following parent if it's set.
 func prTask(t *testing.T, s *Store, parent string) task.Task {
 	t.Helper()
 	ctx := context.Background()
 	tk := task.New("https://github.com/o/r", "p")
-	tk.PR, tk.ParentID = true, parent
+	tk.ParentID = parent
 	if err := s.Create(ctx, tk, "cursor"); err != nil {
 		t.Fatal(err)
 	}
@@ -713,8 +731,8 @@ func finishTask(t *testing.T, s *Store, id string, o store.Outcome) {
 func TestThreads(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
 	first := prTask(t, s, "")
-	finishTask(t, s, first.ID, store.Outcome{State: task.Succeeded, Summary: "s1",
-		PRURL: "https://github.com/o/r/pull/9", PRNumber: 9, PRBranch: "forgerun/" + first.ID})
+	finishTask(t, s, first.ID, store.Outcome{State: task.Succeeded})
+	pushed(t, s, first.ID, "https://github.com/o/r/pull/9", 9, "forgerun/"+first.ID)
 
 	second := prTask(t, s, first.ID)
 	rec, _ := s.Get(ctx, second.ID)
@@ -756,7 +774,8 @@ func TestThreads(t *testing.T) {
 func TestFollowUpRace(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
 	first := prTask(t, s, "")
-	finishTask(t, s, first.ID, store.Outcome{State: task.Succeeded, PRNumber: 9, PRBranch: "b", PRURL: "u"})
+	finishTask(t, s, first.ID, store.Outcome{State: task.Succeeded})
+	pushed(t, s, first.ID, "u", 9, "b")
 	for range 5 {
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
@@ -787,8 +806,17 @@ func TestFollowUpRace(t *testing.T) {
 
 func withParent(id string) task.Task {
 	tk := task.New("https://github.com/o/r", "p")
-	tk.PR, tk.ParentID = true, id
+	tk.ParentID = id
 	return tk
+}
+
+// pushed records that a thread was pushed and has a pull request.
+func pushed(t *testing.T, s *Store, thread, url string, number int, branch string) {
+	t.Helper()
+	pr := store.PullRequest{Requested: true, URL: url, Number: number, Branch: branch}
+	if err := s.RecordPush(context.Background(), thread, store.Push{PR: pr}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestListThreadsAndCounts(t *testing.T) {
@@ -801,7 +829,8 @@ func TestListThreadsAndCounts(t *testing.T) {
 
 	// Thread A: a cursor task with a PR, then a follow-up on test-agent that failed.
 	a := prTask(t, s, "")
-	finishTask(t, s, a.ID, store.Outcome{State: task.Succeeded, PRURL: "u", PRNumber: 5, PRBranch: "b"})
+	finishTask(t, s, a.ID, store.Outcome{State: task.Succeeded})
+	pushed(t, s, a.ID, "u", 5, "b")
 	a2 := task.New("https://github.com/o/r", "follow-up")
 	a2.ParentID = a.ID
 	if err := s.Create(ctx, a2, "test-agent"); err != nil {

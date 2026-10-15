@@ -1,4 +1,5 @@
-// Package task runs one coding task end to end in a fresh sandbox.
+// Package task runs coding turns: each message in a thread is a turn, run
+// by an agent in the thread's session, a VM kept between turns.
 package task
 
 import (
@@ -9,9 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -21,36 +22,42 @@ import (
 
 const repoDir = "/work/repo"
 
-// snapshotTimeout bounds saving a snapshot after the task. It's separate
-// from Runner.Timeout so a task that finishes near its deadline can still
-// be snapshotted.
+// snapshotTimeout bounds saving a snapshot when a session closes.
 const snapshotTimeout = 2 * time.Minute
 
-// Task is what the user asked for.
+// sessionLifetime is the VM-side kill switch for a session's VM: the
+// runtime stops it after this long even if forgerun crashed and never
+// closed it. Sessions normally close long before, when idle.
+const sessionLifetime = 12 * time.Hour
+
+// Task is one turn: a message to the agent in a thread.
 type Task struct {
-	ID      string
-	Repo    string // git URL
-	Prompt  string
-	AgentID string // which agent runs it; "" = Runner.DefaultAgent
-	ModelID string // exact agent model id; "" or "auto" lets the agent choose
-	Family  string // the model's family, e.g. "opus"; "" if unknown
-	Effort  string // the model's effort, e.g. "high"; "" = the agent's default
-	PR      bool   // also open a pull request; the changes are pushed to a branch either way
-	// ParentID, for a follow-up, is the task it continues; "" otherwise.
-	ParentID string
-	// FollowUp is set by the worker when the task continues a thread's
-	// branch; nil for a fresh task.
-	FollowUp *FollowUp
+	ID       string
+	ThreadID string // the thread's first task; "" = this task starts a thread
+	ParentID string // the task this one follows; "" for a thread's first task
+	Repo     string // git URL
+	Prompt   string
+	AgentID  string // which agent runs it; "" = Runner.DefaultAgent
+	ModelID  string // exact agent model id; "" or "auto" lets the agent choose
+	Family   string // the model's family, e.g. "opus"; "" if unknown
+	Effort   string // the model's effort, e.g. "high"; "" = the agent's default
+	// ThreadBase is the commit the thread's first turn started from; ""
+	// for a first turn (it starts from the default branch's latest).
+	ThreadBase string
+	// History loads the thread's earlier turns, oldest first. It's called
+	// only when the thread's session has to be (re)built; nil = none.
+	History func(ctx context.Context) ([]Turn, error)
 }
 
-// FollowUp is what a follow-up task needs to know about its thread.
-type FollowUp struct {
-	Branch     string   // the thread's branch, e.g. "forgerun/add-a-test-9fe9cc"
-	PRNumber   int      // the thread's pull request to update; 0 = none yet
-	ThreadBase string   // the commit the thread's first task started from
-	Summary    string   // the latest summary of the thread; "" if none
-	Requests   []string // earlier requests in the thread, oldest first
+// Turn is an earlier turn of a thread, enough to rebuild its session.
+type Turn struct {
+	Prompt string
+	Reply  string // what the agent answered; "" if nothing
+	Diff   string // the changes it made (git diff --binary); "" if none
+	Failed bool
 }
+
+func (t Task) thread() string { return cmp.Or(t.ThreadID, t.ID) }
 
 // New creates a task with a unique, sortable ID like "t-20261011-142233-a1b2c3".
 func New(repo, prompt string) Task {
@@ -60,21 +67,17 @@ func New(repo, prompt string) Task {
 	return Task{ID: id, Repo: repo, Prompt: prompt}
 }
 
-// Result is what a task produced. Dir and LogPath are set even on failure,
+// Result is what a turn produced. Dir and LogPath are set even on failure,
 // so you can always read the log.
 type Result struct {
-	Dir          string // out/<task-id>
-	LogPath      string
-	Diff         string // the changes (git diff --binary); "" if the agent changed nothing
-	BaseCommit   string // the commit the agent started from
-	Summary      string // the agent's conversation summary; "" if none
-	Branch       string // where the changes were pushed; "" if they weren't
-	PRURL        string // the pull request, if one was opened or updated
-	PRNumber     int
-	PublishError string // why the changes weren't pushed, or a wanted pull request wasn't opened
+	Dir        string // out/<task-id>
+	LogPath    string
+	Diff       string // this turn's changes (git diff --binary); "" if none
+	Reply      string // the end of what the agent wrote; "" if nothing
+	BaseCommit string // the commit the session's work started from
 }
 
-// Runner holds settings shared by every task.
+// Runner runs turns and keeps each thread's session between them.
 type Runner struct {
 	// Agents are the agents tasks can run on, with their credentials.
 	Agents agent.Set
@@ -83,26 +86,46 @@ type Runner struct {
 	OutDir       string
 	CPUs         uint8
 	MemMiB       uint32
-	Timeout      time.Duration
-	Stdout       io.Writer // live progress; also saved to the log file
+	Timeout      time.Duration // per turn
+	Stdout       io.Writer     // live progress; also saved to each turn's log
+	Log          *slog.Logger  // session events; nil = discard
 	// AgentIdle stops an agent that produces no output and changes no
-	// files for this long, failing the task early. 0 = never.
+	// files for this long, failing the turn early. 0 = never.
 	AgentIdle time.Duration
-	// Snapshots, if set, saves the VM after each successful task so later
-	// tasks for the same repo can start from it. nil = no snapshots.
+	// Snapshots, if set, saves a session's VM when it closes so later
+	// sessions for the same repo can start from it. nil = no snapshots.
 	Snapshots Snapshotter
-	// Publisher, if set, pushes every task's changes to a branch and opens
-	// pull requests for tasks that ask for one. nil = changes stay in
-	// Result.Diff only (the CLI).
-	Publisher Publisher
+	// SessionIdle closes a session unused for this long; 0 = never.
+	SessionIdle time.Duration
+	// MaxSessions is how many sessions may be open at once; the least
+	// recently used idle one is closed to make room. 0 = no limit.
+	MaxSessions int
+
+	sessions *sessions
 }
 
+func (r *Runner) open() *sessions {
+	if r.sessions == nil { // set up on first use; the Runner is a plain struct
+		r.sessions = newSessions(r.SessionIdle, r.MaxSessions)
+	}
+	return r.sessions
+}
+
+func (r *Runner) log() *slog.Logger {
+	if r.Log == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return r.Log
+}
+
+// Run runs one turn in its thread's session, opening the session if it
+// isn't open. The session stays open afterwards, even if the turn fails.
 func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 
 	// Absolute, so the saved paths (also stored in the database) work from
-	// any directory: the publisher runs git elsewhere, for one.
+	// any directory.
 	outDir, err := filepath.Abs(r.OutDir)
 	if err != nil {
 		return Result{}, err
@@ -117,98 +140,281 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 		return res, err
 	}
 	defer logFile.Close()
-	logs := io.MultiWriter(r.Stdout, logFile)
-
+	logs := io.MultiWriter(cmp.Or[io.Writer](r.Stdout, io.Discard), logFile)
 	step := func(format string, a ...any) { fmt.Fprintf(logs, "==> "+format+"\n", a...) }
 
 	ag, err := r.Agents.Get(cmp.Or(t.AgentID, r.DefaultAgent))
 	if err != nil {
 		return res, err
 	}
-	// The credential is fetched now, for this task only.
-	secrets, err := r.Agents.Secrets(ctx, ag)
+	ss, history, err := r.acquire(ctx, ag, t, step)
 	if err != nil {
 		return res, err
 	}
-	cfg := sandbox.Config{
-		Image:       ag.Image(),
-		CPUs:        r.CPUs,
-		MemoryMiB:   r.MemMiB,
-		MaxLifetime: r.Timeout + snapshotTimeout + 2*time.Minute, // backstop if we crash
-		Secrets:     secrets,
+	defer r.open().release(ss)
+	sb := ss.sb
+	git := func(ctx context.Context, args ...string) (string, error) {
+		return sb.Run(ctx, sandbox.Cmd{Name: "git", Args: append([]string{"-C", repoDir}, args...)})
 	}
+	if res.BaseCommit, err = git(ctx, "rev-parse", "HEAD"); err != nil {
+		r.broken(ss, err)
+		return res, fmt.Errorf("reading the session's commit: %w", err)
+	}
+	res.BaseCommit = strings.TrimSpace(res.BaseCommit)
+
+	_, continuer := ag.(agent.Continuer)
+	req := agent.Request{Dir: repoDir, Prompt: t.Prompt, ModelID: t.ModelID, Family: t.Family, Effort: t.Effort}
+	switch {
+	case ss.continued && continuer:
+		req.Continue = true
+		step("running %s agent (model: %s), continuing its conversation", ag.ID(), cmp.Or(t.ModelID, "auto"))
+	case len(history) > 0:
+		req.Prompt = replayPrompt(history, t.Prompt)
+		step("running %s agent (model: %s) with the thread so far", ag.ID(), cmp.Or(t.ModelID, "auto"))
+	default:
+		step("running %s agent (model: %s)", ag.ID(), cmp.Or(t.ModelID, "auto"))
+	}
+	reply := &tailBuffer{max: maxReply}
+	if err := r.runAgent(ctx, ag, sb, req, io.MultiWriter(logs, reply), step); err != nil {
+		res.Reply = reply.String()
+		// Keep the session in step with the database: a failed turn
+		// records no changes, so it keeps none.
+		cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer done()
+		if _, rerr := git(cleanup, "reset", "-q", "--hard"); rerr != nil {
+			r.broken(ss, rerr)
+		} else if _, cerr := git(cleanup, "clean", "-fdq"); cerr != nil {
+			r.broken(ss, cerr)
+		}
+		step("the turn's changes were discarded")
+		return res, fmt.Errorf("agent: %w", err)
+	}
+	res.Reply = reply.String()
+	ss.continued = continuer
+
+	step("collecting changes")
+	if _, err := git(ctx, "add", "-A"); err != nil {
+		return res, fmt.Errorf("git add: %w", err)
+	}
+	diff, err := git(ctx, "diff", "--cached", "--binary")
+	if err != nil {
+		return res, fmt.Errorf("git diff: %w", err)
+	}
+	if diff == "" {
+		step("agent made no changes")
+		return res, nil
+	}
+	res.Diff = diff
+	files, _ := git(ctx, "diff", "--cached", "--name-only")
+	// Committed in the VM, so the next turn's diff holds only its own changes.
+	if _, err := git(ctx, "-c", "user.name=forgerun", "-c", "user.email=forgerun@localhost", "commit", "-q", "--no-verify", "-m", "turn "+t.ID); err != nil {
+		return res, fmt.Errorf("git commit: %w", err)
+	}
+	step("changed %d file(s); not pushed yet", len(strings.Fields(files)))
+	return res, nil
+}
+
+// acquire returns the thread's session, busy, opening one if needed. It
+// also returns the thread's history when the session was just built from
+// it, so the agent gets the conversation as text.
+func (r *Runner) acquire(ctx context.Context, ag agent.Agent, t Task, step func(string, ...any)) (*session, []Turn, error) {
+	ss, err := r.open().take(ctx, t.thread())
+	if err != nil {
+		return nil, nil, err
+	}
+	if ss != nil {
+		switch {
+		case ss.agentID != ag.ID():
+			step("the thread switched from %s to %s: closing its %s session", ss.agentID, ag.ID(), ss.agentID)
+			r.open().drop(ss)
+			r.closeSession(ss, "agent changed")
+		case !alive(ctx, ss.sb):
+			step("the session's VM is gone; reopening it")
+			r.open().drop(ss)
+			r.closeSession(ss, "VM gone")
+		default:
+			step("continuing session %s", ss.sb.Name())
+			return ss, nil, nil
+		}
+	}
+
+	ss, evicted := r.open().reserve(t.thread(), ag.ID())
+	ss.repo = t.Repo
+	for _, e := range evicted {
+		step("closing the least recently used session to make room")
+		r.closeSession(e, "too many sessions")
+	}
+	history, err := r.openSession(ctx, ag, t, ss, step)
+	if err != nil {
+		r.open().drop(ss)
+		if ss.sb != nil {
+			r.destroy(ss.sb)
+		}
+		return nil, nil, err
+	}
+	r.log().Info("session opened", "thread", ss.thread, "agent", ss.agentID, "vm", ss.sb.Name())
+	return ss, history, nil
+}
+
+// openSession boots the session's VM, from the repo's snapshot when there
+// is one, and rebuilds the thread's work in it: the thread's start commit
+// plus every earlier turn's changes, each as a commit.
+func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *session, step func(string, ...any)) ([]Turn, error) {
+	// The credential is fetched now, for this session only.
+	secrets, err := r.Agents.Secrets(ctx, ag)
+	if err != nil {
+		return nil, err
+	}
+	cfg := sandbox.Config{Image: ag.Image(), CPUs: r.CPUs, MemoryMiB: r.MemMiB, MaxLifetime: sessionLifetime, Secrets: secrets}
 	start := time.Now()
-	sb := r.restore(ctx, ag, t, cfg, step)
-	warm := sb != nil
+	ss.sb = r.restore(ctx, ag, t, cfg, step)
+	warm := ss.sb != nil
 	if !warm {
 		step("creating sandbox %s (%s)", t.ID, ag.Image())
-		if sb, err = sandbox.New(ctx, t.ID, cfg); err != nil {
-			return res, err
+		if ss.sb, err = sandbox.New(ctx, t.ID, cfg); err != nil {
+			return nil, err
+		}
+		step("cloning %s", t.Repo)
+		if _, err := ss.sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"clone", "--depth=1", t.Repo, repoDir}}); err != nil {
+			return nil, fmt.Errorf("clone: %w", err)
 		}
 	}
-	defer func() {
-		step("destroying sandbox")
-		if err := sb.Destroy(); err != nil {
-			fmt.Fprintf(logs, "warning: destroy %s: %v\n", sb.Name(), err)
+	var history []Turn
+	if t.History != nil {
+		if history, err = t.History(ctx); err != nil {
+			return nil, fmt.Errorf("loading the thread: %w", err)
 		}
-	}()
-	if !warm {
-		step("cloning %s", t.Repo)
-		if _, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"clone", "--depth=1", t.Repo, repoDir}}); err != nil {
-			return res, fmt.Errorf("clone: %w", err)
+	}
+	if t.ThreadBase != "" {
+		step("rebuilding the thread's work (%d earlier turn(s))", len(history))
+		if err := rebuild(ctx, ss.sb, t.ThreadBase, history); err != nil {
+			return nil, err
 		}
 	}
 	mode := "cold"
 	if warm {
 		mode = "warm"
 	}
-	step("sandbox ready in %s (%s)", time.Since(start).Round(100*time.Millisecond), mode)
+	step("session ready in %s (%s)", time.Since(start).Round(100*time.Millisecond), mode)
+	return history, nil
+}
 
-	if t.FollowUp != nil {
-		step("checking out %s", t.FollowUp.Branch)
-		if err := checkoutThread(ctx, sb, t.FollowUp); err != nil {
-			return res, err
+// CloseSession closes a thread's idle session, saving its VM as the
+// repo's snapshot. It returns ErrNoSession or ErrSessionBusy if it can't.
+func (r *Runner) CloseSession(thread string) error {
+	ss, err := r.open().remove(thread)
+	if err != nil {
+		return err
+	}
+	r.closeSession(ss, "ended by the user")
+	return nil
+}
+
+// Session reports a thread's session.
+func (r *Runner) Session(thread string) SessionInfo { return r.open().info(thread) }
+
+// OpenSessions is how many sessions are open.
+func (r *Runner) OpenSessions() int { return r.open().count() }
+
+// RunSessions closes idle sessions until ctx ends. Close the rest with
+// CloseAll once no more turns will run.
+func (r *Runner) RunSessions(ctx context.Context) {
+	every := time.Minute
+	if r.SessionIdle > 0 {
+		every = min(every, max(r.SessionIdle/4, time.Second))
+	}
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			for _, ss := range r.open().expired() {
+				r.closeSession(ss, "idle")
+			}
 		}
 	}
-	if res.BaseCommit, err = sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"-C", repoDir, "rev-parse", "HEAD"}}); err != nil {
-		return res, fmt.Errorf("reading start commit: %w", err)
-	}
-	res.BaseCommit = strings.TrimSpace(res.BaseCommit)
+}
 
-	step("running %s agent (model: %s)", ag.ID(), cmp.Or(t.ModelID, "auto"))
-	if err := r.runAgent(ctx, ag, sb, t, logs, step); err != nil {
-		return res, fmt.Errorf("agent: %w", err)
+// CloseAll closes every idle session, saving their VMs as snapshots.
+func (r *Runner) CloseAll() {
+	for _, ss := range r.open().removeAll() {
+		r.closeSession(ss, "server stopping")
 	}
+}
 
-	step("collecting changes")
-	git := func(args ...string) (string, error) {
-		return sb.Run(ctx, sandbox.Cmd{Name: "git", Args: append([]string{"-C", repoDir}, args...)})
-	}
-	if _, err := git("add", "-A"); err != nil {
-		return res, fmt.Errorf("git add: %w", err)
-	}
-	diff, err := git("diff", "--cached", "--binary")
+// Summarize asks the agent in a thread's open session for a summary of the
+// conversation, read-only. It returns "" if the agent can't give one, and
+// ErrNoSession if the thread's session is closed.
+func (r *Runner) Summarize(ctx context.Context, thread string) (string, error) {
+	ss, err := r.open().take(ctx, thread)
 	if err != nil {
-		return res, fmt.Errorf("git diff: %w", err)
+		return "", err
 	}
-	if diff == "" {
-		step("agent made no changes")
-	} else {
-		res.Diff = diff
-		files, _ := git("diff", "--cached", "--name-only")
-		step("changed %d file(s)", len(strings.Fields(files)))
-		// A summary for the pull request and as context for follow-ups;
-		// asked before the snapshot cleanup wipes the agent's chat.
-		r.summarize(ctx, ag, sb, t, &res, step)
+	if ss == nil {
+		return "", ErrNoSession
 	}
-	r.saveSnapshot(ctx, ag, sb, t, step)
-	r.publish(ctx, t, &res, step)
-	return res, nil
+	defer r.open().release(ss)
+	ag, err := r.Agents.Get(ss.agentID)
+	if err != nil {
+		return "", err
+	}
+	c, ok := ag.(agent.Continuer)
+	if !ok || !ss.continued {
+		return "", nil
+	}
+	return c.Continue(ctx, ss.sb, repoDir, SummaryPrompt)
+}
+
+// closeSession saves the session's VM as the repo's snapshot (the work in
+// progress is in the database, so nothing is lost) and destroys it.
+func (r *Runner) closeSession(ss *session, reason string) {
+	log := r.log().With("thread", ss.thread, "agent", ss.agentID, "reason", reason)
+	if ss.sb == nil {
+		return
+	}
+	if r.Snapshots != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
+		ag, err := r.Agents.Get(ss.agentID)
+		if err == nil {
+			err = r.Snapshots.Save(ctx, ss.sb, SnapshotRequest{
+				TaskID: ss.sb.Name(), Repo: ss.repo, AgentID: ss.agentID, RepoDir: repoDir, StatePaths: ag.StatePaths(),
+			}, func(format string, a ...any) { log.Info(fmt.Sprintf(format, a...)) })
+		}
+		cancel()
+		if err != nil {
+			log.Warn("session snapshot not saved", "err", err)
+		}
+	}
+	r.destroy(ss.sb)
+	log.Info("session closed", "vm", ss.sb.Name())
+}
+
+func (r *Runner) destroy(sb *sandbox.Sandbox) {
+	if err := sb.Destroy(); err != nil {
+		r.log().Warn("destroying VM", "vm", sb.Name(), "err", err)
+	}
+}
+
+// broken drops a session whose VM stopped answering: the next turn
+// rebuilds it from the database.
+func (r *Runner) broken(ss *session, err error) {
+	r.log().Warn("session broken; it will be rebuilt", "thread", ss.thread, "err", err)
+	r.open().drop(ss)
+	go r.destroy(ss.sb)
+}
+
+// alive reports whether a session's VM still runs commands.
+func alive(ctx context.Context, sb *sandbox.Sandbox) bool {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, err := sb.Run(ctx, sandbox.Cmd{Name: "true"})
+	return err == nil
 }
 
 // runAgent runs the agent, under a watchdog when AgentIdle is set.
-func (r *Runner) runAgent(ctx context.Context, ag agent.Agent, sb *sandbox.Sandbox, t Task, logs io.Writer, step func(string, ...any)) error {
-	req := agent.Request{Dir: repoDir, Prompt: prompt(t), ModelID: t.ModelID, Family: t.Family, Effort: t.Effort}
+func (r *Runner) runAgent(ctx context.Context, ag agent.Agent, sb *sandbox.Sandbox, req agent.Request, logs io.Writer, step func(string, ...any)) error {
 	if r.AgentIdle <= 0 {
 		return ag.Run(ctx, sb, req, logs)
 	}
@@ -239,81 +445,9 @@ func fileProbe(sb *sandbox.Sandbox, paths []string) func(context.Context) bool {
 	}
 }
 
-// summarize asks the agent, in its own conversation, for a summary of what
-// was asked and done. Agents that can't continue a conversation give none;
-// the pull request then describes the request and the changed files.
-func (r *Runner) summarize(ctx context.Context, ag agent.Agent, sb *sandbox.Sandbox, t Task, res *Result, step func(string, ...any)) {
-	c, ok := ag.(agent.Continuer)
-	if !ok {
-		step("%s agent can't continue its conversation; no summary", ag.ID())
-		return
-	}
-	step("asking the agent for a summary")
-	ask := SummaryPrompt
-	if t.FollowUp != nil {
-		ask += "\n\n" + followUpSummaryNote
-	}
-	summary, err := c.Continue(ctx, sb, repoDir, ask)
-	if err != nil || summary == "" {
-		step("warning: no summary: %v", cmp.Or(err, errors.New("empty reply")))
-		return
-	}
-	res.Summary = summary
-	step("got a summary (%d lines)", strings.Count(summary, "\n")+1)
-}
-
-// publishTimeout bounds pushing and opening a pull request after the task.
-const publishTimeout = 2 * time.Minute
-
-// publish pushes the changes to the thread's branch and opens or updates
-// its pull request. The task has already succeeded, so a failure only goes
-// into res.PublishError; the changes are still in res.Diff.
-func (r *Runner) publish(ctx context.Context, t Task, res *Result, step func(string, ...any)) {
-	switch {
-	case res.Diff == "":
-		return // nothing to push; an answer without changes is a normal outcome, not an error
-	case r.Publisher == nil:
-		res.PublishError = "publishing is off: the changes were not pushed"
-	case ctx.Err() != nil:
-		res.PublishError = "the task was cancelled before publishing"
-	}
-	if res.PublishError != "" {
-		step("not pushed: %s", res.PublishError)
-		return
-	}
-	step("pushing the changes")
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), publishTimeout)
-	defer cancel()
-	req := PublishRequest{
-		TaskID: t.ID, Repo: t.Repo, BaseCommit: res.BaseCommit, Patch: res.Diff,
-		Prompt: t.Prompt, Summary: res.Summary, Requests: []string{t.Prompt}, OpenPR: t.PR,
-	}
-	if fu := t.FollowUp; fu != nil {
-		req.Branch, req.PRNumber = fu.Branch, fu.PRNumber
-		req.Requests = append(slices.Clone(fu.Requests), t.Prompt)
-	}
-	pub, err := r.Publisher.Publish(ctx, req)
-	res.Branch, res.PRURL, res.PRNumber = pub.Branch, pub.PRURL, pub.PRNumber // set even on error: the push may have worked
-	if res.Branch != "" {
-		step("pushed to branch %s", res.Branch)
-	}
-	if err != nil {
-		res.PublishError = err.Error()
-		step("warning: %v", err)
-		return
-	}
-	switch {
-	case res.PRNumber == 0:
-	case req.PRNumber > 0:
-		step("pull request updated: %s", res.PRURL)
-	default:
-		step("pull request opened: %s", res.PRURL)
-	}
-}
-
-// restore returns a VM started from the repo's snapshot, ready to run the
-// agent, or nil if the task must start cold: snapshots are off, the repo
-// has none yet, or it couldn't be used. A snapshot never fails a task.
+// restore returns a VM started from the repo's snapshot, or nil if the
+// session must start cold: snapshots are off, the repo has none yet, or it
+// couldn't be used. A snapshot never fails a turn.
 func (r *Runner) restore(ctx context.Context, ag agent.Agent, t Task, cfg sandbox.Config, step func(string, ...any)) *sandbox.Sandbox {
 	if r.Snapshots == nil {
 		return nil
@@ -330,22 +464,4 @@ func (r *Runner) restore(ctx context.Context, ag agent.Agent, t Task, cfg sandbo
 		return nil
 	}
 	return sb
-}
-
-// saveSnapshot keeps the VM as the repo's snapshot. The task has already
-// succeeded, so a failure here is only a warning in the log.
-func (r *Runner) saveSnapshot(ctx context.Context, ag agent.Agent, sb *sandbox.Sandbox, t Task, step func(string, ...any)) {
-	if r.Snapshots == nil || ctx.Err() != nil { // off, or the task was cancelled
-		return
-	}
-	// The task's context may be about to time out; snapshotting gets its
-	// own time limit instead.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotTimeout)
-	defer cancel()
-	err := r.Snapshots.Save(ctx, sb, SnapshotRequest{
-		TaskID: t.ID, Repo: t.Repo, AgentID: ag.ID(), RepoDir: repoDir, StatePaths: ag.StatePaths(),
-	}, step)
-	if err != nil {
-		step("warning: snapshot not saved: %v", err)
-	}
 }

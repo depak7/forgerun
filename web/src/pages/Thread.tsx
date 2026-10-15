@@ -2,8 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
-import { useAgents, useLiveLog, useLogTail, useModels, useNow, useDiff, useThread } from "../api/queries";
-import type { Task } from "../api/types";
+import { useAgents, useLiveLog, useLogTail, useModels, useNow, useDiff, useSession, useThread } from "../api/queries";
+import type { Session, Task } from "../api/types";
 import { StateLabel } from "../components/StateLabel";
 import { agentChain, branchURL, formatElapsed, formatWhen, repoName, shortID } from "../format";
 import { parsePatch } from "../lib/diff";
@@ -45,7 +45,6 @@ export function ThreadPage() {
                 key={s.id}
                 step={s}
                 n={i + 1}
-                prevPR={i > 0 ? steps[i - 1].pr.number : 0}
                 selected={s.id === sel.id}
                 onSelect={() => setSelected(s.id)}
                 onRetry={() => setDraft(s.prompt)}
@@ -62,11 +61,28 @@ export function ThreadPage() {
 
 function Header({ steps, latest }: { steps: Task[]; latest: Task }) {
   const queryClient = useQueryClient();
+  const threadId = steps[0].id;
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
+    queryClient.invalidateQueries({ queryKey: ["session", threadId] });
+  };
   const cancel = useMutation({
     mutationFn: () => api<Task>(`/api/tasks/${encodeURIComponent(latest.id)}/cancel`, { method: "POST" }),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["thread", steps[0].id] }),
+    onSettled: refresh,
   });
+  const push = useMutation({
+    mutationFn: (pr: boolean) =>
+      api<Task[]>(`/api/threads/${encodeURIComponent(threadId)}/push`, { method: "POST", body: JSON.stringify({ pr }) }),
+    onSettled: refresh,
+  });
+  const end = useMutation({
+    mutationFn: () => api<Session>(`/api/threads/${encodeURIComponent(threadId)}/end`, { method: "POST" }),
+    onSettled: refresh,
+  });
+  const { data: session } = useSession(threadId);
   const pr = latest.pr;
+  const unpushed = steps.filter((s) => s.state === "succeeded" && s.has_diff && !s.pushed).length;
+  const idle = !isLive(latest) && !push.isPending;
   return (
     <header className={styles.header}>
       <div className={styles.crumbs}>
@@ -81,7 +97,9 @@ function Header({ steps, latest }: { steps: Task[]; latest: Task }) {
           <h1 className={styles.title}>{steps[0].prompt}</h1>
           <div className={styles.facts}>
             <StateLabel state={latest.state} />
-            <span style={{ color: pr.number ? "var(--accent)" : undefined }}>{pr.number ? `PR #${pr.number}` : pr.branch ? "branch only" : "not pushed"}</span>
+            <span style={{ color: session?.open ? "var(--accent)" : undefined }}>{sessionLabel(session)}</span>
+            <span style={{ color: pr.number ? "var(--accent)" : undefined }}>{pr.number ? `PR #${pr.number}` : pr.branch ? "branch pushed" : "not pushed"}</span>
+            {unpushed > 0 && <span style={{ color: "var(--running)" }}>{unpushed} unpushed</span>}
             <span>
               {steps.length} {steps.length === 1 ? "step" : "steps"}
             </span>
@@ -94,6 +112,27 @@ function Header({ steps, latest }: { steps: Task[]; latest: Task }) {
               [ cancel step {steps.length} ]
             </button>
           )}
+          {session?.open && !session.busy && idle && (
+            <button type="button" className={styles.btn} disabled={end.isPending} onClick={() => end.mutate()}>
+              [ end session ]
+            </button>
+          )}
+          {idle && unpushed > 0 && pr.number > 0 && (
+            <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => push.mutate(false)}>
+              [ push to PR #{pr.number} ]
+            </button>
+          )}
+          {idle && unpushed > 0 && !pr.number && (
+            <button type="button" className={styles.btn} onClick={() => push.mutate(false)}>
+              [ push branch ]
+            </button>
+          )}
+          {idle && !pr.number && (unpushed > 0 || pr.branch) && (
+            <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => push.mutate(true)}>
+              {unpushed > 0 ? "[ push & open PR ]" : "[ open PR ]"}
+            </button>
+          )}
+          {push.isPending && <span className={styles.pending}>pushing…</span>}
           {pr.branch && (
             <a className={styles.btn} href={branchURL(latest.repo, pr.branch)} target="_blank" rel="noreferrer" title={pr.branch}>
               [ branch ↗ ]
@@ -107,11 +146,21 @@ function Header({ steps, latest }: { steps: Task[]; latest: Task }) {
         </div>
       </div>
       {cancel.error && <span style={{ color: "var(--failed)", fontSize: 13 }}>Couldn't cancel: {cancel.error.message}</span>}
+      {push.error && <span style={{ color: "var(--failed)", fontSize: 13 }}>Couldn't push: {push.error.message}</span>}
+      {end.error && <span style={{ color: "var(--failed)", fontSize: 13 }}>Couldn't end the session: {end.error.message}</span>}
     </header>
   );
 }
 
-function StepItem(props: { step: Task; n: number; prevPR: number; selected: boolean; onSelect: () => void; onRetry: () => void }) {
+// sessionLabel says whether the thread's VM is open, and until when.
+function sessionLabel(session: Session | undefined): string {
+  if (!session?.open) return "session closed";
+  if (session.busy || !session.idle_until) return "session open";
+  const until = new Date(session.idle_until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  return `session open · closes ${until} if idle`;
+}
+
+function StepItem(props: { step: Task; n: number; selected: boolean; onSelect: () => void; onRetry: () => void }) {
   const { step: s, n } = props;
   const now = useNow();
   const { data: tail } = useLogTail(s.id, s.state === "running");
@@ -136,41 +185,34 @@ function StepItem(props: { step: Task; n: number; prevPR: number; selected: bool
             {s.effort && ` · ${s.effort}`}
           </span>
           <StateLabel state={s.state} />
-          {pushAction(s, props.prevPR) && <span style={{ color: s.pr.error ? "var(--failed)" : "var(--accent)" }}>{pushAction(s, props.prevPR)}</span>}
+          {pushLabel(s) && <span style={{ color: s.pushed ? "var(--accent)" : "var(--running)" }}>{pushLabel(s)}</span>}
           <span>{timing(s, now)}</span>
         </span>
         <span className={styles.replyText}>{replyText(s, tail)}</span>
-        {(s.state === "failed" || (s.state === "succeeded" && s.pr.error)) && (
-          <span className={styles.replyError}>{s.state === "failed" ? s.error : s.pr.error}</span>
-        )}
+        {s.state === "failed" && <span className={styles.replyError}>{s.error}</span>}
       </button>
       {s.state === "failed" && (
         <div className={styles.retry}>
           <button type="button" className={styles.btn} onClick={props.onRetry}>
             [ retry as follow-up ]
           </button>
-          <span>nothing was pushed for this step</span>
+          <span>this step's changes were discarded</span>
         </div>
       )}
     </div>
   );
 }
 
-// pushAction says where a step's changes went. A follow-up inherits its
-// thread's branch and pull request, so prevPR tells opening from pushing.
-function pushAction(s: Task, prevPR: number): string {
-  if (s.state !== "succeeded") return "";
-  if (s.pr.error) return s.pr.branch && s.has_diff ? "PR NOT OPENED" : "NOT PUSHED";
-  if (!s.has_diff || !s.pr.branch) return "";
-  if (!s.pr.number) return "PUSHED TO BRANCH";
-  return s.pr.number !== prevPR ? `OPENED PR #${s.pr.number}` : `PUSHED TO PR #${s.pr.number}`;
+// pushLabel says whether a step's changes are on the branch yet.
+function pushLabel(s: Task): string {
+  if (s.state !== "succeeded" || !s.has_diff) return "";
+  return s.pushed ? "PUSHED" : "NOT PUSHED YET";
 }
 
 function timing(s: Task, now: Date): string {
-  const start = s.snapshot_id !== null ? "warm" : "cold";
   if (!s.started_at) return "waiting";
   const end = s.finished_at ? Date.parse(s.finished_at) : now.getTime();
-  return `${start} · ${formatElapsed(end - Date.parse(s.started_at))}`;
+  return formatElapsed(end - Date.parse(s.started_at));
 }
 
 // replyText is what the agent "says" for a step in the conversation.
@@ -185,22 +227,21 @@ function replyText(s: Task, tail: string | undefined): string {
     case "failed":
       return "Stopped before finishing.";
   }
-  const done = sectionText(s.summary, "done");
-  if (done) return done;
+  if (s.reply) return excerpt(s.reply);
   return s.has_diff ? "Finished; the changes are in the diff." : "Finished without changing any files.";
 }
 
-// sectionText is the first lines of one "## Heading" section of a summary.
-function sectionText(summary: string, heading: string): string {
-  const m = new RegExp(`^#{1,6}\\s+${heading}\\s*$([\\s\\S]*?)(?=^#{1,6}\\s|$(?![\\s\\S]))`, "im").exec(summary);
-  if (!m) return "";
-  const text = m[1]
+// excerpt is the start of an agent's reply as plain text, for the
+// conversation; the reply tab shows all of it.
+function excerpt(reply: string): string {
+  const text = reply
     .split("\n")
-    .map((l) => l.replace(/^\s*[-*]\s+/, "").trim())
+    .map((l) => l.replace(/^\s*(#{1,6}|[-*]|\d+\.)\s+/, "").trim())
     .filter(Boolean)
     .join(" ")
-    .replace(/`([^`]*)`/g, "$1"); // a plain excerpt: drop code markers
-  return text.length > 280 ? `${text.slice(0, 277)}…` : text;
+    .replace(/`([^`]*)`/g, "$1") // drop code markers
+    .replace(/\*\*([^*]*)\*\*/g, "$1"); // and bold
+  return text.length > 320 ? `${text.slice(0, 317)}…` : text;
 }
 
 function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s: string) => void; onSent: () => void }) {
@@ -210,7 +251,6 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
   const [agent, setAgent] = useState(latest.agent);
   const { data: models } = useModels(agent);
   const [model, setModel] = useState("");
-  const [openPR, setOpenPR] = useState(false);
   useEffect(() => {
     if (models) setModel(agent === latest.agent && models.models.some((m) => m.id === latest.model) ? latest.model : models.default);
   }, [models, agent, latest.agent, latest.model]);
@@ -219,7 +259,7 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
     mutationFn: () =>
       api<Task>(`/api/tasks/${encodeURIComponent(latest.id)}/followups`, {
         method: "POST",
-        body: JSON.stringify({ prompt: props.draft.trim(), agent, model, ...(openPR ? { pr: true } : {}) }),
+        body: JSON.stringify({ prompt: props.draft.trim(), agent, model }),
       }),
     onSuccess: () => {
       props.setDraft("");
@@ -228,6 +268,7 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
       queryClient.invalidateQueries({ queryKey: ["threads"] });
     },
   });
+  const { data: session } = useSession(latest.thread_id);
 
   const closed = closedReason(latest, n);
   if (closed) {
@@ -270,7 +311,7 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
           rows={3}
           value={props.draft}
           onChange={(e) => props.setDraft(e.target.value)}
-          placeholder={latest.pr.number ? `Ask for another change to PR #${latest.pr.number}…` : `Ask for another change on ${latest.pr.branch}…`}
+          placeholder="Reply to the agent, or ask for another change…"
         />
         <div className={styles.composerBar}>
           <label htmlFor="fu-agent" className="sr-only">
@@ -296,16 +337,7 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
               </option>
             ))}
           </select>
-          {!latest.pr.number && (
-            <label className={styles.composerCheck}>
-              <input type="checkbox" checked={openPR} onChange={(e) => setOpenPR(e.target.checked)} /> open a pull request
-            </label>
-          )}
-          <span className={styles.composerHint}>
-            {missingKey
-              ? `${agent} needs ${agentInfo?.credential?.name} on the server`
-              : `continues ${latest.pr.number ? `PR #${latest.pr.number}'s branch` : "the branch"} with the thread summary`}
-          </span>
+          <span className={styles.composerHint}>{composerHint(session, agent, latest.agent, missingKey ? agentInfo?.credential?.name : undefined)}</span>
           <button type="submit" className={`${styles.btn} ${styles.btnPrimary} ${styles.send}`} disabled={!canSend}>
             {send.isPending ? "[ sending… ]" : "[ send ]"}
           </button>
@@ -319,37 +351,40 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
 // closedReason explains why the thread can't take a follow-up now, or "".
 function closedReason(latest: Task, n: number): string {
   if (isLive(latest)) {
-    return `Step ${n} is ${latest.state} on ${latest.agent}. You can follow up when it finishes, or cancel it from the header.`;
-  }
-  if (!latest.pr.branch) {
-    if (latest.pr.error) {
-      return `The changes weren't pushed (${latest.pr.error}), so there's no branch to continue. Start a new task to try again.`;
-    }
-    return "The agent made no changes, so there's no branch to continue. Start a new task instead.";
+    return `Step ${n} is ${latest.state} on ${latest.agent}. You can reply when it finishes, or cancel it from the header.`;
   }
   return "";
 }
 
+// composerHint says where the next message will run.
+function composerHint(session: Session | undefined, agent: string, current: string, missingKey: string | undefined): string {
+  if (missingKey) return `${agent} needs ${missingKey} on the server`;
+  if (agent !== current) return `switches to ${agent}: a new session gets the conversation so far`;
+  if (session?.open) return "continues the agent's conversation in its open session";
+  return "reopens the session (a few seconds) with the conversation so far";
+}
+
 function OutputPane({ step, n }: { step: Task; n: number }) {
-  const [tab, setTab] = useState<"log" | "diff" | "summary">("log");
-  const start = step.snapshot_id !== null ? `warm from #${step.snapshot_id}` : "cold";
+  const [tab, setTab] = useState<"log" | "diff" | "reply">("log");
+  const start = step.snapshot_id !== null ? ` · warm from #${step.snapshot_id}` : "";
   return (
     <section className={styles.output} aria-label="Step output">
       <div className={styles.tabsRow}>
         <div role="tablist" aria-label="Output" className={styles.tabs}>
-          {(["log", "diff", "summary"] as const).map((t) => (
+          {(["log", "diff", "reply"] as const).map((t) => (
             <button key={t} type="button" role="tab" aria-selected={tab === t} className={`${styles.tab} ${tab === t ? styles.tabOn : ""}`} onClick={() => setTab(t)}>
               {t}
             </button>
           ))}
         </div>
         <span className={styles.paneMeta}>
-          step {n} · {step.agent} · {step.started_at ? start : "not started"}
+          step {n} · {step.agent}
+          {step.started_at ? start : " · not started"}
         </span>
       </div>
       {tab === "log" && <LogView step={step} />}
       {tab === "diff" && <DiffView step={step} />}
-      {tab === "summary" && <SummaryView step={step} />}
+      {tab === "reply" && <ReplyView step={step} />}
     </section>
   );
 }
@@ -451,18 +486,23 @@ function DiffView({ step }: { step: Task }) {
   );
 }
 
-function SummaryView({ step }: { step: Task }) {
-  if (step.summary) {
-    return (
-      <div className={styles.summary}>
-        <Summary text={step.summary} headingClass={styles.summaryHeading} />
-        {step.pr.url && <span className={styles.summaryNote}>The latest summary is PR #{step.pr.number}'s description. Each follow-up rewrites it for the whole thread.</span>}
-      </div>
-    );
+// ReplyView is everything the agent answered in a step and, once the
+// thread is pushed with a pull request, the summary that describes it.
+function ReplyView({ step }: { step: Task }) {
+  if (!step.reply && !step.summary) {
+    let why = "The agent didn't write anything for this step.";
+    if (isLive(step)) why = "The agent's reply appears here when the step finishes.";
+    return <div className={styles.empty}>{why}</div>;
   }
-  let why = "No summary for this step.";
-  if (isLive(step)) why = "The agent writes a summary of the whole thread when the run finishes.";
-  else if (step.state !== "succeeded") why = "No summary: the step didn't finish.";
-  else if (!step.has_diff) why = "No summary: the agent made no changes.";
-  return <div className={styles.empty}>{why}</div>;
+  return (
+    <div className={styles.summary}>
+      {step.reply && <Summary text={step.reply} headingClass={styles.summaryHeading} />}
+      {step.summary && (
+        <>
+          <span className={styles.summaryHeading}>PULL REQUEST DESCRIPTION</span>
+          <Summary text={step.summary} headingClass={styles.summaryHeading} />
+        </>
+      )}
+    </div>
+  );
 }

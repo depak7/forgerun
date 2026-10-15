@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/depak7/forgerun/internal/agent"
@@ -37,18 +38,31 @@ type Config struct {
 	Agent        string            // the agent for requests that name none, e.g. "cursor"
 	DefaultModel string            // model family used when a request names none; "" = the agent's own default
 	RequireZDR   bool              // offer only models with zero data retention
-	PRs          PRs               // pull requests; nil = off (the server has no GitHub token)
+	PRs          PRs               // pushing and pull requests; nil = off (the server has no GitHub token)
+	Sessions     Sessions          // threads' open VMs
 	OutDir       string            // where the runner writes task results, to serve logs while tasks run
 	GitHubUser   string            // the account pull requests are opened as; "" if PRs are off
 	Snapshots    *SnapshotSettings // nil = snapshots are off
+	SessionIdle  time.Duration     // how long an idle session stays open; 0 = no limit
+	MaxSessions  int               // most sessions open at once; 0 = no limit
 	Log          *slog.Logger
 }
 
-// PRs is what the API needs to know about pull requests: whether one is
-// still open, so follow-ups can be refused before any work is done.
-// publish.Publisher implements it.
+// PRs is what the API needs from GitHub: pushing a thread's changes, and
+// whether its pull request is still open, so follow-ups can be refused
+// before any work is done. publish.Publisher implements it.
 type PRs interface {
+	Publish(ctx context.Context, req task.PublishRequest) (task.Published, error)
 	IsOpen(ctx context.Context, repo string, number int) (bool, error)
+}
+
+// Sessions is what the API needs from threads' open VMs. *task.Runner
+// implements it.
+type Sessions interface {
+	Session(thread string) task.SessionInfo
+	OpenSessions() int
+	CloseSession(thread string) error
+	Summarize(ctx context.Context, thread string) (string, error)
 }
 
 type Server struct {
@@ -59,6 +73,10 @@ type Server struct {
 	defaultModel string
 	requireZDR   bool
 	prs          PRs
+	sessions     Sessions
+	pushing      sync.Map // thread ID → struct{}, while it's being pushed
+	sessionIdle  time.Duration
+	maxSessions  int
 	outDir       string
 	githubUser   string
 	snapshots    *SnapshotSettings
@@ -68,7 +86,7 @@ type Server struct {
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
@@ -80,6 +98,9 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/diff", srv.taskDiff)
 	mux.HandleFunc("GET /api/agents", srv.listAgents)
 	mux.HandleFunc("GET /api/threads", srv.listThreads)
+	mux.HandleFunc("GET /api/threads/{id}/session", srv.getSession)
+	mux.HandleFunc("POST /api/threads/{id}/end", srv.endSession)
+	mux.HandleFunc("POST /api/threads/{id}/push", srv.pushThread)
 	mux.HandleFunc("GET /api/status", srv.status)
 	mux.HandleFunc("GET /api/snapshots", srv.listSnapshots)
 	mux.HandleFunc("GET /api/models", srv.listModels)
@@ -107,7 +128,9 @@ type taskJSON struct {
 	ParentID   *string    `json:"parent_id"`   // the task this one follows up; null for a thread's first task
 	ThreadID   string     `json:"thread_id"`   // the thread's first task
 	PR         prJSON     `json:"pr"`
-	Summary    string     `json:"summary"` // the agent's summary of the conversation; "" if none
+	Summary    string     `json:"summary"` // the agent's summary of the thread, taken when pushed; "" if none
+	Reply      string     `json:"reply"`   // the end of what the agent wrote; "" if nothing
+	Pushed     bool       `json:"pushed"`  // its changes are on the thread's branch
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at"`  // null until running
 	FinishedAt *time.Time `json:"finished_at"` // null until finished
@@ -118,8 +141,8 @@ func toJSON(r store.Record) taskJSON {
 		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.AgentID,
 		Model: r.Model.Family, Effort: r.Model.Effort, Thinking: r.Model.Thinking, Fast: r.Model.Fast, ModelID: r.Model.ID,
 		State: r.State, Error: r.Error, HasDiff: r.HasDiff, SnapshotID: r.SnapshotID,
-		PR:       prJSON{Requested: r.PR.Requested, URL: r.PR.URL, Number: r.PR.Number, Branch: r.PR.Branch, Error: r.PR.Error},
-		Summary:  r.Summary,
+		PR:      prJSON{Requested: r.PR.Requested, URL: r.PR.URL, Number: r.PR.Number, Branch: r.PR.Branch, Error: r.PR.Error},
+		Summary: r.Summary, Reply: r.Reply, Pushed: r.Pushed,
 		ParentID: optional(r.ParentID), ThreadID: r.ThreadID,
 		CreatedAt: r.CreatedAt.UTC(), StartedAt: utc(r.StartedAt), FinishedAt: utc(r.FinishedAt),
 	}
@@ -161,7 +184,6 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Effort   string `json:"effort"`
 		Thinking *bool  `json:"thinking"` // nil = not sent
 		Fast     *bool  `json:"fast"`
-		PR       bool   `json:"pr"`    // also open a pull request; the changes go to a branch either way
 		Agent    string `json:"agent"` // "" = the server's default agent
 	}
 	if !decodeBody(w, r, &req) {
@@ -175,16 +197,13 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
-	// Refuse now rather than fail after the agent has done the work.
+	// Refuse now rather than after the agent has done the work: the
+	// changes can only be pushed to a repo forgerun can push to.
 	if s.prs != nil {
-		// Every task's changes are pushed to a branch, so the repo must be one we can push to.
 		if _, err := forge.ParseRepo(req.Repo); err != nil {
-			writeError(w, http.StatusBadRequest, "forgerun pushes each task's changes to a branch: "+err.Error())
+			writeError(w, http.StatusBadRequest, "forgerun pushes the changes to a branch: "+err.Error())
 			return
 		}
-	} else if req.PR {
-		writeError(w, http.StatusBadRequest, "pull requests are disabled on this server (it has no GITHUB_TOKEN)")
-		return
 	}
 
 	agentID := cmp.Or(req.Agent, s.agent)
@@ -197,7 +216,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := task.New(req.Repo, req.Prompt)
-	t.ModelID, t.PR = v.ID, req.PR
+	t.ModelID = v.ID
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.internalError(w, r, err)
 		return
@@ -290,10 +309,9 @@ func (s *Server) runnable(agentID string) bool {
 	return err == nil
 }
 
-// createFollowUp continues a thread with a new request. The agent works on
-// the thread's branch with the thread's summary as context, and the result
-// is pushed to the same branch: it updates the thread's pull request, or
-// opens one if asked and there is none yet.
+// createFollowUp is the next message in a thread. It runs in the thread's
+// session, so the agent carries on its own conversation; nothing is pushed
+// until the user pushes the thread.
 func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Prompt   string `json:"prompt"`
@@ -302,7 +320,6 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		Effort   string `json:"effort"`
 		Thinking *bool  `json:"thinking"`
 		Fast     *bool  `json:"fast"`
-		PR       *bool  `json:"pr"` // open a pull request if the thread has none; nil = as the thread asked
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -311,19 +328,11 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
-	if s.prs == nil {
-		writeError(w, http.StatusBadRequest, "follow-ups need a branch, and this server doesn't push (it has no GITHUB_TOKEN)")
-		return
-	}
 	parent, ok := s.getRecord(w, r)
 	if !ok {
 		return
 	}
 	// Explain the thread rules in the user's terms; the store enforces them too.
-	if parent.PR.Branch == "" {
-		writeError(w, http.StatusConflict, "task "+parent.ID+" has no branch to follow up on (it made no changes, or they weren't pushed)")
-		return
-	}
 	if !parent.State.Terminal() {
 		writeError(w, http.StatusConflict, "task "+parent.ID+" is still "+string(parent.State)+"; follow up when it finishes")
 		return
@@ -337,7 +346,7 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "follow up on the latest task in this thread: "+latest.ID)
 		return
 	}
-	if parent.PR.Number > 0 {
+	if parent.PR.Number > 0 && s.prs != nil {
 		open, err := s.prs.IsOpen(r.Context(), parent.Repo, parent.PR.Number)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "checking the pull request on GitHub: "+err.Error())
@@ -360,10 +369,6 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 	}
 	t := task.New(parent.Repo, req.Prompt)
 	t.ModelID, t.ParentID = v.ID, parent.ID
-	t.PR = parent.PR.Requested
-	if req.PR != nil {
-		t.PR = *req.PR
-	}
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.storeError(w, r, err)
 		return
@@ -382,6 +387,7 @@ type threadJSON struct {
 	Steps          int       `json:"steps"`
 	Agents         []string  `json:"agents"` // each step's agent, oldest first
 	Latest         taskJSON  `json:"latest"`
+	SessionOpen    bool      `json:"session_open"`    // the thread's VM is open
 	NeedsAttention bool      `json:"needs_attention"` // the newest step failed, or its changes weren't pushed or its pull request didn't open
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -401,7 +407,7 @@ func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
 	for i, th := range threads {
 		l := th.Latest
 		out[i] = threadJSON{ID: th.ID, Title: th.Title, Repo: th.Repo, Steps: th.Steps, Agents: th.Agents,
-			Latest: toJSON(l), UpdatedAt: th.UpdatedAt.UTC(),
+			Latest: toJSON(l), UpdatedAt: th.UpdatedAt.UTC(), SessionOpen: s.sessionOf(th.ID).Open,
 			NeedsAttention: l.State == task.Failed || (l.State == task.Succeeded && l.PR.Error != "")}
 	}
 	writeData(w, http.StatusOK, out)
@@ -459,7 +465,12 @@ type statusJSON struct {
 		SweepSec    int64 `json:"sweep_seconds"`
 	} `json:"snapshots"`
 	RequireZDR bool `json:"require_zdr"` // only zero-data-retention models are accepted
-	Tasks      struct {
+	Sessions   struct {
+		Open        int   `json:"open"`
+		Max         int   `json:"max"`          // 0 = no limit
+		IdleSeconds int64 `json:"idle_seconds"` // an idle session closes after this; 0 = never
+	} `json:"sessions"`
+	Tasks struct {
 		Queued  int `json:"queued"`
 		Running int `json:"running"`
 	} `json:"tasks"`
@@ -469,6 +480,10 @@ type statusJSON struct {
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	var out statusJSON
 	out.RequireZDR = s.requireZDR
+	if s.sessions != nil {
+		out.Sessions.Open = s.sessions.OpenSessions()
+	}
+	out.Sessions.Max, out.Sessions.IdleSeconds = s.maxSessions, int64(s.sessionIdle.Seconds())
 	out.PullRequests.Enabled, out.PullRequests.GitHubUser = s.prs != nil, s.githubUser
 	if s.snapshots != nil {
 		snaps, err := s.store.ListSnapshots(r.Context())

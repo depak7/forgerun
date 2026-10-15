@@ -81,8 +81,7 @@ describe("NewTaskPage", () => {
     server();
     renderNew("/tasks/new?prompt=x&repo=https://github.com/depak7/playground");
     expect(await screen.findByText("● WARM SNAPSHOT")).toBeTruthy();
-    const prSwitch = () => screen.getByRole("switch", { name: "Open a pull request" }) as HTMLButtonElement;
-    await waitFor(() => expect(prSwitch().getAttribute("aria-checked")).toBe("true"));
+    expect(screen.getByText(/Nothing is pushed until you press push/)).toBeTruthy();
 
     fireEvent.change(repoInput(), { target: { value: "git@github.com:depak7/playground.git" } });
     expect(screen.getAllByText(/Use an https URL/).length).toBeGreaterThan(0);
@@ -91,7 +90,6 @@ describe("NewTaskPage", () => {
     fireEvent.change(repoInput(), { target: { value: "https://gitlab.com/depak7/playground" } });
     expect(screen.getByText(/Needs a github.com repo/)).toBeTruthy();
     expect(screen.getByText(/the repo must be on github.com/)).toBeTruthy();
-    expect(prSwitch().disabled).toBe(true);
     expect(runButton().disabled).toBe(true);
     expect(screen.getByText("COLD START")).toBeTruthy();
   });
@@ -109,7 +107,7 @@ describe("NewTaskPage", () => {
 
     expect(await screen.findByText("thread page")).toBeTruthy();
     expect(posted).toEqual([
-      { repo: "https://github.com/depak7/playground", prompt: "Add a test", agent: "cursor", model: "claude-opus-5-5", effort: "high", fast: true, pr: true },
+      { repo: "https://github.com/depak7/playground", prompt: "Add a test", agent: "cursor", model: "claude-opus-5-5", effort: "high", fast: true },
     ]);
   });
 

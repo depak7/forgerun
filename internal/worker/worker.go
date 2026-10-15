@@ -4,7 +4,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -104,12 +103,12 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	p.setRunning(rec.ID, cancel)
 
 	log.Info("task started", "id", rec.ID, "repo", rec.Repo, "thread", rec.ThreadID)
-	t := task.Task{ID: rec.ID, Repo: rec.Repo, Prompt: rec.Prompt, AgentID: rec.AgentID, ModelID: rec.Model.ID,
-		Family: rec.Model.Family, Effort: rec.Model.Effort, PR: rec.PR.Requested, ParentID: rec.ParentID}
+	t := task.Task{ID: rec.ID, ThreadID: rec.ThreadID, ParentID: rec.ParentID, Repo: rec.Repo, Prompt: rec.Prompt,
+		AgentID: rec.AgentID, ModelID: rec.Model.ID, Family: rec.Model.Family, Effort: rec.Model.Effort}
 	var res task.Result
 	var err error
 	if t.ParentID != "" {
-		t.FollowUp, err = p.followUp(taskCtx, rec)
+		err = p.threadContext(taskCtx, rec, &t)
 	}
 	if err == nil {
 		res, err = p.exec.Run(taskCtx, t)
@@ -118,9 +117,6 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	// Cancel must already report false.
 	p.setRunning(rec.ID, nil)
 	o := outcome(taskCtx, res, err)
-	if rec.PR.Requested && o.State != task.Succeeded && o.PRError == "" {
-		o.PRError = fmt.Sprintf("no pull request: the task %s", o.State)
-	}
 
 	// taskCtx may be cancelled already; recording the outcome must still happen.
 	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -132,28 +128,36 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	log.Info("task finished", "id", rec.ID, "state", o.State, "err", o.Error)
 }
 
-// followUp gathers what a follow-up needs from its thread: the branch and
-// pull request (if any), where the thread started, the latest summary and
-// the earlier requests.
-func (p *Pool) followUp(ctx context.Context, rec store.Record) (*task.FollowUp, error) {
+// threadContext gives a follow-up what its session needs if it has to be
+// rebuilt: the commit the thread started from, and its earlier turns,
+// loaded only when asked for.
+func (p *Pool) threadContext(ctx context.Context, rec store.Record, t *task.Task) error {
 	thread, err := p.store.ThreadTasks(ctx, rec.ThreadID)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if rec.PR.Branch == "" || len(thread) == 0 {
-		return nil, fmt.Errorf("thread %s has no branch to continue", rec.ThreadID)
+	if len(thread) == 0 || thread[0].BaseCommit == "" {
+		// The first turn never got as far as a checkout: start afresh.
+		return nil
 	}
-	fu := &task.FollowUp{Branch: rec.PR.Branch, PRNumber: rec.PR.Number, ThreadBase: thread[0].BaseCommit}
-	for _, prev := range thread {
-		if prev.ID == rec.ID {
-			break
+	t.ThreadBase = thread[0].BaseCommit
+	t.History = func(ctx context.Context) ([]task.Turn, error) {
+		var turns []task.Turn
+		for _, prev := range thread {
+			if prev.ID == rec.ID {
+				break
+			}
+			turn := task.Turn{Prompt: prev.Prompt, Reply: prev.Reply, Failed: prev.State != task.Succeeded}
+			if prev.HasDiff && !turn.Failed { // a failed turn's changes were discarded
+				if turn.Diff, err = p.store.Diff(ctx, prev.ID); err != nil {
+					return nil, err
+				}
+			}
+			turns = append(turns, turn)
 		}
-		fu.Requests = append(fu.Requests, prev.Prompt)
-		if prev.Summary != "" {
-			fu.Summary = prev.Summary // the latest one wins: it covers the whole thread
-		}
+		return turns, nil
 	}
-	return fu, nil
+	return nil
 }
 
 // setRunning tracks (cancel != nil) or untracks (nil) a task running here.
@@ -170,8 +174,7 @@ func (p *Pool) setRunning(id string, cancel context.CancelCauseFunc) {
 // outcome decides how a finished run is recorded.
 func outcome(ctx context.Context, res task.Result, err error) store.Outcome {
 	o := store.Outcome{State: task.Succeeded, LogPath: res.LogPath, Diff: res.Diff,
-		BaseCommit: res.BaseCommit, Summary: res.Summary, PRURL: res.PRURL, PRNumber: res.PRNumber,
-		PRBranch: res.Branch, PRError: res.PublishError}
+		BaseCommit: res.BaseCommit, Reply: res.Reply}
 	switch {
 	case err == nil:
 	case errors.Is(context.Cause(ctx), errCancelledByUser):

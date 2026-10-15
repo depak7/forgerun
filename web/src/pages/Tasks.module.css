@@ -276,3 +276,7 @@
     width: 100%;
   }
 }
+.session {
+  color: var(--accent);
+  font-size: 11px;
+}

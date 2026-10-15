@@ -84,6 +84,11 @@
   color: var(--accent-ink);
   background: var(--accent-hover);
 }
+.pending {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
 .btnDanger {
   border-color: var(--failed-line);
   color: var(--failed);
@@ -230,13 +235,6 @@
   background: var(--bg);
   color: var(--text);
   font: inherit;
-}
-.composerCheck {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 40px;
-  color: var(--muted);
 }
 .composerHint {
   color: var(--faint);

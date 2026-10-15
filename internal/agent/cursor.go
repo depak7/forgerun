@@ -73,6 +73,9 @@ func (c *Cursor) Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt 
 // is left implicit rather than passed as --model auto.
 func cursorArgs(req Request) []string {
 	args := []string{"-p", req.Prompt, "--force", "--trust", "--output-format", "text", "--disable-auto-update"}
+	if req.Continue {
+		args = append(args, "--continue")
+	}
 	if req.ModelID != "" && req.ModelID != "auto" {
 		args = append(args, "--model", req.ModelID)
 	}

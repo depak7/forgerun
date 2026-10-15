@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -76,18 +77,16 @@ func TestSaveCleansAndReplaces(t *testing.T) {
 	r, s := setup(t, messyAgent{})
 	ctx := context.Background()
 
-	// Task 1: its VM becomes the repo's snapshot.
+	// Task 1: its VM becomes the repo's snapshot when its session closes.
 	res, err := r.Run(ctx, task.New(testRepo, "unused"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.CloseAll()
 	first, err := s.CurrentSnapshot(ctx, testRepo, "fake")
 	if err != nil {
 		log, _ := os.ReadFile(res.LogPath)
-		t.Fatalf("no snapshot after a successful task: %v\nlog:\n%s", err, log)
-	}
-	if log, _ := os.ReadFile(res.LogPath); !strings.Contains(string(log), "saved at") {
-		t.Errorf("log doesn't mention the snapshot:\n%s", log)
+		t.Fatalf("no snapshot after the session closed: %v\nlog:\n%s", err, log)
 	}
 
 	// The snapshot looks like a fresh clone of master, plus the ignored cache.
@@ -126,6 +125,7 @@ func TestSaveCleansAndReplaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.CloseAll()
 	log2, _ := os.ReadFile(res.LogPath)
 	second, err := s.CurrentSnapshot(ctx, testRepo, "fake")
 	if err != nil || second.ID == first.ID {
@@ -140,13 +140,23 @@ func TestSaveCleansAndReplaces(t *testing.T) {
 	}
 }
 
-func TestNoSnapshotAfterFailure(t *testing.T) {
-	r, s := setup(t, messyAgent{fail: true})
-	if _, err := r.Run(context.Background(), task.New(testRepo, "unused")); err == nil {
+// A failed turn keeps its session, without the turn's changes.
+func TestFailedTurnKeepsSession(t *testing.T) {
+	r, _ := setup(t, messyAgent{fail: true})
+	tk := task.New(testRepo, "unused")
+	res, err := r.Run(context.Background(), tk)
+	if err == nil {
 		t.Fatal("task should have failed")
 	}
-	if snaps, _ := s.ListSnapshots(context.Background()); len(snaps) != 0 {
-		t.Errorf("failed task left snapshots: %+v", snaps)
+	defer r.CloseAll()
+	if !r.Session(tk.ID).Open {
+		t.Error("the session closed after a failed turn")
+	}
+	if res.Diff != "" {
+		t.Errorf("a failed turn kept changes:\n%s", res.Diff)
+	}
+	if log, _ := os.ReadFile(res.LogPath); !strings.Contains(string(log), "changes were discarded") {
+		t.Errorf("log doesn't say the changes were discarded:\n%s", log)
 	}
 }
 
@@ -157,12 +167,14 @@ func TestSaveFailureIsOnlyAWarning(t *testing.T) {
 	failing := &failingStore{Store: s}
 	r.Snapshots = &Manager{Store: failing, Prefix: testPrefix}
 
-	res, err := r.Run(context.Background(), task.New(testRepo, "unused"))
-	if err != nil {
+	var logged strings.Builder
+	r.Log = slog.New(slog.NewTextHandler(&logged, nil))
+	if _, err := r.Run(context.Background(), task.New(testRepo, "unused")); err != nil {
 		t.Fatalf("task failed because of the snapshot: %v", err)
 	}
-	if log, _ := os.ReadFile(res.LogPath); !strings.Contains(string(log), "warning: snapshot not saved") {
-		t.Errorf("log has no warning:\n%s", log)
+	r.CloseAll()
+	if !strings.Contains(logged.String(), "session snapshot not saved") {
+		t.Errorf("log has no warning:\n%s", logged.String())
 	}
 	if failing.ref == "" {
 		t.Fatal("the snapshot step never reached the store")
@@ -224,6 +236,7 @@ func TestWarmStart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		r.CloseAll() // saves the snapshot the next task starts from
 		rec, _ := s.Get(ctx, tk.ID)
 		log, _ := os.ReadFile(res.LogPath)
 		return rec, string(log)
@@ -284,6 +297,7 @@ git rev-parse HEAD`}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.CloseAll()
 	log, _ := os.ReadFile(res.LogPath)
 	if !strings.Contains(string(log), "agent sees commit "+latest) {
 		t.Errorf("agent didn't get the latest commit %.7s (snapshot was at %.7s):\n%s", latest, older, log)
@@ -305,6 +319,7 @@ func TestBrokenSnapshotFallsBackCold(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task failed because of a broken snapshot: %v", err)
 	}
+	r.CloseAll()
 	log, _ := os.ReadFile(res.LogPath)
 	for _, want := range []string{"warning: snapshot not usable, starting cold", "(cold)"} {
 		if !strings.Contains(string(log), want) {
@@ -319,10 +334,10 @@ func TestBrokenSnapshotFallsBackCold(t *testing.T) {
 	}
 }
 
-// readyLine picks the "sandbox ready in …" line out of a task log.
+// readyLine picks the "session ready in …" line out of a task log.
 func readyLine(log string) string {
 	for _, line := range strings.Split(log, "\n") {
-		if strings.Contains(line, "sandbox ready in") {
+		if strings.Contains(line, "session ready in") {
 			return line
 		}
 	}

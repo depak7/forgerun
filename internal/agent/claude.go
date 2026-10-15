@@ -68,6 +68,9 @@ func claudeCmd(dir string, args []string) sandbox.Cmd {
 // the CLI uses its own defaults.
 func claudeArgs(req Request) []string {
 	args := []string{"-p", req.Prompt, "--permission-mode", "bypassPermissions", "--output-format", "text"}
+	if req.Continue {
+		args = append(args, "--continue")
+	}
 	if req.Family != "" {
 		args = append(args, "--model", req.Family)
 	}

@@ -88,6 +88,7 @@ func runCmd(args []string) error {
 	t := task.New(*repo, *prompt)
 	t.ModelID, t.Family, t.Effort = *model, *model, *effort
 	res, err := r.Run(ctx, t)
+	r.CloseAll() // one turn only: destroy its session's VM
 	if res.LogPath != "" {
 		fmt.Println("log:", res.LogPath)
 	}

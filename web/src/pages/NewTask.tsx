@@ -7,9 +7,8 @@ import type { Agent, ModelFamily, NewTask, Task } from "../api/types";
 import { checkRepo, isGitHub, normalizeRepo } from "../format";
 import styles from "./NewTask.module.css";
 
-// NewTaskPage asks what an agent should do, on which repo, with which agent
-// and model, and whether to open a pull request (the changes go to a branch
-// either way).
+// NewTaskPage starts a thread: what an agent should do, on which repo, with
+// which agent and model. Nothing is pushed until the user pushes the thread.
 export function NewTaskPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -26,7 +25,6 @@ export function NewTaskPage() {
   const [effort, setEffort] = useState(""); // "" = the family's default
   const [thinking, setThinking] = useState(false);
   const [fast, setFast] = useState(false);
-  const [wantPR, setWantPR] = useState(true);
 
   // Defaults once data arrives: the most recent repo, and the first agent
   // with its credential set.
@@ -54,8 +52,6 @@ export function NewTaskPage() {
 
   const agent = agents?.find((a) => a.id === agentId);
   const repoProblem = checkRepo(repo);
-  const prAllowed = !!status?.pull_requests.enabled && repoProblem === "" && isGitHub(repo);
-  const pr = wantPR && prAllowed;
   const warm = useMemo(
     () => !!snapshots?.some((s) => s.state === "current" && s.agent === agentId && s.repo === normalizeRepo(repo)),
     [snapshots, agentId, repo],
@@ -69,7 +65,6 @@ export function NewTaskPage() {
     ...(effort ? { effort } : {}),
     ...(thinking ? { thinking: true } : {}),
     ...(fast ? { fast: true } : {}),
-    pr,
   };
 
   const create = useMutation({
@@ -238,23 +233,7 @@ export function NewTaskPage() {
             </fieldset>
           </div>
 
-          <div className={styles.prBox}>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={pr}
-              aria-label="Open a pull request"
-              disabled={!prAllowed}
-              className={styles.switch}
-              onClick={() => setWantPR(!wantPR)}
-            >
-              <span className={styles.knob} />
-            </button>
-            <div className={styles.prText}>
-              <span style={{ fontWeight: 500 }}>Open a pull request</span>
-              <span className={`${styles.prNote} ${prAllowed ? "" : styles.prNoteWarn}`}>{prNote(status?.pull_requests, repoProblem, repo)}</span>
-            </div>
-          </div>
+          <p className={styles.prNote}>{pushNote(status?.pull_requests, repoProblem, repo)}</p>
 
           <div className={styles.actions}>
             {(blocked || create.error) && (
@@ -301,9 +280,8 @@ function agentNote(a: Agent): string {
   return `${a.name}; default model ${a.default_model}.`;
 }
 
-function prNote(prs: { enabled: boolean; github_user: string } | undefined, repoProblem: string, repo: string): string {
+function pushNote(prs: { enabled: boolean; github_user: string } | undefined, repoProblem: string, repo: string): string {
   if (!prs?.enabled) return "This server can't push (no GITHUB_TOKEN).";
-  if (repoProblem) return "Enter a valid repo URL first.";
-  if (!isGitHub(repo)) return "Needs a github.com repo.";
-  return `The changes are pushed to a forgerun/… branch named after your prompt, as ${prs.github_user}, either way. On: also open a pull request with the agent's summary as its description.`;
+  if (repoProblem || !isGitHub(repo)) return "Needs a github.com repo, so the changes can be pushed when you're done.";
+  return `The agent works in a session you can keep talking to. Nothing is pushed until you press push: then the changes go to a forgerun/… branch as ${prs.github_user}, and a pull request if you want one.`;
 }

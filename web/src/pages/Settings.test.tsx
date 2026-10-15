@@ -28,6 +28,7 @@ function status(over: Partial<Status> = {}): Status {
     snapshots: { enabled: true, count: 1, bytes: 5e9, budget_bytes: 20e9, max_age_seconds: 604800, sweep_seconds: 600 },
     tasks: { queued: 0, running: 0 },
     require_zdr: false,
+    sessions: { open: 1, max: 4, idle_seconds: 1800 },
     ...over,
   };
 }
@@ -89,6 +90,13 @@ describe("SettingsPage", () => {
     expect(screen.getByText(/unused for 7 days are deleted/)).toBeTruthy();
     expect(screen.getByText(/Checked every 10 min/)).toBeTruthy();
     expect(await screen.findByText("abcdef1")).toBeTruthy();
+  });
+
+  it("explains sessions", async () => {
+    serve(status());
+    renderPage(<SettingsPage />);
+    expect(await screen.findByText("1 open of 4")).toBeTruthy();
+    expect(screen.getByText(/closes after 30 min without a message/)).toBeTruthy();
   });
 
   it("says when snapshots are off", async () => {

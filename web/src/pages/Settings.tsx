@@ -38,6 +38,13 @@ export function SettingsPage() {
         <div className={styles.card}>{status && <PullRequests status={status} />}</div>
       </section>
 
+      <section className={styles.section} aria-labelledby="sessions">
+        <h2 id="sessions" className="label">
+          Sessions
+        </h2>
+        <div className={styles.card}>{status && <Sessions status={status} />}</div>
+      </section>
+
       <section className={styles.section} aria-labelledby="snapshots">
         <h2 id="snapshots" className="label">
           Snapshots
@@ -164,8 +171,25 @@ function PullRequests({ status }: { status: Status }) {
     <div className={styles.facts}>
       <span className={`${styles.tag} ${styles.good}`}>ON</span>
       <span>
-        Every task pushes its changes to a <code>forgerun/…</code> branch as <strong>{prs.github_user}</strong>; a pull request
-        is opened when you ask. Repos must be on github.com and writable by the token.
+        When you press push, a thread's changes go to a <code>forgerun/…</code> branch as <strong>{prs.github_user}</strong>, as one
+        commit, with a pull request if you ask. Repos must be on github.com and writable by the token.
+      </span>
+    </div>
+  );
+}
+
+function Sessions({ status }: { status: Status }) {
+  const s = status.sessions;
+  return (
+    <div className={styles.facts}>
+      <span className="mono">
+        {s.open} open{s.max > 0 ? ` of ${s.max}` : ""}
+      </span>
+      <span>
+        Each thread keeps its VM between messages, so the agent remembers the conversation.{" "}
+        {s.idle_seconds > 0 ? `A session closes after ${formatDuration(s.idle_seconds)} without a message` : "Sessions stay open until ended"}
+        {s.max > 0 ? `; past ${s.max} open, the least recently used idle one closes` : ""}. Unpushed work is kept: the next
+        message reopens the session in a few seconds.
       </span>
     </div>
   );

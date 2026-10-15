@@ -47,13 +47,15 @@ type Record struct {
 	State      task.State
 	Error      string // "" unless Failed
 	LogPath    string
-	HasDiff    bool   // the agent changed something; Store.Diff returns it
-	SnapshotID *int64 // the snapshot the task was restored from; nil = cold start
-	ParentID   string // the task this one continues; "" for a thread's first task
-	ThreadID   string // the thread's first task (its own ID for a first task)
-	PR         PullRequest
-	BaseCommit string // the commit the agent started from; "" until known
-	Summary    string // the agent's conversation summary; "" if none
+	HasDiff    bool        // the agent changed something; Store.Diff returns it
+	SnapshotID *int64      // the snapshot the task was restored from; nil = cold start
+	ParentID   string      // the task this one continues; "" for a thread's first task
+	ThreadID   string      // the thread's first task (its own ID for a first task)
+	PR         PullRequest // the thread's branch and pull request, as of this task
+	BaseCommit string      // the commit the agent started from; "" until known
+	Summary    string      // the agent's summary of the thread, taken when it was pushed; "" if none
+	Reply      string      // the end of what the agent wrote; "" if nothing
+	Pushed     bool        // this task's changes are on the thread's branch
 	CreatedAt  time.Time
 	StartedAt  *time.Time // nil until running
 	FinishedAt *time.Time // nil until terminal
@@ -127,11 +129,16 @@ type Outcome struct {
 	LogPath    string
 	Diff       string // "" if no changes
 	BaseCommit string
-	Summary    string
-	PRURL      string
-	PRNumber   int
-	PRBranch   string
-	PRError    string
+	Reply      string
+}
+
+// Push is the result of pushing a thread: which tasks' changes went to its
+// branch, and where the branch and pull request are now.
+type Push struct {
+	Pushed   []string    // IDs of the tasks whose changes were pushed
+	PR       PullRequest // the thread's branch and pull request, or why the push failed (PR.Error)
+	LatestID string      // the thread's newest task, which keeps the summary
+	Summary  string      // the agent's summary of the thread; "" if none
 }
 
 type Store interface {
@@ -150,6 +157,9 @@ type Store interface {
 	Start(ctx context.Context, id string) error
 	// Finish moves a task from Running to a terminal state.
 	Finish(ctx context.Context, id string, o Outcome) error
+	// RecordPush records a push of a thread: its tasks' branch and pull
+	// request, which tasks are pushed now, and the summary.
+	RecordPush(ctx context.Context, threadID string, p Push) error
 	// Claim atomically moves the oldest Queued task to Running and returns it.
 	// ok is false when the queue is empty. Safe to call from many workers.
 	Claim(ctx context.Context) (rec Record, ok bool, err error)
