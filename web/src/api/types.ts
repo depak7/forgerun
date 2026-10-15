@@ -5,7 +5,15 @@ export type TaskState = "queued" | "running" | "succeeded" | "failed" | "cancell
 
 export interface Status {
   pull_requests: { enabled: boolean; github_user: string };
-  snapshots: { enabled: boolean; count: number; bytes: number; budget_bytes: number };
+  snapshots: {
+    enabled: boolean;
+    count: number;
+    bytes: number;
+    budget_bytes: number; // 0 = no limit
+    max_age_seconds: number; // 0 = never expire
+    sweep_seconds: number;
+  };
+  require_zdr: boolean; // only zero-data-retention models are accepted
   tasks: { queued: number; running: number };
 }
 

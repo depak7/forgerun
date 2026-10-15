@@ -1,0 +1,204 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  max-width: 1080px;
+}
+.headText {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.title {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 500;
+  letter-spacing: -0.8px;
+}
+.lede {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.page code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--text);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.section > h2 {
+  margin: 0;
+  font-weight: 400;
+}
+.note {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+/* Agents & keys: one row per agent, in one bordered list. */
+.list {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 200px) minmax(0, 300px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+  padding: 16px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-faint);
+}
+.row:last-child {
+  border-bottom: 0;
+}
+.agentName,
+.agentKey {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.agentKey {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.agentState {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.sub {
+  font-size: 13px;
+  color: var(--muted);
+}
+.fix {
+  color: var(--failed);
+}
+
+.tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  white-space: nowrap;
+}
+.good,
+.goodText {
+  color: var(--accent);
+}
+.bad,
+.badText {
+  color: var(--failed);
+}
+.dim {
+  color: var(--faint);
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cardHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 14px;
+  line-height: 1.55;
+}
+
+/* A collapsed model list: the summary row is the toggle. */
+.models > summary {
+  cursor: pointer;
+  list-style: none;
+  min-height: 24px;
+}
+.models > summary::-webkit-details-marker {
+  display: none;
+}
+.models > summary::before {
+  content: "▸";
+  margin-right: 10px;
+  color: var(--faint);
+}
+.models[open] > summary::before {
+  content: "▾";
+}
+.models > summary > :first-child {
+  margin-right: auto;
+}
+
+/* Wide tables scroll inside their card on narrow screens. */
+.tableWrap {
+  overflow-x: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.table th {
+  padding: 0 12px 8px 0;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.6px;
+  color: var(--faint);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+}
+.table td {
+  padding: 10px 12px 10px 0;
+  border-bottom: 1px solid var(--line-faint);
+  white-space: nowrap;
+}
+.table tr:last-child td {
+  border-bottom: 0;
+}
+.refused td {
+  color: var(--faint);
+}
+
+.usage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--raised);
+  overflow: hidden;
+}
+.barFill {
+  height: 100%;
+  background: var(--accent);
+}
+
+@media (max-width: 760px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+}

@@ -119,7 +119,7 @@ func serveCmd(args []string) error {
 	sweepsDone := make(chan struct{})
 	var snapshotSettings *api.SnapshotSettings // nil = snapshots off
 	if *useSnapshots {
-		snapshotSettings = &api.SnapshotSettings{BudgetBytes: int64(snapshotBudget)}
+		snapshotSettings = &api.SnapshotSettings{BudgetBytes: int64(snapshotBudget), MaxAge: *snapshotMaxAge, SweepEvery: *snapshotSweep}
 		mgr := &snapshots.Manager{Store: db, Limits: snapshots.Limits{MaxAge: *snapshotMaxAge, Budget: int64(snapshotBudget)}}
 		runner.Snapshots = mgr
 		// Before any task runs: finish deletes a crash interrupted, remove

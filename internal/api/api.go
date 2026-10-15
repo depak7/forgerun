@@ -430,7 +430,9 @@ func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
 
 // SnapshotSettings are the snapshot limits the server runs with.
 type SnapshotSettings struct {
-	BudgetBytes int64 // 0 = no limit
+	BudgetBytes int64         // 0 = no limit
+	MaxAge      time.Duration // 0 = never expire
+	SweepEvery  time.Duration // how often limits are checked
 }
 
 // statusJSON is what the UI shows about the server as a whole.
@@ -443,9 +445,12 @@ type statusJSON struct {
 		Enabled     bool  `json:"enabled"`
 		Count       int   `json:"count"`
 		Bytes       int64 `json:"bytes"`
-		BudgetBytes int64 `json:"budget_bytes"` // 0 = no limit
+		BudgetBytes int64 `json:"budget_bytes"`    // 0 = no limit
+		MaxAgeSec   int64 `json:"max_age_seconds"` // 0 = never expire
+		SweepSec    int64 `json:"sweep_seconds"`
 	} `json:"snapshots"`
-	Tasks struct {
+	RequireZDR bool `json:"require_zdr"` // only zero-data-retention models are accepted
+	Tasks      struct {
 		Queued  int `json:"queued"`
 		Running int `json:"running"`
 	} `json:"tasks"`
@@ -454,6 +459,7 @@ type statusJSON struct {
 // status serves GET /api/status.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	var out statusJSON
+	out.RequireZDR = s.requireZDR
 	out.PullRequests.Enabled, out.PullRequests.GitHubUser = s.prs != nil, s.githubUser
 	if s.snapshots != nil {
 		snaps, err := s.store.ListSnapshots(r.Context())
@@ -462,6 +468,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out.Snapshots.Enabled, out.Snapshots.Count, out.Snapshots.BudgetBytes = true, len(snaps), s.snapshots.BudgetBytes
+		out.Snapshots.MaxAgeSec, out.Snapshots.SweepSec = int64(s.snapshots.MaxAge.Seconds()), int64(s.snapshots.SweepEvery.Seconds())
 		for _, sn := range snaps {
 			out.Snapshots.Bytes += sn.SizeBytes
 		}

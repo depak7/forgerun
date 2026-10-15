@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatElapsed, formatWhen, shortID } from "./format";
+import { formatBytes, formatDuration, formatElapsed, formatWhen, shortID } from "./format";
 
 describe("format", () => {
   it("formats sizes", () => {
@@ -11,6 +11,13 @@ describe("format", () => {
     expect(formatElapsed(45_000)).toBe("45s");
     expect(formatElapsed(134_000)).toBe("2m 14s");
     expect(formatElapsed(3_780_000)).toBe("1h 3m");
+  });
+  it("formats configured lengths of time", () => {
+    expect(formatDuration(604800)).toBe("7 days");
+    expect(formatDuration(86400)).toBe("1 day");
+    expect(formatDuration(129600)).toBe("36 hours");
+    expect(formatDuration(600)).toBe("10 min");
+    expect(formatDuration(45)).toBe("45s");
   });
   it("formats times relative to now", () => {
     const now = new Date(2026, 9, 15, 14, 0, 0);

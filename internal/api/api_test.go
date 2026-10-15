@@ -796,7 +796,8 @@ func TestListThreads(t *testing.T) {
 func TestStatus(t *testing.T) {
 	h, s, _ := setup(t, func(c *Config) {
 		c.PRs, c.GitHubUser = fakePRs{open: true}, "depak7"
-		c.Snapshots = &SnapshotSettings{BudgetBytes: 20e9}
+		c.Snapshots = &SnapshotSettings{BudgetBytes: 20e9, MaxAge: 7 * 24 * time.Hour, SweepEvery: 10 * time.Minute}
+		c.RequireZDR = true
 	})
 	ctx := context.Background()
 	s.ReplaceSnapshot(ctx, store.Snapshot{Repo: "https://github.com/o/r", AgentID: "cursor", Ref: "/a", Commit: "c", SizeBytes: 6e6})
@@ -809,8 +810,12 @@ func TestStatus(t *testing.T) {
 	if !st.PullRequests.Enabled || st.PullRequests.GitHubUser != "depak7" {
 		t.Errorf("pull requests = %+v", st.PullRequests)
 	}
-	if !st.Snapshots.Enabled || st.Snapshots.Count != 1 || st.Snapshots.Bytes != 6e6 || st.Snapshots.BudgetBytes != 20e9 {
+	if !st.Snapshots.Enabled || st.Snapshots.Count != 1 || st.Snapshots.Bytes != 6e6 || st.Snapshots.BudgetBytes != 20e9 ||
+		st.Snapshots.MaxAgeSec != 604800 || st.Snapshots.SweepSec != 600 {
 		t.Errorf("snapshots = %+v", st.Snapshots)
+	}
+	if !st.RequireZDR {
+		t.Error("require_zdr = false, want true")
 	}
 	if st.Tasks.Running != 1 || st.Tasks.Queued != 1 {
 		t.Errorf("tasks = %+v", st.Tasks)
@@ -819,7 +824,7 @@ func TestStatus(t *testing.T) {
 	// PRs and snapshots off: reported as such.
 	h, _, _ = setup(t)
 	json.Unmarshal(mustData(t, do(h, "GET", "/api/status", ""), http.StatusOK), &st)
-	if st.PullRequests.Enabled || st.PullRequests.GitHubUser != "" || st.Snapshots.Enabled {
+	if st.PullRequests.Enabled || st.PullRequests.GitHubUser != "" || st.Snapshots.Enabled || st.RequireZDR {
 		t.Errorf("all off: %+v", st)
 	}
 }

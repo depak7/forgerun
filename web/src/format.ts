@@ -19,6 +19,23 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+// formatDuration shows a configured length of time: "7 days", "10 min",
+// "36 hours", "45s". Whole units only: it's for settings, not timers.
+export function formatDuration(seconds: number): string {
+  const units: [number, string][] = [
+    [86400, "day"],
+    [3600, "hour"],
+    [60, "min"],
+  ];
+  for (const [size, name] of units) {
+    if (seconds >= size && seconds % size === 0) {
+      const n = seconds / size;
+      return name === "min" ? `${n} min` : `${n} ${name}${n === 1 ? "" : "s"}`;
+    }
+  }
+  return `${seconds}s`;
+}
+
 // formatWhen shows when something happened: "now", "13:44" today,
 // "yesterday", or "Oct 12" further back.
 export function formatWhen(iso: string, now: Date = new Date()): string {
