@@ -19,7 +19,7 @@ What you changed and why, which files, and how you verified it (commands you ran
 ## Open
 Assumptions you made, open questions, and anything not done.
 
-Be concise. Do not change any files.`
+Be concise. Do not change any files. forgerun commits your changes and opens or updates the pull request itself, so don't mention committing or pushing.`
 
 // Publisher turns a successful task's changes into a pull request.
 // publish.Publisher implements it; it runs on the host, never in a VM.

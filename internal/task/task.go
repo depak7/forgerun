@@ -101,7 +101,13 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
 
-	res := Result{Dir: filepath.Join(r.OutDir, t.ID)}
+	// Absolute, so the saved paths (also stored in the database) work from
+	// any directory: the publisher runs git elsewhere, for one.
+	outDir, err := filepath.Abs(r.OutDir)
+	if err != nil {
+		return Result{}, err
+	}
+	res := Result{Dir: filepath.Join(outDir, t.ID)}
 	if err := os.MkdirAll(res.Dir, 0o755); err != nil {
 		return res, err
 	}
@@ -262,7 +268,9 @@ func (r *Runner) summarize(ctx context.Context, ag agent.Agent, sb *sandbox.Sand
 	if err := os.WriteFile(res.SummaryPath, []byte(summary+"\n"), 0o644); err != nil {
 		step("warning: saving summary: %v", err)
 		res.SummaryPath = ""
+		return
 	}
+	step("summary saved to %s", res.SummaryPath)
 }
 
 // publishTimeout bounds opening a pull request after the task.

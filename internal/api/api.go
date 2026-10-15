@@ -38,6 +38,7 @@ type Config struct {
 	DefaultModel string    // model family used when a request names none; "" = the agent's own default
 	RequireZDR   bool      // offer only models with zero data retention
 	PRs          PRs       // pull requests; nil = off (the server has no GitHub token)
+	OutDir       string    // where the runner writes task results, to serve logs while tasks run
 	Log          *slog.Logger
 }
 
@@ -56,13 +57,14 @@ type Server struct {
 	defaultModel string
 	requireZDR   bool
 	prs          PRs
+	outDir       string
 	log          *slog.Logger
 }
 
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, outDir: cfg.OutDir, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
@@ -421,11 +423,18 @@ func (s *Server) taskLog(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if rec.LogPath == "" {
+	path := rec.LogPath
+	// A running task's log path is only recorded when it finishes, but the
+	// runner always writes it to <out>/<id>/agent.log: serve it from there,
+	// so clients can follow it live (with Range requests for the new part).
+	if path == "" && rec.State == task.Running && s.outDir != "" {
+		path = filepath.Join(s.outDir, rec.ID, "agent.log")
+	}
+	if path == "" {
 		writeError(w, http.StatusNotFound, "no log for this task yet")
 		return
 	}
-	s.serveFile(w, r, rec.LogPath, "text/plain; charset=utf-8")
+	s.serveFile(w, r, path, "text/plain; charset=utf-8")
 }
 
 func (s *Server) taskPatch(w http.ResponseWriter, r *http.Request) {

@@ -133,7 +133,7 @@ func serveCmd(args []string) error {
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
 		Handler: api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
-			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Log: log})),
+			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, OutDir: *out, Log: log})),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

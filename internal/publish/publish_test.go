@@ -304,3 +304,19 @@ func TestIsOpen(t *testing.T) {
 		t.Errorf("merged PR: %v, %v", open, err)
 	}
 }
+
+// The real run's bug: serve's -out is relative ("out"), but git runs in a
+// temporary directory. A relative patch path must still work.
+func TestPublishWithRelativePatchPath(t *testing.T) {
+	f := newFixture(t)
+	wd, _ := os.Getwd()
+	rel, err := filepath.Rel(wd, f.patch)
+	if err != nil || filepath.IsAbs(rel) {
+		t.Fatalf("can't make a relative path: %q, %v", rel, err)
+	}
+	req := f.request("")
+	req.PatchPath = rel
+	if _, err := f.publisher(secret).Publish(context.Background(), req); err != nil {
+		t.Fatalf("relative patch path %s: %v", rel, err)
+	}
+}

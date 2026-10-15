@@ -17,7 +17,7 @@ func TestCursorKeyGoesThroughSecrets(t *testing.T) {
 }
 
 func TestCursorArgs(t *testing.T) {
-	base := []string{"-p", "fix it", "--force", "--trust", "--output-format", "text"}
+	base := []string{"-p", "fix it", "--force", "--trust", "--output-format", "text", "--disable-auto-update"}
 	tests := []struct {
 		modelID string
 		want    []string

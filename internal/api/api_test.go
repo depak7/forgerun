@@ -734,3 +734,27 @@ func TestFollowUpSwitchesAgent(t *testing.T) {
 		t.Errorf("follow-up without agent ran on %q, want the previous task's other-agent", third.Agent)
 	}
 }
+
+// A running task's log is served before the task records where it is, so it
+// can be followed live; a Range request returns only the new part.
+func TestLogWhileRunning(t *testing.T) {
+	out := t.TempDir()
+	h, s, _ := setup(t, func(c *Config) { c.OutDir = out })
+	tk := createTask(t, h)
+	decode(t, do(h, "GET", "/api/tasks/"+tk.ID+"/log", ""), http.StatusNotFound) // queued: nothing yet
+
+	if err := s.Start(context.Background(), tk.ID); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(out, tk.ID), 0o755)
+	os.WriteFile(filepath.Join(out, tk.ID, "agent.log"), []byte("==> cloning\n==> running cursor agent\n"), 0o644)
+
+	rec := do(h, "GET", "/api/tasks/"+tk.ID+"/log", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "running cursor agent") {
+		t.Fatalf("running task's log: %d %q", rec.Code, rec.Body)
+	}
+	rec = do(h, "GET", "/api/tasks/"+tk.ID+"/log", "", "Range", "bytes=12-")
+	if rec.Code != http.StatusPartialContent || rec.Body.String() != "==> running cursor agent\n" {
+		t.Errorf("range: %d %q", rec.Code, rec.Body)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -53,6 +54,11 @@ func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.
 		return task.PublishedPR{}, fmt.Errorf("getting a token for %s: %w", repo, err)
 	}
 
+	// git runs in a temporary directory, so the patch path must not be relative.
+	patch, err := filepath.Abs(req.PatchPath)
+	if err != nil {
+		return task.PublishedPR{}, err
+	}
 	dir, err := os.MkdirTemp("", "forgerun-publish-")
 	if err != nil {
 		return task.PublishedPR{}, err
@@ -74,7 +80,7 @@ func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.
 		{"remote", "add", "origin", remote},
 		{"fetch", "-q", "--depth=1", "origin", req.BaseCommit},
 		{"checkout", "-q", "-b", branch, "FETCH_HEAD"},
-		{"apply", "--index", req.PatchPath},
+		{"apply", "--index", patch},
 		{"commit", "-q", "-m", commitMessage(req)},
 	}
 	for _, args := range steps {

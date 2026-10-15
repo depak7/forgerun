@@ -56,7 +56,7 @@ var _ Continuer = (*Cursor)(nil)
 func (c *Cursor) Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string) (string, error) {
 	out, err := sb.Run(ctx, sandbox.Cmd{
 		Name: "agent",
-		Args: []string{"-p", prompt, "--continue", "--mode", "ask", "--trust", "--output-format", "text"},
+		Args: []string{"-p", prompt, "--continue", "--mode", "ask", "--trust", "--output-format", "text", "--disable-auto-update"},
 		Dir:  dir,
 		Env:  map[string]string{"HOME": "/root"},
 	})
@@ -66,10 +66,13 @@ func (c *Cursor) Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt 
 	return strings.TrimSpace(out), nil
 }
 
-// cursorArgs builds the CLI arguments. "auto" is Cursor's default, so it
+// cursorArgs builds the CLI arguments. --disable-auto-update (a hidden
+// flag) stops the CLI downloading a new ~550 MB version in the background
+// during a task: that bloats snapshots and drifts from the image's version.
+// Upgrade by rebuilding the image instead. "auto" is Cursor's default, so it
 // is left implicit rather than passed as --model auto.
 func cursorArgs(req Request) []string {
-	args := []string{"-p", req.Prompt, "--force", "--trust", "--output-format", "text"}
+	args := []string{"-p", req.Prompt, "--force", "--trust", "--output-format", "text", "--disable-auto-update"}
 	if req.ModelID != "" && req.ModelID != "auto" {
 		args = append(args, "--model", req.ModelID)
 	}

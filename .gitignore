@@ -6,3 +6,6 @@ out/
 /sandbox-demo
 
 .DS_Store
+
+# local secrets (see .env.example)
+.env
