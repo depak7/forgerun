@@ -491,6 +491,9 @@ func TestListAgents(t *testing.T) {
 		{ID: "cursor", Name: "cursor", DefaultModel: "auto", Runnable: true},
 		{ID: "other-agent", Name: "other-agent", DefaultModel: "other-x", Runnable: true},
 	}
+	for i := range agents {
+		agents[i].Credential = nil // checked in TestAgentCredentialStatus
+	}
 	if !slices.Equal(agents, want) {
 		t.Errorf("agents = %+v\nwant     %+v", agents, want)
 	}
@@ -756,5 +759,106 @@ func TestLogWhileRunning(t *testing.T) {
 	rec = do(h, "GET", "/api/tasks/"+tk.ID+"/log", "", "Range", "bytes=12-")
 	if rec.Code != http.StatusPartialContent || rec.Body.String() != "==> running cursor agent\n" {
 		t.Errorf("range: %d %q", rec.Code, rec.Body)
+	}
+}
+
+func TestListThreads(t *testing.T) {
+	h, s, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
+	ctx := context.Background()
+	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"first","pr":true}`), http.StatusCreated))
+	finishWithPR(t, s, first.ID, task.Succeeded)
+	follow := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+first.ID+"/followups", `{"prompt":"second"}`), http.StatusCreated))
+	finishWithPR(t, s, follow.ID, task.Failed)
+	// A task that succeeded but whose pull request didn't open also needs attention.
+	lonely := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"lonely","pr":true}`), http.StatusCreated))
+	s.Start(ctx, lonely.ID)
+	s.Finish(ctx, lonely.ID, store.Outcome{State: task.Succeeded, PRError: "the token needs: contents=write"})
+
+	var threads []threadJSON
+	if err := json.Unmarshal(mustData(t, do(h, "GET", "/api/threads", ""), http.StatusOK), &threads); err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 2 {
+		t.Fatalf("%d threads: %+v", len(threads), threads)
+	}
+	byID := map[string]threadJSON{threads[0].ID: threads[0], threads[1].ID: threads[1]}
+	th := byID[first.ID]
+	if th.Title != "first" || th.Steps != 2 || th.Latest.ID != follow.ID || th.Latest.State != task.Failed ||
+		!th.NeedsAttention || th.Latest.PR.Number != 9 || len(th.Agents) != 2 {
+		t.Errorf("thread = %+v", th)
+	}
+	if l := byID[lonely.ID]; !l.NeedsAttention || l.Latest.PR.Error == "" {
+		t.Errorf("succeeded without its PR should need attention: %+v", l)
+	}
+	decode(t, do(h, "GET", "/api/threads?limit=0", ""), http.StatusBadRequest)
+}
+
+func TestStatus(t *testing.T) {
+	h, s, _ := setup(t, func(c *Config) {
+		c.PRs, c.GitHubUser = fakePRs{open: true}, "depak7"
+		c.Snapshots = &SnapshotSettings{BudgetBytes: 20e9}
+	})
+	ctx := context.Background()
+	s.ReplaceSnapshot(ctx, store.Snapshot{Repo: "https://github.com/o/r", AgentID: "cursor", Ref: "/a", Commit: "c", SizeBytes: 6e6})
+	running := createTask(t, h)
+	s.Start(ctx, running.ID)
+	createTask(t, h) // queued
+
+	var st statusJSON
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/status", ""), http.StatusOK), &st)
+	if !st.PullRequests.Enabled || st.PullRequests.GitHubUser != "depak7" {
+		t.Errorf("pull requests = %+v", st.PullRequests)
+	}
+	if !st.Snapshots.Enabled || st.Snapshots.Count != 1 || st.Snapshots.Bytes != 6e6 || st.Snapshots.BudgetBytes != 20e9 {
+		t.Errorf("snapshots = %+v", st.Snapshots)
+	}
+	if st.Tasks.Running != 1 || st.Tasks.Queued != 1 {
+		t.Errorf("tasks = %+v", st.Tasks)
+	}
+
+	// PRs and snapshots off: reported as such.
+	h, _, _ = setup(t)
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/status", ""), http.StatusOK), &st)
+	if st.PullRequests.Enabled || st.PullRequests.GitHubUser != "" || st.Snapshots.Enabled {
+		t.Errorf("all off: %+v", st)
+	}
+}
+
+// Agents show whether their credential is set; it never hides them.
+func TestAgentCredentialStatus(t *testing.T) {
+	h, _, _ := setup(t, func(c *Config) {
+		c.Agents = agent.NewSet(agent.StaticCredentials{"CURSOR_API_KEY": "k"}, &agent.Cursor{}, otherAgent{})
+	})
+	var agents []agentJSON
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/agents", ""), http.StatusOK), &agents)
+	want := map[string]credentialJSON{"cursor": {Name: "CURSOR_API_KEY", Set: true}, "other-agent": {Name: "OTHER_KEY", Set: false}}
+	for _, a := range agents {
+		if a.Credential == nil || *a.Credential != want[a.ID] || !a.Runnable {
+			t.Errorf("%s: credential %+v, runnable %v", a.ID, a.Credential, a.Runnable)
+		}
+	}
+	// No adapter: listed, not runnable, no credential to report.
+	h, _, _ = setup(t, func(c *Config) { c.Agents = agent.NewSet(nil, &agent.Cursor{}) })
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/agents", ""), http.StatusOK), &agents)
+	for _, a := range agents {
+		if a.ID == "other-agent" && (a.Runnable || a.Credential != nil) {
+			t.Errorf("agent without an adapter: %+v", a)
+		}
+	}
+}
+
+// The UI shows a running task's latest log line by asking for just the end
+// of the file: a suffix range.
+func TestLogTail(t *testing.T) {
+	out := t.TempDir()
+	h, s, _ := setup(t, func(c *Config) { c.OutDir = out })
+	tk := createTask(t, h)
+	s.Start(context.Background(), tk.ID)
+	os.MkdirAll(filepath.Join(out, tk.ID), 0o755)
+	os.WriteFile(filepath.Join(out, tk.ID, "agent.log"), []byte("==> cloning\n==> running cursor agent\nEdited README.md\n"), 0o644)
+
+	rec := do(h, "GET", "/api/tasks/"+tk.ID+"/log", "", "Range", "bytes=-17")
+	if rec.Code != http.StatusPartialContent || rec.Body.String() != "Edited README.md\n" {
+		t.Errorf("tail: %d %q", rec.Code, rec.Body)
 	}
 }

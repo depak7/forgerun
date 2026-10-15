@@ -70,6 +70,75 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	return nil
 }
 
+func (s *Store) ListThreads(ctx context.Context, limit int) ([]store.Thread, error) {
+	// One row per thread: its first task, size, agents in order, newest step.
+	rows, err := s.pool.Query(ctx, `
+		SELECT root.id, root.prompt, root.repo, count(*),
+		       array_agg(t.agent_id ORDER BY t.created_at, t.id),
+		       (array_agg(t.id ORDER BY t.created_at DESC, t.id DESC))[1],
+		       max(COALESCE(t.finished_at, t.started_at, t.created_at)) AS updated
+		FROM tasks t JOIN tasks root ON root.id = t.thread_id
+		GROUP BY root.id, root.prompt, root.repo
+		ORDER BY updated DESC, root.id DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing threads: %w", err)
+	}
+	var threads []store.Thread
+	var latestIDs []string
+	for rows.Next() {
+		var th store.Thread
+		var latest string
+		if err := rows.Scan(&th.ID, &th.Title, &th.Repo, &th.Steps, &th.Agents, &latest, &th.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("listing threads: %w", err)
+		}
+		threads = append(threads, th)
+		latestIDs = append(latestIDs, latest)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing threads: %w", err)
+	}
+
+	// Then each thread's newest step, in one query.
+	recs, err := s.pool.Query(ctx, `SELECT `+selectColumns+fromTasks+` WHERE t.id = ANY($1)`, latestIDs)
+	if err != nil {
+		return nil, fmt.Errorf("listing threads: %w", err)
+	}
+	latest, err := pgx.CollectRows(recs, func(row pgx.CollectableRow) (store.Record, error) { return scanRecord(row) })
+	if err != nil {
+		return nil, fmt.Errorf("listing threads: %w", err)
+	}
+	byID := make(map[string]store.Record, len(latest))
+	for _, r := range latest {
+		byID[r.ID] = r
+	}
+	for i := range threads {
+		threads[i].Latest = byID[latestIDs[i]]
+	}
+	return threads, nil
+}
+
+func (s *Store) CountTasks(ctx context.Context) (map[task.State]int, error) {
+	rows, err := s.pool.Query(ctx, `SELECT state, count(*) FROM tasks GROUP BY state`)
+	if err != nil {
+		return nil, fmt.Errorf("counting tasks: %w", err)
+	}
+	counts := map[task.State]int{}
+	for rows.Next() {
+		var state string
+		var n int
+		if err := rows.Scan(&state, &n); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("counting tasks: %w", err)
+		}
+		counts[task.State(state)] = n
+	}
+	rows.Close()
+	return counts, rows.Err()
+}
+
 // threadError turns a violation of a thread's unique indexes into the
 // store's error for it. Postgres reports it as code 23505 and names the index.
 func threadError(err error) error {

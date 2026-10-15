@@ -109,7 +109,10 @@ func TestGitHubTokens(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var logged bytes.Buffer
 			log := slog.New(slog.NewTextHandler(&logged, nil))
-			src, err := githubTokens(context.Background(), tc.value, fake(tc.expiry), now, log)
+			src, login, err := githubTokens(context.Background(), tc.value, fake(tc.expiry), now, log)
+			if src != nil && login != "depak7" {
+				t.Errorf("login = %q, want depak7", login)
+			}
 			if (err != nil) != tc.wantErr || (src != nil) != tc.wantSource {
 				t.Fatalf("source %v, err %v", src, err)
 			}

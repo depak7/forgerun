@@ -33,12 +33,14 @@ type Pool interface {
 type Config struct {
 	Store        store.Store
 	Pool         Pool
-	Agents       agent.Set // the agents tasks can run on, and their credentials
-	Agent        string    // the agent for requests that name none, e.g. "cursor"
-	DefaultModel string    // model family used when a request names none; "" = the agent's own default
-	RequireZDR   bool      // offer only models with zero data retention
-	PRs          PRs       // pull requests; nil = off (the server has no GitHub token)
-	OutDir       string    // where the runner writes task results, to serve logs while tasks run
+	Agents       agent.Set         // the agents tasks can run on, and their credentials
+	Agent        string            // the agent for requests that name none, e.g. "cursor"
+	DefaultModel string            // model family used when a request names none; "" = the agent's own default
+	RequireZDR   bool              // offer only models with zero data retention
+	PRs          PRs               // pull requests; nil = off (the server has no GitHub token)
+	OutDir       string            // where the runner writes task results, to serve logs while tasks run
+	GitHubUser   string            // the account pull requests are opened as; "" if PRs are off
+	Snapshots    *SnapshotSettings // nil = snapshots are off
 	Log          *slog.Logger
 }
 
@@ -58,13 +60,15 @@ type Server struct {
 	requireZDR   bool
 	prs          PRs
 	outDir       string
+	githubUser   string
+	snapshots    *SnapshotSettings
 	log          *slog.Logger
 }
 
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, outDir: cfg.OutDir, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
@@ -75,6 +79,8 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/log", srv.taskLog)
 	mux.HandleFunc("GET /api/tasks/{id}/patch", srv.taskPatch)
 	mux.HandleFunc("GET /api/agents", srv.listAgents)
+	mux.HandleFunc("GET /api/threads", srv.listThreads)
+	mux.HandleFunc("GET /api/status", srv.status)
 	mux.HandleFunc("GET /api/models", srv.listModels)
 	mux.HandleFunc("GET /healthz", srv.health)
 	return mux
@@ -216,6 +222,21 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+// limitParam reads ?limit= (1 to 100, default 20), writing the error
+// response itself if it's invalid.
+func limitParam(w http.ResponseWriter, r *http.Request) (int, bool) {
+	v := r.URL.Query().Get("limit")
+	if v == "" {
+		return 20, true
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > 100 {
+		writeError(w, http.StatusBadRequest, "limit must be a number from 1 to 100")
+		return 0, false
+	}
+	return n, true
+}
+
 // resolveModel turns a request's model choice into an exact model of the
 // server's agent, writing the error response itself if it can't.
 func (s *Server) resolveModel(w http.ResponseWriter, r *http.Request, agentID string, ch models.Choice) (models.Variant, bool) {
@@ -342,6 +363,87 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 	s.writeTask(w, r, t.ID, http.StatusCreated)
 }
 
+// threadJSON is a thread in the list: its first request, and the state of
+// its newest step.
+type threadJSON struct {
+	ID             string    `json:"id"`    // the first task's ID
+	Title          string    `json:"title"` // the first task's prompt
+	Repo           string    `json:"repo"`
+	Steps          int       `json:"steps"`
+	Agents         []string  `json:"agents"` // each step's agent, oldest first
+	Latest         taskJSON  `json:"latest"`
+	NeedsAttention bool      `json:"needs_attention"` // the newest step failed, or its pull request didn't open
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// listThreads serves GET /api/threads?limit=N, most recent activity first.
+func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
+	limit, ok := limitParam(w, r)
+	if !ok {
+		return
+	}
+	threads, err := s.store.ListThreads(r.Context(), limit)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	out := make([]threadJSON, len(threads))
+	for i, th := range threads {
+		l := th.Latest
+		out[i] = threadJSON{ID: th.ID, Title: th.Title, Repo: th.Repo, Steps: th.Steps, Agents: th.Agents,
+			Latest: toJSON(l), UpdatedAt: th.UpdatedAt.UTC(),
+			NeedsAttention: l.State == task.Failed || (l.State == task.Succeeded && l.PR.Requested && l.PR.Error != "")}
+	}
+	writeData(w, http.StatusOK, out)
+}
+
+// SnapshotSettings are the snapshot limits the server runs with.
+type SnapshotSettings struct {
+	BudgetBytes int64 // 0 = no limit
+}
+
+// statusJSON is what the UI shows about the server as a whole.
+type statusJSON struct {
+	PullRequests struct {
+		Enabled    bool   `json:"enabled"`
+		GitHubUser string `json:"github_user"` // "" when disabled
+	} `json:"pull_requests"`
+	Snapshots struct {
+		Enabled     bool  `json:"enabled"`
+		Count       int   `json:"count"`
+		Bytes       int64 `json:"bytes"`
+		BudgetBytes int64 `json:"budget_bytes"` // 0 = no limit
+	} `json:"snapshots"`
+	Tasks struct {
+		Queued  int `json:"queued"`
+		Running int `json:"running"`
+	} `json:"tasks"`
+}
+
+// status serves GET /api/status.
+func (s *Server) status(w http.ResponseWriter, r *http.Request) {
+	var out statusJSON
+	out.PullRequests.Enabled, out.PullRequests.GitHubUser = s.prs != nil, s.githubUser
+	if s.snapshots != nil {
+		snaps, err := s.store.ListSnapshots(r.Context())
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		out.Snapshots.Enabled, out.Snapshots.Count, out.Snapshots.BudgetBytes = true, len(snaps), s.snapshots.BudgetBytes
+		for _, sn := range snaps {
+			out.Snapshots.Bytes += sn.SizeBytes
+		}
+	}
+	counts, err := s.store.CountTasks(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	out.Tasks.Queued, out.Tasks.Running = counts[task.Queued], counts[task.Running]
+	writeData(w, http.StatusOK, out)
+}
+
 // getThread lists every task in the thread of the given task, oldest first.
 func (s *Server) getThread(w http.ResponseWriter, r *http.Request) {
 	rec, ok := s.getRecord(w, r)
@@ -361,14 +463,9 @@ func (s *Server) getThread(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
-	limit := 20
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > 100 {
-			writeError(w, http.StatusBadRequest, "limit must be a number from 1 to 100")
-			return
-		}
-		limit = n
+	limit, ok := limitParam(w, r)
+	if !ok {
+		return
 	}
 	recs, err := s.store.List(r.Context(), limit)
 	if err != nil {
@@ -489,10 +586,27 @@ func (s *Server) defaultFamily(agentID string, cat *models.Catalog) string {
 }
 
 type agentJSON struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	DefaultModel string `json:"default_model"` // model family
-	Runnable     bool   `json:"runnable"`      // forgerun has an adapter for it (a credential is checked per task)
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	DefaultModel string          `json:"default_model"` // model family
+	Runnable     bool            `json:"runnable"`      // forgerun has an adapter for it (a credential is checked per task)
+	Credential   *credentialJSON `json:"credential"`    // null when it isn't runnable
+}
+
+// credentialJSON says whether an agent's credential is configured. It's
+// shown to the user; it never decides which agents are offered.
+type credentialJSON struct {
+	Name string `json:"name"` // e.g. "CLAUDE_CODE_OAUTH_TOKEN"; "" if the agent needs none
+	Set  bool   `json:"set"`
+}
+
+// credential reports an agent's credential, or nil without an adapter.
+func (s *Server) credential(ctx context.Context, agentID string) *credentialJSON {
+	a, err := s.agents.Get(agentID)
+	if err != nil {
+		return nil
+	}
+	return &credentialJSON{Name: a.Credential(), Set: s.agents.Check(ctx, agentID) == nil}
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
@@ -509,7 +623,8 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 	out := make([]agentJSON, 0, len(agents))
 	for _, a := range agents {
 		cat := models.NewCatalog(a.ID, vs)
-		out = append(out, agentJSON{ID: a.ID, Name: a.Name, DefaultModel: s.defaultFamily(a.ID, cat), Runnable: s.runnable(a.ID)})
+		out = append(out, agentJSON{ID: a.ID, Name: a.Name, DefaultModel: s.defaultFamily(a.ID, cat), Runnable: s.runnable(a.ID),
+			Credential: s.credential(r.Context(), a.ID)})
 	}
 	writeData(w, http.StatusOK, out)
 }

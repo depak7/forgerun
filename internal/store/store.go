@@ -109,6 +109,17 @@ type PullRequest struct {
 	Error     string // why it wasn't opened; "" otherwise
 }
 
+// Thread is a first task and its follow-ups, summarized for a list.
+type Thread struct {
+	ID        string // the first task's ID
+	Title     string // the first task's prompt
+	Repo      string
+	Steps     int      // tasks in the thread
+	Agents    []string // each step's agent, oldest first
+	Latest    Record   // the newest step: its state, PR and error describe the thread
+	UpdatedAt time.Time
+}
+
 // Outcome is how a task ended.
 type Outcome struct {
 	State      task.State // Succeeded, Failed or Cancelled
@@ -131,6 +142,10 @@ type Store interface {
 	Create(ctx context.Context, t task.Task, agentID string) error
 	// ThreadTasks returns every task in a thread, oldest first.
 	ThreadTasks(ctx context.Context, threadID string) ([]Record, error)
+	// ListThreads returns threads with the most recent activity first.
+	ListThreads(ctx context.Context, limit int) ([]Thread, error)
+	// CountTasks returns how many tasks are in each state.
+	CountTasks(ctx context.Context) (map[task.State]int, error)
 	// Start moves a task from Queued to Running.
 	Start(ctx context.Context, id string) error
 	// Finish moves a task from Running to a terminal state.

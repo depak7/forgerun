@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/depak7/forgerun/internal/models"
@@ -204,5 +205,26 @@ func TestThreads(t *testing.T) {
 	}
 	if thread, _ := s.ThreadTasks(ctx, first.ID); len(thread) != 2 || thread[0].ID != first.ID {
 		t.Errorf("thread = %+v", thread)
+	}
+}
+
+func TestListThreadsAndCounts(t *testing.T) {
+	s, ctx := New(fakeDefault), context.Background()
+	first := task.New("r", "first")
+	first.PR = true
+	s.Create(ctx, first, "fake")
+	s.Start(ctx, first.ID)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, PRURL: "u", PRNumber: 5, PRBranch: "b"})
+	follow := task.New("r", "second")
+	follow.ParentID = first.ID
+	s.Create(ctx, follow, "fake")
+
+	threads, _ := s.ListThreads(ctx, 10)
+	if len(threads) != 1 || threads[0].ID != first.ID || threads[0].Steps != 2 || threads[0].Title != "first" ||
+		threads[0].Latest.ID != follow.ID || !slices.Equal(threads[0].Agents, []string{"fake", "fake"}) {
+		t.Errorf("threads = %+v", threads)
+	}
+	if counts, _ := s.CountTasks(ctx); counts[task.Succeeded] != 1 || counts[task.Queued] != 1 {
+		t.Errorf("counts = %v", counts)
 	}
 }

@@ -78,7 +78,7 @@ func serveCmd(args []string) error {
 	if err := logAgents(ctx, db, agents, log); err != nil {
 		return err
 	}
-	prTokens, err := githubTokens(ctx, os.Getenv("GITHUB_TOKEN"), &forge.GitHub{}, time.Now(), log)
+	prTokens, githubUser, err := githubTokens(ctx, os.Getenv("GITHUB_TOKEN"), &forge.GitHub{}, time.Now(), log)
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,9 @@ func serveCmd(args []string) error {
 		runner.Publisher, prs = publisher, publisher
 	}
 	sweepsDone := make(chan struct{})
+	var snapshotSettings *api.SnapshotSettings // nil = snapshots off
 	if *useSnapshots {
+		snapshotSettings = &api.SnapshotSettings{BudgetBytes: int64(snapshotBudget)}
 		mgr := &snapshots.Manager{Store: db, Limits: snapshots.Limits{MaxAge: *snapshotMaxAge, Budget: int64(snapshotBudget)}}
 		runner.Snapshots = mgr
 		// Before any task runs: finish deletes a crash interrupted, remove
@@ -133,7 +135,7 @@ func serveCmd(args []string) error {
 	pool := worker.New(db, runner, *workers, log)
 	srv := &http.Server{
 		Handler: api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
-			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, OutDir: *out, Log: log})),
+			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, OutDir: *out, GitHubUser: githubUser, Snapshots: snapshotSettings, Log: log})),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -169,19 +171,20 @@ func serveCmd(args []string) error {
 // tokenWarnBefore is how soon before a GitHub token expires serve warns.
 const tokenWarnBefore = 3 * 24 * time.Hour
 
-// githubTokens returns where PR publishing gets GitHub tokens from: the
-// GITHUB_TOKEN personal access token (value), checked with GitHub now.
+// githubTokens returns where PR publishing gets GitHub tokens from (the
+// GITHUB_TOKEN personal access token, value) and the account it acts as,
+// checked with GitHub now.
 // With no token, PRs are off and it returns nil. A token GitHub rejects
 // stops startup: it was configured on purpose, so it should work.
-func githubTokens(ctx context.Context, value string, gh *forge.GitHub, now time.Time, log *slog.Logger) (forge.TokenSource, error) {
+func githubTokens(ctx context.Context, value string, gh *forge.GitHub, now time.Time, log *slog.Logger) (forge.TokenSource, string, error) {
 	if value == "" {
 		log.Info("pull requests disabled: GITHUB_TOKEN not set")
-		return nil, nil
+		return nil, "", nil
 	}
 	tok := forge.NewToken(value)
 	id, err := gh.WhoAmI(ctx, tok)
 	if err != nil {
-		return nil, fmt.Errorf("checking GITHUB_TOKEN: %w", err)
+		return nil, "", fmt.Errorf("checking GITHUB_TOKEN: %w", err)
 	}
 	expires := "never"
 	if !id.Expires.IsZero() {
@@ -191,7 +194,7 @@ func githubTokens(ctx context.Context, value string, gh *forge.GitHub, now time.
 	if !id.Expires.IsZero() && id.Expires.Sub(now) < tokenWarnBefore {
 		log.Warn("github token expires soon; pull requests will fail after that", "expires", id.Expires.Format(time.DateTime))
 	}
-	return forge.NewStaticToken(tok), nil
+	return forge.NewStaticToken(tok), id.Login, nil
 }
 
 // logAgents reports each agent forgerun can run and whether its credential

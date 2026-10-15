@@ -80,6 +80,58 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 	return nil
 }
 
+func (s *Store) ListThreads(_ context.Context, limit int) ([]store.Thread, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	byThread := map[string][]store.Record{}
+	for _, r := range s.tasks {
+		byThread[r.ThreadID] = append(byThread[r.ThreadID], *r)
+	}
+	var threads []store.Thread
+	for id, recs := range byThread {
+		slices.SortFunc(recs, func(a, b store.Record) int {
+			return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+		})
+		root, latest := recs[0], recs[len(recs)-1]
+		th := store.Thread{ID: id, Title: root.Prompt, Repo: root.Repo, Steps: len(recs), Latest: latest}
+		for _, r := range recs {
+			th.Agents = append(th.Agents, r.AgentID)
+			if t := updated(r); t.After(th.UpdatedAt) {
+				th.UpdatedAt = t
+			}
+		}
+		threads = append(threads, th)
+	}
+	slices.SortFunc(threads, func(a, b store.Thread) int { // most recent activity first
+		return cmp.Or(b.UpdatedAt.Compare(a.UpdatedAt), strings.Compare(b.ID, a.ID))
+	})
+	if len(threads) > limit {
+		threads = threads[:limit]
+	}
+	return threads, nil
+}
+
+// updated is when a task last changed.
+func updated(r store.Record) time.Time {
+	switch {
+	case r.FinishedAt != nil:
+		return *r.FinishedAt
+	case r.StartedAt != nil:
+		return *r.StartedAt
+	}
+	return r.CreatedAt
+}
+
+func (s *Store) CountTasks(context.Context) (map[task.State]int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	counts := map[task.State]int{}
+	for _, r := range s.tasks {
+		counts[r.State]++
+	}
+	return counts, nil
+}
+
 func (s *Store) ThreadTasks(_ context.Context, threadID string) ([]store.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

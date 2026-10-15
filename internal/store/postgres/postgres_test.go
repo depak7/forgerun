@@ -784,3 +784,59 @@ func withParent(id string) task.Task {
 	tk.PR, tk.ParentID = true, id
 	return tk
 }
+
+func TestListThreadsAndCounts(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	addAgent(t, s, "test-agent")
+	if _, err := s.pool.Exec(ctx, `INSERT INTO models (id, agent_id, family, name, is_default) VALUES ('m', 'test-agent', 'm', 'M', true)`); err != nil {
+		t.Fatal(err)
+	}
+	s.pool.Exec(ctx, `UPDATE agents SET default_model_id = 'm' WHERE id = 'test-agent'`)
+
+	// Thread A: a cursor task with a PR, then a follow-up on test-agent that failed.
+	a := prTask(t, s, "")
+	finishTask(t, s, a.ID, store.Outcome{State: task.Succeeded, PRURL: "u", PRNumber: 5, PRBranch: "b"})
+	a2 := task.New("https://github.com/o/r", "follow-up")
+	a2.ParentID = a.ID
+	if err := s.Create(ctx, a2, "test-agent"); err != nil {
+		t.Fatal(err)
+	}
+	finishTask(t, s, a2.ID, store.Outcome{State: task.Failed, Error: "agent stalled"})
+	// Thread B: a single task, still queued, created last.
+	b := task.New("https://github.com/o/other", "on its own")
+	if err := s.Create(ctx, b, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+
+	threads, err := s.ListThreads(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 2 {
+		t.Fatalf("%d threads, want 2", len(threads))
+	}
+	// Threads come most recent activity first; look them up by ID here.
+	byID := map[string]store.Thread{threads[0].ID: threads[0], threads[1].ID: threads[1]}
+	ta := byID[a.ID]
+	if ta.Title != a.Prompt || ta.Steps != 2 || !slices.Equal(ta.Agents, []string{"cursor", "test-agent"}) ||
+		ta.Latest.ID != a2.ID || ta.Latest.State != task.Failed || ta.Latest.PR.Number != 5 {
+		t.Errorf("thread A = %+v", ta)
+	}
+	if tb := byID[b.ID]; tb.Steps != 1 || tb.Latest.ID != b.ID || tb.Latest.State != task.Queued {
+		t.Errorf("thread B = %+v", tb)
+	}
+	if !threads[0].UpdatedAt.After(threads[1].UpdatedAt) && !threads[0].UpdatedAt.Equal(threads[1].UpdatedAt) {
+		t.Errorf("not newest first: %v then %v", threads[0].UpdatedAt, threads[1].UpdatedAt)
+	}
+	if one, _ := s.ListThreads(ctx, 1); len(one) != 1 || one[0].ID != threads[0].ID {
+		t.Errorf("limit 1 = %+v", one)
+	}
+
+	counts, err := s.CountTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts[task.Succeeded] != 1 || counts[task.Failed] != 1 || counts[task.Queued] != 1 || counts[task.Running] != 0 {
+		t.Errorf("counts = %v", counts)
+	}
+}
