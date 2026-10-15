@@ -299,14 +299,19 @@ func TestSeededModelsAreReachable(t *testing.T) {
 	if len(vs) < 200 {
 		t.Fatalf("only %d models; is the seed migration applied?", len(vs))
 	}
-	cat := models.NewCatalog("cursor", vs)
-	if cat.DefaultFamily() != "auto" {
-		t.Errorf("cursor default family = %q, want auto (agents.default_model_id)", cat.DefaultFamily())
+	wantDefault := map[string]string{"cursor": "auto", "claude-code": "sonnet"} // agents.default_model_id
+	for agentID, want := range wantDefault {
+		cat := models.NewCatalog(agentID, vs)
+		if cat.DefaultFamily() != want {
+			t.Errorf("%s default family = %q, want %q", agentID, cat.DefaultFamily(), want)
+		}
 	}
+	// Every seeded variant can be chosen through its own agent's catalog.
 	for _, v := range vs {
-		got, err := cat.Resolve(models.Choice{Model: v.Family, Effort: v.Effort, Thinking: &v.Thinking, Fast: &v.Fast}, "auto")
+		cat := models.NewCatalog(v.AgentID, vs)
+		got, err := cat.Resolve(models.Choice{Model: v.Family, Effort: v.Effort, Thinking: &v.Thinking, Fast: &v.Fast}, "")
 		if err != nil || got.ID != v.ID {
-			t.Errorf("%s: resolved to %q, %v", v.ID, got.ID, err)
+			t.Errorf("%s/%s: resolved to %q, %v", v.AgentID, v.ID, got.ID, err)
 		}
 	}
 }
@@ -386,14 +391,14 @@ func addAgent(t *testing.T, s *Store, id string) {
 
 func TestModelBelongsToAgent(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
-	addAgent(t, s, "claude-code")
+	addAgent(t, s, "test-agent")
 
 	tk := task.New("r", "p")
 	tk.ModelID = "auto" // Cursor's auto
-	if err := s.Create(ctx, tk, "claude-code"); err == nil {
+	if err := s.Create(ctx, tk, "test-agent"); err == nil {
 		t.Error("task used another agent's model")
 	}
-	if err := s.Create(ctx, task.New("r", "p"), "claude-code"); err == nil {
+	if err := s.Create(ctx, task.New("r", "p"), "test-agent"); err == nil {
 		t.Error("task created without a model for an agent with no default")
 	}
 	if err := s.Create(ctx, task.New("r", "p"), "no-such-agent"); err == nil {
@@ -406,25 +411,25 @@ func TestModelBelongsToAgent(t *testing.T) {
 
 func TestAgentDefaultMustBeOwnModel(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
-	addAgent(t, s, "claude-code")
+	addAgent(t, s, "test-agent")
 
-	if _, err := s.pool.Exec(ctx, `UPDATE agents SET default_model_id = 'auto' WHERE id = 'claude-code'`); err == nil {
+	if _, err := s.pool.Exec(ctx, `UPDATE agents SET default_model_id = 'auto' WHERE id = 'test-agent'`); err == nil {
 		t.Fatal("agent default pointed at another agent's model")
 	}
 
 	// With its own model as default, tasks without a model use it.
-	if _, err := s.pool.Exec(ctx, `INSERT INTO models (id, agent_id, family, name, is_default) VALUES ('sonnet', 'claude-code', 'sonnet', 'Sonnet', true)`); err != nil {
+	if _, err := s.pool.Exec(ctx, `INSERT INTO models (id, agent_id, family, name, is_default) VALUES ('sonnet', 'test-agent', 'sonnet', 'Sonnet', true)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE agents SET default_model_id = 'sonnet' WHERE id = 'claude-code'`); err != nil {
+	if _, err := s.pool.Exec(ctx, `UPDATE agents SET default_model_id = 'sonnet' WHERE id = 'test-agent'`); err != nil {
 		t.Fatal(err)
 	}
 	tk := task.New("r", "p")
-	if err := s.Create(ctx, tk, "claude-code"); err != nil {
+	if err := s.Create(ctx, tk, "test-agent"); err != nil {
 		t.Fatal(err)
 	}
 	rec, _ := s.Get(ctx, tk.ID)
-	if rec.AgentID != "claude-code" || rec.Model.ID != "sonnet" || !rec.Model.AgentDefault {
+	if rec.AgentID != "test-agent" || rec.Model.ID != "sonnet" || !rec.Model.AgentDefault {
 		t.Errorf("task = agent %q model %+v", rec.AgentID, rec.Model)
 	}
 }
@@ -461,8 +466,8 @@ func TestDisabledAgentHidesModels(t *testing.T) {
 
 func TestListAgents(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
-	addAgent(t, s, "claude-code")
-	if _, err := s.pool.Exec(ctx, `UPDATE agents SET enabled = false WHERE id = 'claude-code'`); err != nil {
+	addAgent(t, s, "test-agent")
+	if _, err := s.pool.Exec(ctx, `UPDATE agents SET enabled = false WHERE id = 'test-agent'`); err != nil {
 		t.Fatal(err)
 	}
 	agents, err := s.ListAgents(ctx)
@@ -472,7 +477,7 @@ func TestListAgents(t *testing.T) {
 	if !slices.ContainsFunc(agents, func(a store.Agent) bool { return a.ID == "cursor" && a.DefaultModelID == "auto" }) {
 		t.Errorf("cursor missing from %+v", agents)
 	}
-	if slices.ContainsFunc(agents, func(a store.Agent) bool { return a.ID == "claude-code" }) {
+	if slices.ContainsFunc(agents, func(a store.Agent) bool { return a.ID == "test-agent" }) {
 		t.Error("disabled agent listed")
 	}
 }
@@ -533,15 +538,15 @@ func TestReplaceSnapshot(t *testing.T) {
 
 func TestSnapshotsPerRepoAndAgent(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
-	addAgent(t, s, "claude-code")
+	addAgent(t, s, "test-agent")
 
 	c, _, err := s.ReplaceSnapshot(ctx, newSnap("https://GitHub.com/x/y.git", "cursor", "/c"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Another agent on the same repo gets its own snapshot; cursor's stays current.
-	if _, retired, err := s.ReplaceSnapshot(ctx, newSnap("https://github.com/x/y", "claude-code", "/cc")); err != nil || retired != nil {
-		t.Fatalf("claude-code snapshot: retired %+v, err %v", retired, err)
+	if _, retired, err := s.ReplaceSnapshot(ctx, newSnap("https://github.com/x/y", "test-agent", "/cc")); err != nil || retired != nil {
+		t.Fatalf("test-agent snapshot: retired %+v, err %v", retired, err)
 	}
 	// Different spellings of the repo find the same snapshot.
 	for _, repo := range []string{"https://github.com/x/y", "https://github.com/x/y/", "https://GITHUB.com/x/y.git"} {

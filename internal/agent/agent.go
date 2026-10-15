@@ -14,6 +14,11 @@ type Request struct {
 	Dir     string // repository checkout inside the VM
 	Prompt  string
 	ModelID string // exact agent model id; "" or "auto" = the agent's own choice
+	// The chosen model's family and effort, from the models table, for agents
+	// that take them as separate options (Claude Code: --model opus --effort
+	// high). Agents whose IDs already encode them (Cursor) ignore these.
+	Family string
+	Effort string
 }
 
 // Agent edits the repository at req.Dir according to req.Prompt, streaming its

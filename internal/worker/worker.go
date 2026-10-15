@@ -104,7 +104,8 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	p.setRunning(rec.ID, cancel)
 
 	log.Info("task started", "id", rec.ID, "repo", rec.Repo, "thread", rec.ThreadID)
-	t := task.Task{ID: rec.ID, Repo: rec.Repo, Prompt: rec.Prompt, ModelID: rec.Model.ID, PR: rec.PR.Requested, ParentID: rec.ParentID}
+	t := task.Task{ID: rec.ID, Repo: rec.Repo, Prompt: rec.Prompt, ModelID: rec.Model.ID,
+		Family: rec.Model.Family, Effort: rec.Model.Effort, PR: rec.PR.Requested, ParentID: rec.ParentID}
 	var res task.Result
 	var err error
 	if t.ParentID != "" {

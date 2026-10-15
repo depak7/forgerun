@@ -32,6 +32,8 @@ type Task struct {
 	Repo    string // git URL
 	Prompt  string
 	ModelID string // exact agent model id; "" or "auto" lets the agent choose
+	Family  string // the model's family, e.g. "opus"; "" if unknown
+	Effort  string // the model's effort, e.g. "high"; "" = the agent's default
 	PR      bool   // open a pull request with the changes
 	// ParentID, for a follow-up, is the task it continues; "" otherwise.
 	ParentID string
@@ -192,7 +194,7 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 
 // runAgent runs the agent, under a watchdog when AgentIdle is set.
 func (r *Runner) runAgent(ctx context.Context, sb *sandbox.Sandbox, t Task, logs io.Writer, step func(string, ...any)) error {
-	req := agent.Request{Dir: repoDir, Prompt: prompt(t), ModelID: t.ModelID}
+	req := agent.Request{Dir: repoDir, Prompt: prompt(t), ModelID: t.ModelID, Family: t.Family, Effort: t.Effort}
 	if r.AgentIdle <= 0 {
 		return r.Agent.Run(ctx, sb, req, logs)
 	}

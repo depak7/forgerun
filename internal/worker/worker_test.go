@@ -221,16 +221,17 @@ func TestPassesModelToExecutor(t *testing.T) {
 	if err := s.Create(context.Background(), tk, "fake"); err != nil {
 		t.Fatal(err)
 	}
-	got := make(chan string, 1)
+	got := make(chan task.Task, 1)
 	startPool(t, s, fakeExec(func(_ context.Context, tk task.Task) (task.Result, error) {
-		got <- tk.ModelID
+		got <- tk
 		return task.Result{}, nil
 	}), 1, 10*time.Millisecond)
 
 	select {
-	case id := <-got:
-		if id != "m-high" {
-			t.Errorf("executor got model %q, want m-high", id)
+	case tk := <-got:
+		// Family and effort travel separately, for agents that take them as options.
+		if tk.ModelID != "m-high" || tk.Family != "m" || tk.Effort != "high" {
+			t.Errorf("executor got model %q (family %q, effort %q), want m-high (m, high)", tk.ModelID, tk.Family, tk.Effort)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("task never ran")
