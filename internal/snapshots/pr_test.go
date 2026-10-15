@@ -124,7 +124,7 @@ func TestPullRequestWithoutChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pub.got) != 0 || !strings.Contains(res.PublishError, "made no changes") || res.Summary != "" {
+	if len(pub.got) != 0 || res.PublishError != "" || res.Summary != "" {
 		t.Errorf("published %d, error %q, summary %q", len(pub.got), res.PublishError, res.Summary)
 	}
 }

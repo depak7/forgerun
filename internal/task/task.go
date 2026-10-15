@@ -271,10 +271,7 @@ const publishTimeout = 2 * time.Minute
 func (r *Runner) publish(ctx context.Context, t Task, res *Result, step func(string, ...any)) {
 	switch {
 	case res.Diff == "":
-		if t.PR {
-			res.PublishError = "the agent made no changes, so there is nothing to push"
-		}
-		return
+		return // nothing to push; an answer without changes is a normal outcome, not an error
 	case r.Publisher == nil:
 		res.PublishError = "publishing is off: the changes were not pushed"
 	case ctx.Err() != nil:
