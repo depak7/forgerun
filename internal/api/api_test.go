@@ -862,3 +862,20 @@ func TestLogTail(t *testing.T) {
 		t.Errorf("tail: %d %q", rec.Code, rec.Body)
 	}
 }
+
+func TestListSnapshots(t *testing.T) {
+	h, s, _ := setup(t, func(c *Config) { c.Snapshots = &SnapshotSettings{} })
+	s.ReplaceSnapshot(context.Background(), store.Snapshot{Repo: "https://GitHub.com/depak7/playground.git", AgentID: "cursor", Ref: "/a", Commit: "ccbf076", SizeBytes: 6e6})
+	var snaps []snapshotJSON
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/snapshots", ""), http.StatusOK), &snaps)
+	if len(snaps) != 1 || snaps[0].Repo != "https://github.com/depak7/playground" || snaps[0].Agent != "cursor" ||
+		snaps[0].Commit != "ccbf076" || snaps[0].State != "current" || snaps[0].SizeBytes != 6e6 {
+		t.Errorf("snapshots = %+v", snaps)
+	}
+	// Snapshots off: an empty list, not null.
+	h, _, _ = setup(t)
+	rec := do(h, "GET", "/api/snapshots", "")
+	if !strings.Contains(rec.Body.String(), `"data":[]`) {
+		t.Errorf("off: %s", rec.Body)
+	}
+}

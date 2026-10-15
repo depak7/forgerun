@@ -81,6 +81,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/agents", srv.listAgents)
 	mux.HandleFunc("GET /api/threads", srv.listThreads)
 	mux.HandleFunc("GET /api/status", srv.status)
+	mux.HandleFunc("GET /api/snapshots", srv.listSnapshots)
 	mux.HandleFunc("GET /api/models", srv.listModels)
 	mux.HandleFunc("GET /healthz", srv.health)
 	return mux
@@ -393,6 +394,36 @@ func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
 		out[i] = threadJSON{ID: th.ID, Title: th.Title, Repo: th.Repo, Steps: th.Steps, Agents: th.Agents,
 			Latest: toJSON(l), UpdatedAt: th.UpdatedAt.UTC(),
 			NeedsAttention: l.State == task.Failed || (l.State == task.Succeeded && l.PR.Requested && l.PR.Error != "")}
+	}
+	writeData(w, http.StatusOK, out)
+}
+
+// snapshotJSON is a saved VM disk a repo's next task can start from.
+type snapshotJSON struct {
+	ID         int64     `json:"id"`
+	Repo       string    `json:"repo"` // normalized
+	Agent      string    `json:"agent"`
+	Commit     string    `json:"commit"`
+	State      string    `json:"state"` // "current", or "retired" while its delete is pending
+	SizeBytes  int64     `json:"size_bytes"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at"`
+}
+
+// listSnapshots serves GET /api/snapshots: the snapshots on disk, least
+// recently used first. Empty when snapshots are off.
+func (s *Server) listSnapshots(w http.ResponseWriter, r *http.Request) {
+	out := []snapshotJSON{}
+	if s.snapshots != nil {
+		snaps, err := s.store.ListSnapshots(r.Context())
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		for _, sn := range snaps {
+			out = append(out, snapshotJSON{ID: sn.ID, Repo: sn.Repo, Agent: sn.AgentID, Commit: sn.Commit, State: string(sn.State),
+				SizeBytes: sn.SizeBytes, CreatedAt: sn.CreatedAt.UTC(), LastUsedAt: sn.LastUsedAt.UTC()})
+		}
 	}
 	writeData(w, http.StatusOK, out)
 }

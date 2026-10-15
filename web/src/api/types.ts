@@ -50,3 +50,44 @@ export interface Thread {
   needs_attention: boolean;
   updated_at: string;
 }
+
+// A model family offered for an agent (GET /api/models?agent=…).
+export interface ModelFamily {
+  id: string;
+  name: string;
+  efforts: string[]; // [] when the family has none
+  default_effort: string; // "" = the plain variant
+  thinking: boolean;
+  fast: boolean;
+  zdr: boolean;
+}
+
+export interface ModelList {
+  agent: string;
+  runnable: boolean;
+  default: string; // default family
+  models: ModelFamily[];
+}
+
+export interface Snapshot {
+  id: number;
+  repo: string; // normalized
+  agent: string;
+  commit: string;
+  state: "current" | "retired";
+  size_bytes: number;
+  created_at: string;
+  last_used_at: string;
+}
+
+// The body of POST /api/tasks.
+export interface NewTask {
+  repo: string;
+  prompt: string;
+  agent: string;
+  model: string;
+  effort?: string;
+  thinking?: boolean;
+  fast?: boolean;
+  pr: boolean;
+}

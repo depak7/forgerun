@@ -37,3 +37,18 @@ describe("display names", () => {
     expect(agentChain(["cursor", "cursor", "claude-code"])).toBe("cursor ×2 → claude-code");
   });
 });
+
+describe("repo checks", () => {
+  it("normalizes like the server", async () => {
+    const { normalizeRepo } = await import("./format");
+    expect(normalizeRepo("  HTTPS://GitHub.com/depak7/Playground.git/ ")).toBe("https://github.com/depak7/Playground");
+  });
+  it("explains bad URLs", async () => {
+    const { checkRepo, isGitHub } = await import("./format");
+    expect(checkRepo("")).toMatch(/Enter/);
+    expect(checkRepo("git@github.com:a/b.git")).toMatch(/https URL/);
+    expect(checkRepo("https://github.com/a/b")).toBe("");
+    expect(isGitHub("https://github.com/a/b")).toBe(true);
+    expect(isGitHub("https://gitlab.com/a/b")).toBe(false);
+  });
+});

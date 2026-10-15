@@ -60,3 +60,28 @@ export function agentChain(agents: string[]): string {
   }
   return runs.map((r) => (r.n > 1 ? `${r.agent} ×${r.n}` : r.agent)).join(" → ");
 }
+
+// normalizeRepo matches the server's store.NormalizeRepo, so the UI can
+// tell whether a repo has a snapshot: lower-case scheme and host, no
+// trailing "/" or ".git". The path keeps its case.
+export function normalizeRepo(url: string): string {
+  let s = url.trim();
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([^/]+)(.*)$/i.exec(s);
+  if (m) s = `${m[1].toLowerCase()}://${m[2].toLowerCase()}${m[3]}`;
+  s = s.replace(/\/+$/, "");
+  return s.endsWith(".git") ? s.slice(0, -4) : s;
+}
+
+// checkRepo explains what's wrong with a repo URL, or returns "" if it can
+// be used. Matches the API's rule: https only.
+export function checkRepo(url: string): string {
+  const s = url.trim();
+  if (s === "") return "Enter the repository's https URL.";
+  if (!/^https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+/.test(s)) return "Use an https URL to the repository, like https://github.com/owner/name.";
+  return "";
+}
+
+// isGitHub reports whether pull requests can be opened for the repo.
+export function isGitHub(url: string): boolean {
+  return /^https:\/\/github\.com\//i.test(url.trim());
+}

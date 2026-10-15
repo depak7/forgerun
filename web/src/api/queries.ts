@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "./client";
-import type { Agent, Status, Thread } from "./types";
+import type { Agent, ModelList, Snapshot, Status, Thread } from "./types";
 
 // Hooks for the data screens share. TanStack Query caches each by its key,
 // so the strip, sidebar and pages share one request, refreshed while the
@@ -17,6 +17,19 @@ export function useAgents() {
 
 export function useThreads() {
   return useQuery({ queryKey: ["threads"], queryFn: () => api<Thread[]>("/api/threads?limit=100"), refetchInterval: 3000 });
+}
+
+export function useModels(agent: string) {
+  return useQuery({
+    queryKey: ["models", agent],
+    queryFn: () => api<ModelList>(`/api/models?agent=${encodeURIComponent(agent)}`),
+    enabled: agent !== "",
+    staleTime: 60_000, // the model list rarely changes
+  });
+}
+
+export function useSnapshots() {
+  return useQuery({ queryKey: ["snapshots"], queryFn: () => api<Snapshot[]>("/api/snapshots"), staleTime: 30_000 });
 }
 
 // useLogTail is the last line a running task's agent wrote. It asks for

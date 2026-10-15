@@ -1,4 +1,4 @@
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAgents, useStatus, useThreads } from "../api/queries";
 import { formatBytes, shortID } from "../format";
 import styles from "./Layout.module.css";
@@ -60,7 +60,10 @@ function StatusStrip() {
 function Sidebar() {
   const { data: agents } = useAgents();
   const { data: status } = useStatus();
-  const linkClass = ({ isActive }: { isActive: boolean }) => (isActive ? `${styles.link} ${styles.linkActive}` : styles.link);
+  const { pathname } = useLocation();
+  // New task and thread pages belong to "tasks" in the menu.
+  const inTasks = pathname === "/" || pathname.startsWith("/tasks/") || pathname.startsWith("/threads/");
+  const linkClass = (active: boolean) => (active ? `${styles.link} ${styles.linkActive}` : styles.link);
   return (
     <nav className={styles.nav} aria-label="Main">
       <NavLink to="/" className={styles.brand}>
@@ -68,10 +71,10 @@ function Sidebar() {
         <span>forgerun</span>
       </NavLink>
       <div className={styles.links}>
-        <NavLink to="/" end className={linkClass}>
+        <NavLink to="/" className={linkClass(inTasks)} aria-current={inTasks ? "page" : undefined}>
           tasks
         </NavLink>
-        <NavLink to="/settings" className={linkClass}>
+        <NavLink to="/settings" className={({ isActive }) => linkClass(isActive)}>
           settings
         </NavLink>
       </div>

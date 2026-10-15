@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Pending } from "./pages/Placeholder";
+import { NewTaskPage } from "./pages/NewTask";
 import { TasksPage } from "./pages/Tasks";
 import "./styles/global.css";
 
@@ -14,7 +15,7 @@ const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { path: "/", element: <TasksPage /> },
-      { path: "/tasks/new", element: <Pending title="New task" /> },
+      { path: "/tasks/new", element: <NewTaskPage /> },
       { path: "/threads/:id", element: <Pending title="Thread" /> },
       { path: "/settings", element: <Pending title="Settings" /> },
       { path: "*", element: <Pending title="Not found" /> },
