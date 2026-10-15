@@ -3,7 +3,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { Layout } from "./components/Layout";
-import { Pending, TasksPage } from "./pages/Placeholder";
+import { Pending } from "./pages/Placeholder";
+import { TasksPage } from "./pages/Tasks";
 import "./styles/global.css";
 
 // The app's pages. Paths match what the Go server sends back to index.html,

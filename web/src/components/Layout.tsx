@@ -1,6 +1,6 @@
-import { NavLink, Outlet } from "react-router-dom";
-import { useAgents, useStatus } from "../api/queries";
-import { formatBytes } from "../format";
+import { Link, NavLink, Outlet } from "react-router-dom";
+import { useAgents, useStatus, useThreads } from "../api/queries";
+import { formatBytes, shortID } from "../format";
 import styles from "./Layout.module.css";
 
 // The frame around every page: the status strip, the sidebar, and the page
@@ -21,15 +21,17 @@ export function Layout() {
 
 function StatusStrip() {
   const { data: status, error } = useStatus();
+  const { data: threads } = useThreads();
   if (error) {
     return (
       <div className={styles.strip} role="status">
-        <span className="missing">CAN'T REACH THE SERVER: {error.message}</span>
+        <span className={styles.missing}>CAN'T REACH THE SERVER: {error.message}</span>
       </div>
     );
   }
   const running = status?.tasks.running ?? 0;
   const queued = status?.tasks.queued ?? 0;
+  const live = (threads ?? []).filter((t) => t.latest.state === "running" || t.latest.state === "queued").slice(0, 3);
   return (
     <div className={styles.strip} aria-label="Agents at work">
       {running + queued > 0 ? (
@@ -39,6 +41,12 @@ function StatusStrip() {
       ) : (
         <span>NO AGENTS RUNNING</span>
       )}
+      {live.map((t) => (
+        <Link key={t.latest.id} to={`/threads/${t.id}`}>
+          {shortID(t.latest.id).toUpperCase()} · {t.latest.agent.toUpperCase()} ·{" "}
+          <span style={{ color: t.latest.state === "running" ? "var(--running)" : "var(--text)" }}>{t.latest.state.toUpperCase()}</span> →
+        </Link>
+      ))}
       {status?.snapshots.enabled && (
         <span className={styles.stripRight}>
           SNAPSHOTS {formatBytes(status.snapshots.bytes)}
