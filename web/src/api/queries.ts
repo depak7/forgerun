@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "./client";
-import type { Agent, ModelList, Snapshot, Status, Thread } from "./types";
+import type { Agent, ModelList, Snapshot, Status, Task, Thread } from "./types";
 
 // Hooks for the data screens share. TanStack Query caches each by its key,
 // so the strip, sidebar and pages share one request, refreshed while the
@@ -30,6 +30,76 @@ export function useModels(agent: string) {
 
 export function useSnapshots() {
   return useQuery({ queryKey: ["snapshots"], queryFn: () => api<Snapshot[]>("/api/snapshots"), staleTime: 30_000 });
+}
+
+// useThread is every step of a thread, oldest first: often while a step
+// is waiting or running, rarely once it's all finished.
+export function useThread(id: string) {
+  return useQuery({
+    queryKey: ["thread", id],
+    queryFn: () => api<Task[]>(`/api/tasks/${encodeURIComponent(id)}/thread`),
+    refetchInterval: (q) => (q.state.data?.some((t) => t.state === "queued" || t.state === "running") ? 2000 : 10000),
+  });
+}
+
+// usePatch is a finished step's changes, as the git patch text.
+export function usePatch(taskId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["patch", taskId],
+    enabled,
+    staleTime: Infinity, // a finished step's patch never changes
+    queryFn: async () => {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/patch`);
+      if (res.status === 404) return "";
+      if (!res.ok) throw new Error(`patch: HTTP ${res.status}`);
+      return res.text();
+    },
+  });
+}
+
+// useLiveLog is a step's whole log, fetched incrementally: it remembers how
+// many bytes it has and asks only for the rest (Range: bytes=N-), every
+// 2 seconds while live, so a long log isn't downloaded again and again.
+export function useLiveLog(taskId: string, live: boolean): { text: string; error: string } {
+  const [state, setState] = useState({ id: taskId, text: "", error: "" });
+  useEffect(() => {
+    let cancelled = false;
+    let text = "";
+    let bytes = 0; // bytes of the log we already have
+    // One decoder in streaming mode: a character split across two chunks
+    // is held back until its other half arrives, instead of garbled.
+    let decoder = new TextDecoder();
+    setState({ id: taskId, text: "", error: "" });
+    const pull = async () => {
+      const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/log`, bytes > 0 ? { headers: { Range: `bytes=${bytes}-` } } : {});
+      if (cancelled) return;
+      if (res.status === 416) return; // nothing new yet
+      if (res.status === 404) {
+        setState({ id: taskId, text: "", error: "" }); // no log yet: still queued
+        return;
+      }
+      if (!res.ok) {
+        setState({ id: taskId, text, error: `log: HTTP ${res.status}` });
+        return;
+      }
+      const chunk = new Uint8Array(await res.arrayBuffer());
+      if (cancelled) return;
+      if (res.status === 200 && bytes > 0) {
+        text = ""; // the server sent it all again
+        decoder = new TextDecoder();
+      }
+      bytes = res.status === 200 ? chunk.length : bytes + chunk.length;
+      text += decoder.decode(chunk, { stream: true });
+      setState({ id: taskId, text, error: "" });
+    };
+    pull();
+    const timer = live ? setInterval(pull, 2000) : undefined;
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [taskId, live]);
+  return state.id === taskId ? state : { text: "", error: "" };
 }
 
 // useLogTail is the last line a running task's agent wrote. It asks for

@@ -6,6 +6,7 @@ import { Layout } from "./components/Layout";
 import { Pending } from "./pages/Placeholder";
 import { NewTaskPage } from "./pages/NewTask";
 import { TasksPage } from "./pages/Tasks";
+import { ThreadPage } from "./pages/Thread";
 import "./styles/global.css";
 
 // The app's pages. Paths match what the Go server sends back to index.html,
@@ -16,7 +17,7 @@ const router = createBrowserRouter([
     children: [
       { path: "/", element: <TasksPage /> },
       { path: "/tasks/new", element: <NewTaskPage /> },
-      { path: "/threads/:id", element: <Pending title="Thread" /> },
+      { path: "/threads/:id", element: <ThreadPage /> },
       { path: "/settings", element: <Pending title="Settings" /> },
       { path: "*", element: <Pending title="Not found" /> },
     ],
