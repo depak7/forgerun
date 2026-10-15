@@ -111,6 +111,18 @@ describe("NewTaskPage", () => {
     ]);
   });
 
+  it("sends plan: true when Plan first is on", async () => {
+    const posted = server();
+    renderNew("/tasks/new?prompt=Add%20a%20test&repo=https://github.com/depak7/playground");
+    const model = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    await waitFor(() => expect(model.value).toBe("auto"));
+    fireEvent.click(screen.getByRole("switch", { name: "Plan first" }));
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+    fireEvent.click(runButton());
+    expect(await screen.findByText("thread page")).toBeTruthy();
+    expect(posted).toEqual([{ repo: "https://github.com/depak7/playground", prompt: "Add a test", agent: "cursor", model: "auto", plan: true }]);
+  });
+
   it("asks for a prompt before running", async () => {
     server();
     renderNew("/tasks/new?repo=https://github.com/depak7/playground");

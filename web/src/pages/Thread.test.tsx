@@ -16,7 +16,7 @@ function task(over: Partial<Task>): Task {
     effort: "", thinking: false, fast: false, model_id: "auto", state: "succeeded", error: "", has_diff: true,
     snapshot_id: null, parent_id: null, thread_id: "t-1",
     pr: { requested: true, url: "https://github.com/depak7/playground/pull/5", number: 5, branch: "forgerun/add-a-test-t1", error: "" },
-    summary: "", reply: "Added a **regression** test in `x_test.go`.", pushed: true, created_at: "2026-10-15T10:00:00Z",
+    summary: "", reply: "Added a **regression** test in `x_test.go`.", pushed: true, plan: false, asked: false, created_at: "2026-10-15T10:00:00Z",
     started_at: "2026-10-15T10:00:01Z", finished_at: "2026-10-15T10:02:01Z",
     ...over,
   };
@@ -132,6 +132,38 @@ describe("ThreadPage", () => {
     expect(screen.queryByRole("button", { name: /open PR/ })).toBeNull();
     expect(await screen.findByText("session closed")).toBeTruthy();
     expect(screen.getByText(/reopens the session/)).toBeTruthy();
+  });
+
+  it("shows a plan in full and approves it, or revises it as plan-only", async () => {
+    const plan = "## Plan\n- Add is_palindrome to script.sh\n## Questions\n- Strict or lenient?";
+    const posted = server([task({ plan: true, has_diff: false, pushed: false, reply: plan, pr: { requested: false, url: "", number: 0, branch: "", error: "" } })]);
+    renderThread();
+    expect(await screen.findByText("Here's the plan:")).toBeTruthy();
+    expect(screen.getByText("Add is_palindrome to script.sh")).toBeTruthy();
+    expect(screen.getByText("PLAN")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /approve & build/ }));
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toEqual({ url: "/api/tasks/t-1/followups", body: { prompt: "Approved. Go ahead and implement the plan.", agent: "cursor", model: "auto" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /revise/ }));
+    expect((screen.getByLabelText(/plan only/) as HTMLInputElement).checked).toBe(true);
+    expect(followup().placeholder).toBe("What should change in the plan?");
+    fireEvent.change(followup(), { target: { value: "Use Go instead" } });
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[1].body).toEqual({ prompt: "Use Go instead", agent: "cursor", model: "auto", plan: true });
+  });
+
+  it("asks for answers when the agent has questions", async () => {
+    server([task({ asked: true, has_diff: false, pushed: false, reply: "## Questions\n1. Which file?" })]);
+    renderThread();
+    expect(await screen.findByText("NEEDS YOUR ANSWER")).toBeTruthy();
+    expect(screen.getByText("Before going on, the agent asks:")).toBeTruthy();
+    expect(screen.getByText(/Which file\?/)).toBeTruthy();
+    expect(followup().placeholder).toBe("Answer the agent's questions…");
+    expect(screen.queryByRole("button", { name: /approve/ })).toBeNull();
   });
 
   it("retries a failed step and sends the follow-up with the chosen agent", async () => {

@@ -126,6 +126,39 @@ func TestSessionEndpoints(t *testing.T) {
 	}
 }
 
+// Plan first: the flag is kept on the task and on a follow-up that
+// revises the plan, and a plan or a question waits on the user.
+func TestPlanAndQuestions(t *testing.T) {
+	h, s, _ := setup(t)
+	tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"x","plan":true}`), http.StatusCreated))
+	if !tk.Plan {
+		t.Fatal("plan flag lost on create")
+	}
+	ctx := context.Background()
+	s.Start(ctx, tk.ID)
+	s.Finish(ctx, tk.ID, store.Outcome{State: task.Succeeded, Reply: "## Plan\n1. do it"})
+	var threads []threadJSON
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/threads", ""), http.StatusOK), &threads)
+	if len(threads) != 1 || !threads[0].NeedsAttention {
+		t.Errorf("a plan waiting for approval should need attention: %+v", threads)
+	}
+	rev := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+tk.ID+"/followups", `{"prompt":"use Go","plan":true}`), http.StatusCreated))
+	if !rev.Plan {
+		t.Error("plan flag lost on a revising follow-up")
+	}
+	s.Start(ctx, rev.ID)
+	s.Finish(ctx, rev.ID, store.Outcome{State: task.Succeeded})
+	build := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+rev.ID+"/followups", `{"prompt":"approved"}`), http.StatusCreated))
+	if build.Plan {
+		t.Error("an approving follow-up should build, not plan")
+	}
+	s.Start(ctx, build.ID)
+	s.Finish(ctx, build.ID, store.Outcome{State: task.Succeeded, Asked: true})
+	if rec := decodeTask(t, mustData(t, do(h, "GET", "/api/tasks/"+build.ID, ""), http.StatusOK)); !rec.Asked {
+		t.Error("asked flag missing")
+	}
+}
+
 func equalRequests(a, b task.PublishRequest) bool {
 	ja, _ := json.Marshal(a)
 	jb, _ := json.Marshal(b)

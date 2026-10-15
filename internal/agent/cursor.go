@@ -73,6 +73,11 @@ func (c *Cursor) Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt 
 // is left implicit rather than passed as --model auto.
 func cursorArgs(req Request) []string {
 	args := []string{"-p", req.Prompt, "--force", "--trust", "--output-format", "text", "--disable-auto-update"}
+	if req.ReadOnly {
+		// Ask mode is read-only and answers in text. (Plan mode prints
+		// nothing headless: its plan never reaches the output.) No --force.
+		args = []string{"-p", req.Prompt, "--mode", "ask", "--trust", "--output-format", "text", "--disable-auto-update"}
+	}
 	if req.Continue {
 		args = append(args, "--continue")
 	}

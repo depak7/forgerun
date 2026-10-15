@@ -23,6 +23,10 @@ type Request struct {
 	// started in this VM, so it remembers what was said and done. Only
 	// agents that are Continuers honour it; the caller checks that.
 	Continue bool
+	// ReadOnly asks the agent to look and plan without editing files, in
+	// its own read-only mode if it has one. forgerun discards any changes
+	// a read-only run makes anyway.
+	ReadOnly bool
 }
 
 // Agent edits the repository at req.Dir according to req.Prompt, streaming its

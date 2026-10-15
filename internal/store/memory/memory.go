@@ -59,7 +59,7 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 		return fmt.Errorf("creating task %s: no model %q for agent %s", t.ID, t.ModelID, agentID)
 	}
 	rec := &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, AgentID: agentID,
-		Model: m, State: task.Queued, ThreadID: t.ID, CreatedAt: time.Now()}
+		Model: m, State: task.Queued, Plan: t.Plan, ThreadID: t.ID, CreatedAt: time.Now()}
 	if t.ParentID != "" { // mirrors the Postgres thread rules and indexes
 		parent, ok := s.tasks[t.ParentID]
 		if !ok {
@@ -231,7 +231,7 @@ func (s *Store) Finish(_ context.Context, id string, o store.Outcome) error {
 	}
 	r.Error, r.LogPath, r.HasDiff = o.Error, o.LogPath, o.Diff != ""
 	s.diffs[id] = o.Diff
-	r.BaseCommit, r.Reply = o.BaseCommit, o.Reply
+	r.BaseCommit, r.Reply, r.Asked = o.BaseCommit, o.Reply, o.Asked
 	now := time.Now()
 	r.FinishedAt = &now
 	return nil

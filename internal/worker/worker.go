@@ -104,7 +104,7 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 
 	log.Info("task started", "id", rec.ID, "repo", rec.Repo, "thread", rec.ThreadID)
 	t := task.Task{ID: rec.ID, ThreadID: rec.ThreadID, ParentID: rec.ParentID, Repo: rec.Repo, Prompt: rec.Prompt,
-		AgentID: rec.AgentID, ModelID: rec.Model.ID, Family: rec.Model.Family, Effort: rec.Model.Effort}
+		AgentID: rec.AgentID, ModelID: rec.Model.ID, Family: rec.Model.Family, Effort: rec.Model.Effort, Plan: rec.Plan}
 	var res task.Result
 	var err error
 	if t.ParentID != "" {
@@ -147,7 +147,7 @@ func (p *Pool) threadContext(ctx context.Context, rec store.Record, t *task.Task
 			if prev.ID == rec.ID {
 				break
 			}
-			turn := task.Turn{Prompt: prev.Prompt, Reply: prev.Reply, Failed: prev.State != task.Succeeded}
+			turn := task.Turn{Prompt: prev.Prompt, Reply: prev.Reply, Failed: prev.State != task.Succeeded, Plan: prev.Plan}
 			if prev.HasDiff && !turn.Failed { // a failed turn's changes were discarded
 				if turn.Diff, err = p.store.Diff(ctx, prev.ID); err != nil {
 					return nil, err
@@ -174,7 +174,7 @@ func (p *Pool) setRunning(id string, cancel context.CancelCauseFunc) {
 // outcome decides how a finished run is recorded.
 func outcome(ctx context.Context, res task.Result, err error) store.Outcome {
 	o := store.Outcome{State: task.Succeeded, LogPath: res.LogPath, Diff: res.Diff,
-		BaseCommit: res.BaseCommit, Reply: res.Reply}
+		BaseCommit: res.BaseCommit, Reply: res.Reply, Asked: res.Asked}
 	switch {
 	case err == nil:
 	case errors.Is(context.Cause(ctx), errCancelledByUser):

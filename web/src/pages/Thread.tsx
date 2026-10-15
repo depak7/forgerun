@@ -19,6 +19,20 @@ export function ThreadPage() {
   const { data: steps, error, isLoading } = useThread(id);
   const [selected, setSelected] = useState<string | null>(null); // null = the newest step
   const [draft, setDraft] = useState("");
+  const [planOnly, setPlanOnly] = useState(false); // the next message is plan-only (revising a plan)
+  const queryClient = useQueryClient();
+  const approve = useMutation({
+    mutationFn: (latest: Task) =>
+      api<Task>(`/api/tasks/${encodeURIComponent(latest.id)}/followups`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: approvePrompt, agent: latest.agent, model: latest.model }),
+      }),
+    onSuccess: (_, latest) => {
+      setSelected(null);
+      queryClient.invalidateQueries({ queryKey: ["thread", latest.thread_id] });
+      queryClient.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
 
   if (isLoading) return <p className="mono" style={{ color: "var(--muted)" }}>loading…</p>;
   if (error || !steps || steps.length === 0) {
@@ -48,10 +62,38 @@ export function ThreadPage() {
                 selected={s.id === sel.id}
                 onSelect={() => setSelected(s.id)}
                 onRetry={() => setDraft(s.prompt)}
+                waiting={i === steps.length - 1 && s.state === "succeeded" && (s.plan || s.asked)}
               />
             ))}
           </div>
-          <Composer latest={latest} n={steps.length} draft={draft} setDraft={setDraft} onSent={() => setSelected(null)} />
+          {latest.state === "succeeded" && latest.plan && (
+            <div className={styles.planBar} role="group" aria-label="Plan">
+              <span>{latest.asked ? "The plan has open questions: answer them, or approve it as it is." : "The plan is ready."}</span>
+              <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={approve.isPending} onClick={() => approve.mutate(latest)}>
+                {approve.isPending ? "[ starting… ]" : "[ approve & build ]"}
+              </button>
+              <button
+                type="button"
+                className={styles.btn}
+                onClick={() => {
+                  setPlanOnly(true);
+                  document.getElementById("followup")?.focus();
+                }}
+              >
+                [ revise ]
+              </button>
+            </div>
+          )}
+          {approve.error && <div className={styles.composerError}>Couldn't approve: {approve.error.message}</div>}
+          <Composer
+            latest={latest}
+            n={steps.length}
+            draft={draft}
+            setDraft={setDraft}
+            planOnly={planOnly}
+            setPlanOnly={setPlanOnly}
+            onSent={() => setSelected(null)}
+          />
         </section>
         <OutputPane step={sel} n={selNumber} />
       </div>
@@ -160,7 +202,17 @@ function sessionLabel(session: Session | undefined): string {
   return `session open · closes ${until} if idle`;
 }
 
-function StepItem(props: { step: Task; n: number; selected: boolean; onSelect: () => void; onRetry: () => void }) {
+// approvePrompt is the message that approves a plan.
+const approvePrompt = "Approved. Go ahead and implement the plan.";
+
+function StepItem(props: {
+  step: Task;
+  n: number;
+  selected: boolean;
+  onSelect: () => void;
+  onRetry: () => void;
+  waiting: boolean; // the newest step, and it waits on the user (a plan or questions)
+}) {
   const { step: s, n } = props;
   const now = useNow();
   const { data: tail } = useLogTail(s.id, s.state === "running");
@@ -185,12 +237,19 @@ function StepItem(props: { step: Task; n: number; selected: boolean; onSelect: (
             {s.effort && ` · ${s.effort}`}
           </span>
           <StateLabel state={s.state} />
-          {pushLabel(s) && <span style={{ color: s.pushed ? "var(--accent)" : "var(--running)" }}>{pushLabel(s)}</span>}
+          {pushLabel(s) && <span style={{ color: s.pushed || (s.plan && !s.asked) ? "var(--accent)" : "var(--running)" }}>{pushLabel(s)}</span>}
           <span>{timing(s, now)}</span>
         </span>
-        <span className={styles.replyText}>{replyText(s, tail)}</span>
+        <span className={styles.replyText}>
+          {props.waiting && s.reply ? (s.plan ? "Here's the plan:" : "Before going on, the agent asks:") : replyText(s, tail)}
+        </span>
         {s.state === "failed" && <span className={styles.replyError}>{s.error}</span>}
       </button>
+      {props.waiting && s.reply && (
+        <div className={styles.replyFull}>
+          <Summary text={s.reply} headingClass={styles.summaryHeading} />
+        </div>
+      )}
       {s.state === "failed" && (
         <div className={styles.retry}>
           <button type="button" className={styles.btn} onClick={props.onRetry}>
@@ -205,6 +264,8 @@ function StepItem(props: { step: Task; n: number; selected: boolean; onSelect: (
 
 // pushLabel says whether a step's changes are on the branch yet.
 function pushLabel(s: Task): string {
+  if (s.state === "succeeded" && s.asked) return "NEEDS YOUR ANSWER";
+  if (s.state === "succeeded" && s.plan) return "PLAN";
   if (s.state !== "succeeded" || !s.has_diff) return "";
   return s.pushed ? "PUSHED" : "NOT PUSHED YET";
 }
@@ -244,7 +305,15 @@ function excerpt(reply: string): string {
   return text.length > 320 ? `${text.slice(0, 317)}…` : text;
 }
 
-function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s: string) => void; onSent: () => void }) {
+function Composer(props: {
+  latest: Task;
+  n: number;
+  draft: string;
+  setDraft: (s: string) => void;
+  planOnly: boolean;
+  setPlanOnly: (b: boolean) => void;
+  onSent: () => void;
+}) {
   const { latest, n } = props;
   const queryClient = useQueryClient();
   const { data: agents } = useAgents();
@@ -259,10 +328,11 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
     mutationFn: () =>
       api<Task>(`/api/tasks/${encodeURIComponent(latest.id)}/followups`, {
         method: "POST",
-        body: JSON.stringify({ prompt: props.draft.trim(), agent, model }),
+        body: JSON.stringify({ prompt: props.draft.trim(), agent, model, ...(props.planOnly ? { plan: true } : {}) }),
       }),
     onSuccess: () => {
       props.setDraft("");
+      props.setPlanOnly(false);
       props.onSent();
       queryClient.invalidateQueries({ queryKey: ["thread", latest.thread_id] });
       queryClient.invalidateQueries({ queryKey: ["threads"] });
@@ -311,7 +381,13 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
           rows={3}
           value={props.draft}
           onChange={(e) => props.setDraft(e.target.value)}
-          placeholder="Reply to the agent, or ask for another change…"
+          placeholder={
+            props.planOnly
+              ? "What should change in the plan?"
+              : latest.asked
+                ? "Answer the agent's questions…"
+                : "Reply to the agent, or ask for another change…"
+          }
         />
         <div className={styles.composerBar}>
           <label htmlFor="fu-agent" className="sr-only">
@@ -337,6 +413,9 @@ function Composer(props: { latest: Task; n: number; draft: string; setDraft: (s:
               </option>
             ))}
           </select>
+          <label className={styles.composerCheck}>
+            <input type="checkbox" checked={props.planOnly} onChange={(e) => props.setPlanOnly(e.target.checked)} /> plan only
+          </label>
           <span className={styles.composerHint}>{composerHint(session, agent, latest.agent, missingKey ? agentInfo?.credential?.name : undefined)}</span>
           <button type="submit" className={`${styles.btn} ${styles.btnPrimary} ${styles.send}`} disabled={!canSend}>
             {send.isPending ? "[ sending… ]" : "[ send ]"}

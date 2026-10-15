@@ -67,7 +67,11 @@ func claudeCmd(dir string, args []string) sandbox.Cmd {
 // CLI alias (sonnet, opus, …) and its effort a separate flag; with neither,
 // the CLI uses its own defaults.
 func claudeArgs(req Request) []string {
-	args := []string{"-p", req.Prompt, "--permission-mode", "bypassPermissions", "--output-format", "text"}
+	mode := "bypassPermissions"
+	if req.ReadOnly {
+		mode = "plan" // reads and proposes; edits nothing
+	}
+	args := []string{"-p", req.Prompt, "--permission-mode", mode, "--output-format", "text"}
 	if req.Continue {
 		args = append(args, "--continue")
 	}

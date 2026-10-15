@@ -45,6 +45,10 @@ func TestClaudeArgs(t *testing.T) {
 	if got := claudeArgs(Request{Prompt: "fix it", Continue: true}); !slices.Equal(got, append(slices.Clone(base), "--continue")) {
 		t.Errorf("continue: got %v", got)
 	}
+	want := []string{"-p", "fix it", "--permission-mode", "plan", "--output-format", "text"}
+	if got := claudeArgs(Request{Prompt: "fix it", ReadOnly: true}); !slices.Equal(got, want) {
+		t.Errorf("read-only: got %v", got)
+	}
 }
 
 // The wrapper must hand every argument to claude unchanged, however odd the

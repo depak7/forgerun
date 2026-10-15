@@ -280,3 +280,6 @@
   color: var(--accent);
   font-size: 11px;
 }
+.waiting {
+  color: var(--running);
+}

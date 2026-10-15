@@ -35,4 +35,8 @@ func TestCursorArgs(t *testing.T) {
 	if got := cursorArgs(Request{Prompt: "fix it", Continue: true}); !slices.Equal(got, append(slices.Clone(base), "--continue")) {
 		t.Errorf("continue: got %v", got)
 	}
+	want := []string{"-p", "fix it", "--mode", "ask", "--trust", "--output-format", "text", "--disable-auto-update"}
+	if got := cursorArgs(Request{Prompt: "fix it", ReadOnly: true}); !slices.Equal(got, want) {
+		t.Errorf("read-only: got %v", got)
+	}
 }

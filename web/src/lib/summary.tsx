@@ -43,13 +43,21 @@ export function Summary({ text, headingClass }: { text: string; headingClass?: s
 
 // inline turns `code` into monospace; everything else stays text.
 function inline(s: string): ReactNode[] {
-  return s.split(/(`[^`]+`)/).map((part, i) =>
-    part.startsWith("`") && part.endsWith("`") && part.length > 2 ? (
-      <code key={i} className="mono" style={{ fontSize: "0.92em", color: "var(--text)" }}>
-        {part.slice(1, -1)}
-      </code>
-    ) : (
-      part
-    ),
-  );
+  return s.split(/(`[^`]+`|\*\*[^*]+\*\*)/).map((part, i) => {
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      return (
+        <code key={i} className="mono" style={{ fontSize: "0.92em", color: "var(--text)" }}>
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return (
+        <strong key={i} style={{ fontWeight: 600, color: "var(--text)" }}>
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return part;
+  });
 }

@@ -46,6 +46,8 @@ export interface Task {
   summary: string; // the agent's summary of the thread, taken when it was pushed
   reply: string; // the end of what the agent wrote
   pushed: boolean; // its changes are on the thread's branch
+  plan: boolean; // a plan-only step: its reply is a plan, it changed nothing
+  asked: boolean; // the agent asked questions and waits for an answer
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -101,6 +103,7 @@ export interface NewTask {
   effort?: string;
   thinking?: boolean;
   fast?: boolean;
+  plan?: boolean; // plan first: the agent proposes and waits for approval
 }
 
 // A thread's session: its VM, kept between messages.

@@ -255,6 +255,7 @@ func TestFollowUpContext(t *testing.T) {
 		s.Finish(ctx, tk.ID, o)
 	}
 	first := task.New("r", "add greet")
+	first.Plan = true // a plan step, then the build
 	finish(first, store.Outcome{State: task.Succeeded, BaseCommit: "base0", Reply: "Added greet.", Diff: "+greet\n"})
 	second := task.New("r", "add farewell")
 	second.ParentID = first.ID
@@ -278,7 +279,7 @@ func TestFollowUpContext(t *testing.T) {
 		}
 		history, err := tk.History(ctx)
 		want := []task.Turn{
-			{Prompt: "add greet", Reply: "Added greet.", Diff: "+greet\n"},
+			{Prompt: "add greet", Reply: "Added greet.", Diff: "+greet\n", Plan: true},
 			{Prompt: "add farewell", Reply: "oops", Failed: true},
 		}
 		if err != nil || !reflect.DeepEqual(history, want) {

@@ -181,6 +181,26 @@
 .replyText {
   line-height: 1.55;
 }
+.replyFull {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: -6px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-radius: 0 0 12px 12px;
+  background: var(--surface);
+  color: var(--text-soft);
+  line-height: 1.55;
+}
+.composerCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  color: var(--muted);
+}
 .replyError {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -197,6 +217,22 @@
   color: var(--faint);
 }
 
+.planBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 12px 28px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  background: var(--accent-tint);
+  font-size: 14px;
+  color: var(--text-soft);
+}
+.planBar > span {
+  flex: 1 1 220px;
+}
 .composerWrap {
   margin: 16px 28px 28px;
 }

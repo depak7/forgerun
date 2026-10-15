@@ -15,4 +15,11 @@ describe("Summary", () => {
     expect(container.querySelector("script")).toBeNull();
     expect(screen.getByText(/<script>alert\(1\)<\/script>/)).toBeTruthy();
   });
+
+  it("renders bold", () => {
+    const { container } = render(<Summary text={"**File:** README.md only, not **docs**."} />);
+    const bold = [...container.querySelectorAll("strong")].map((b) => b.textContent);
+    expect(bold).toEqual(["File:", "docs"]);
+    expect(container.textContent).not.toContain("**");
+  });
 });

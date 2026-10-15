@@ -131,6 +131,8 @@ type taskJSON struct {
 	Summary    string     `json:"summary"` // the agent's summary of the thread, taken when pushed; "" if none
 	Reply      string     `json:"reply"`   // the end of what the agent wrote; "" if nothing
 	Pushed     bool       `json:"pushed"`  // its changes are on the thread's branch
+	Plan       bool       `json:"plan"`    // a plan-only step: its reply is a plan, it changed nothing
+	Asked      bool       `json:"asked"`   // the agent asked questions and waits for an answer
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at"`  // null until running
 	FinishedAt *time.Time `json:"finished_at"` // null until finished
@@ -142,7 +144,7 @@ func toJSON(r store.Record) taskJSON {
 		Model: r.Model.Family, Effort: r.Model.Effort, Thinking: r.Model.Thinking, Fast: r.Model.Fast, ModelID: r.Model.ID,
 		State: r.State, Error: r.Error, HasDiff: r.HasDiff, SnapshotID: r.SnapshotID,
 		PR:      prJSON{Requested: r.PR.Requested, URL: r.PR.URL, Number: r.PR.Number, Branch: r.PR.Branch, Error: r.PR.Error},
-		Summary: r.Summary, Reply: r.Reply, Pushed: r.Pushed,
+		Summary: r.Summary, Reply: r.Reply, Pushed: r.Pushed, Plan: r.Plan, Asked: r.Asked,
 		ParentID: optional(r.ParentID), ThreadID: r.ThreadID,
 		CreatedAt: r.CreatedAt.UTC(), StartedAt: utc(r.StartedAt), FinishedAt: utc(r.FinishedAt),
 	}
@@ -185,6 +187,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Thinking *bool  `json:"thinking"` // nil = not sent
 		Fast     *bool  `json:"fast"`
 		Agent    string `json:"agent"` // "" = the server's default agent
+		Plan     bool   `json:"plan"`  // plan first: the agent proposes, changes nothing, and waits
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -216,7 +219,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := task.New(req.Repo, req.Prompt)
-	t.ModelID = v.ID
+	t.ModelID, t.Plan = v.ID, req.Plan
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.internalError(w, r, err)
 		return
@@ -320,6 +323,7 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		Effort   string `json:"effort"`
 		Thinking *bool  `json:"thinking"`
 		Fast     *bool  `json:"fast"`
+		Plan     bool   `json:"plan"` // plan only: e.g. revising a plan
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -368,7 +372,7 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := task.New(parent.Repo, req.Prompt)
-	t.ModelID, t.ParentID = v.ID, parent.ID
+	t.ModelID, t.ParentID, t.Plan = v.ID, parent.ID, req.Plan
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.storeError(w, r, err)
 		return
@@ -388,7 +392,7 @@ type threadJSON struct {
 	Agents         []string  `json:"agents"` // each step's agent, oldest first
 	Latest         taskJSON  `json:"latest"`
 	SessionOpen    bool      `json:"session_open"`    // the thread's VM is open
-	NeedsAttention bool      `json:"needs_attention"` // the newest step failed, or its changes weren't pushed or its pull request didn't open
+	NeedsAttention bool      `json:"needs_attention"` // the newest step failed, a push failed, or the agent waits for an answer or approval
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
@@ -408,7 +412,7 @@ func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
 		l := th.Latest
 		out[i] = threadJSON{ID: th.ID, Title: th.Title, Repo: th.Repo, Steps: th.Steps, Agents: th.Agents,
 			Latest: toJSON(l), UpdatedAt: th.UpdatedAt.UTC(), SessionOpen: s.sessionOf(th.ID).Open,
-			NeedsAttention: l.State == task.Failed || (l.State == task.Succeeded && l.PR.Error != "")}
+			NeedsAttention: l.State == task.Failed || (l.State == task.Succeeded && (l.PR.Error != "" || waitsForUser(l)))}
 	}
 	writeData(w, http.StatusOK, out)
 }
@@ -826,4 +830,10 @@ func validateRepo(raw string) error {
 		return errors.New("repo must be an https:// git URL")
 	}
 	return nil
+}
+
+// waitsForUser reports whether a finished step waits on the user: it asked
+// questions, or it's a plan to approve.
+func waitsForUser(r store.Record) bool {
+	return r.State == task.Succeeded && (r.Asked || r.Plan)
 }

@@ -56,6 +56,8 @@ type Record struct {
 	Summary    string      // the agent's summary of the thread, taken when it was pushed; "" if none
 	Reply      string      // the end of what the agent wrote; "" if nothing
 	Pushed     bool        // this task's changes are on the thread's branch
+	Plan       bool        // a plan-only turn: its reply is a plan, it changes nothing
+	Asked      bool        // the agent asked the user questions instead of going on
 	CreatedAt  time.Time
 	StartedAt  *time.Time // nil until running
 	FinishedAt *time.Time // nil until terminal
@@ -130,6 +132,7 @@ type Outcome struct {
 	Diff       string // "" if no changes
 	BaseCommit string
 	Reply      string
+	Asked      bool
 }
 
 // Push is the result of pushing a thread: which tasks' changes went to its

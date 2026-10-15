@@ -168,6 +168,14 @@ func TestTurnsAndPushes(t *testing.T) {
 	if rec.PR != pr || !rec.Pushed || rec.Reply != "Added it." || rec.BaseCommit != "abc" || rec.Summary != "sum" {
 		t.Errorf("got %+v", rec)
 	}
+	plan := task.New("r", "plan it")
+	plan.Plan = true
+	s.Create(ctx, plan, "fake")
+	s.Start(ctx, plan.ID)
+	s.Finish(ctx, plan.ID, store.Outcome{State: task.Succeeded, Asked: true})
+	if rec, _ := s.Get(ctx, plan.ID); !rec.Plan || !rec.Asked {
+		t.Errorf("plan turn: %+v", rec)
+	}
 }
 
 func TestThreads(t *testing.T) {

@@ -376,6 +376,28 @@ fix is in microsandbox (pass discards through to the layer files); worth reporti
 
 ---
 
+## 11. Read-only turns: plans and questions
+
+**Question.** Can each agent run a turn that reads and proposes without editing, and does the
+answer reach forgerun's text output?
+
+**Results.**
+- Claude Code: `--permission-mode plan` prints its plan as text in `-p` mode.
+- Cursor CLI: `--mode plan` ("read-only/planning") ran, but printed **nothing** in headless
+  text mode; its plan never reached the output. `--mode ask` (read-only Q&A) prints the full
+  answer, and with forgerun's plan instruction it writes a proper plan (what changes, why,
+  how it'll be checked).
+- Asking instead of guessing: with a short note after every message ("if something important
+  is unclear, don't guess; reply under a `## Questions` heading"), Cursor answered the vague
+  prompt "add a palindrome function in it" with three questions (file, language, rules)
+  instead of picking `script.sh` and a lenient rule as it had before.
+
+**Decision.** `agent.Request.ReadOnly`: Claude Code uses plan mode, Cursor uses ask mode, and
+forgerun discards any changes a read-only turn makes anyway. A reply with a `## Questions`
+heading and no changes marks the turn as waiting for the user.
+
+---
+
 ## Researched, not yet tested: Claude Code authentication
 
 Based on community guides and issue reports (not official docs), to be confirmed by

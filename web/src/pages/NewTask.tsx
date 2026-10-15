@@ -25,6 +25,7 @@ export function NewTaskPage() {
   const [effort, setEffort] = useState(""); // "" = the family's default
   const [thinking, setThinking] = useState(false);
   const [fast, setFast] = useState(false);
+  const [planFirst, setPlanFirst] = useState(false);
 
   // Defaults once data arrives: the most recent repo, and the first agent
   // with its credential set.
@@ -65,6 +66,7 @@ export function NewTaskPage() {
     ...(effort ? { effort } : {}),
     ...(thinking ? { thinking: true } : {}),
     ...(fast ? { fast: true } : {}),
+    ...(planFirst ? { plan: true } : {}),
   };
 
   const create = useMutation({
@@ -233,6 +235,24 @@ export function NewTaskPage() {
             </fieldset>
           </div>
 
+          <div className={styles.prBox}>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={planFirst}
+              aria-label="Plan first"
+              className={styles.switch}
+              onClick={() => setPlanFirst(!planFirst)}
+            >
+              <span className={styles.knob} />
+            </button>
+            <div className={styles.prText}>
+              <span style={{ fontWeight: 500 }}>Plan first</span>
+              <span className={styles.prNote}>
+                The agent reads the repo and proposes a plan without changing anything; you approve it or ask for changes.
+              </span>
+            </div>
+          </div>
           <p className={styles.prNote}>{pushNote(status?.pull_requests, repoProblem, repo)}</p>
 
           <div className={styles.actions}>

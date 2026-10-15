@@ -149,6 +149,8 @@ function ThreadRow({ thread }: { thread: Thread }) {
       <span className={styles.stateCol}>
         <StateLabel state={t.state} />
         {pushFailed && <span className={styles.problem}>PUSH FAILED</span>}
+        {t.state === "succeeded" && t.asked && <span className={styles.waiting}>NEEDS YOUR ANSWER</span>}
+        {t.state === "succeeded" && t.plan && !t.asked && <span className={styles.waiting}>PLAN READY</span>}
         {thread.session_open && <span className={styles.session}>● SESSION OPEN</span>}
       </span>
       <span className={styles.what}>

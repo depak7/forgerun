@@ -52,15 +52,15 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	// branch and pull request; if the parent doesn't exist, nothing is inserted.
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id, pr_requested,
-		                   parent_id, thread_id, pr_url, pr_number, pr_branch)
+		                   parent_id, thread_id, pr_url, pr_number, pr_branch, plan)
 		SELECT $1, $2, $3, $4, $5,
 		       COALESCE(NULLIF($6, ''), (SELECT default_model_id FROM agents WHERE id = $4)),
 		       COALESCE(p.pr_requested, false),
-		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch
+		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch, $8
 		FROM (SELECT NULLIF($7::text, '') AS parent) want
 		LEFT JOIN tasks p ON p.id = want.parent
 		WHERE want.parent IS NULL OR p.id IS NOT NULL`,
-		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID)
+		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID, t.Plan)
 	if err != nil {
 		return fmt.Errorf("creating task %s: %w", t.ID, threadError(err)) // includes the FK error for an unknown model
 	}
@@ -174,9 +174,9 @@ func (s *Store) Start(ctx context.Context, id string) error {
 func (s *Store) Finish(ctx context.Context, id string, o store.Outcome) error {
 	return s.transition(ctx, id, task.Running, o.State,
 		`UPDATE tasks SET state = $3, error = $4, log_path = $5, diff = $6, finished_at = now(),
-			base_commit = $7, reply = $8
+			base_commit = $7, reply = $8, asked = $9
 		 WHERE id = $1 AND state = $2`,
-		nullable(o.Error), nullable(o.LogPath), nullable(o.Diff), nullable(o.BaseCommit), nullable(o.Reply))
+		nullable(o.Error), nullable(o.LogPath), nullable(o.Diff), nullable(o.BaseCommit), nullable(o.Reply), o.Asked)
 }
 
 func (s *Store) RecordPush(ctx context.Context, threadID string, p store.Push) error {
@@ -271,7 +271,7 @@ const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, 
 // selectColumns is the task (aliased t) plus its model.
 const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.diff IS NOT NULL,
 	t.snapshot_id, t.pr_requested, t.pr_url, t.pr_error, t.base_commit, t.summary,
-	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.created_at, t.started_at, t.finished_at, ` + modelColumns
+	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.plan, t.asked, t.created_at, t.started_at, t.finished_at, ` + modelColumns
 
 const fromTasks = ` FROM tasks t
 	JOIN models m ON m.agent_id = t.agent_id AND m.id = t.model_id
@@ -496,7 +496,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
 		&errMsg, &logPath, &rec.HasDiff, &rec.SnapshotID,
 		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary,
-		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.CreatedAt, &startedAt, &finishedAt,
+		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
 		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR)
 	if err != nil {

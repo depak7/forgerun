@@ -41,6 +41,9 @@ type Task struct {
 	ModelID  string // exact agent model id; "" or "auto" lets the agent choose
 	Family   string // the model's family, e.g. "opus"; "" if unknown
 	Effort   string // the model's effort, e.g. "high"; "" = the agent's default
+	// Plan makes this a plan-only turn: the agent reads and proposes, and
+	// any changes it makes are discarded.
+	Plan bool
 	// ThreadBase is the commit the thread's first turn started from; ""
 	// for a first turn (it starts from the default branch's latest).
 	ThreadBase string
@@ -55,6 +58,7 @@ type Turn struct {
 	Reply  string // what the agent answered; "" if nothing
 	Diff   string // the changes it made (git diff --binary); "" if none
 	Failed bool
+	Plan   bool // a plan-only turn: its reply is a plan
 }
 
 func (t Task) thread() string { return cmp.Or(t.ThreadID, t.ID) }
@@ -75,6 +79,7 @@ type Result struct {
 	Diff       string // this turn's changes (git diff --binary); "" if none
 	Reply      string // the end of what the agent wrote; "" if nothing
 	BaseCommit string // the commit the session's work started from
+	Asked      bool   // the agent asked the user questions instead of going on
 }
 
 // Runner runs turns and keeps each thread's session between them.
@@ -163,13 +168,13 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	res.BaseCommit = strings.TrimSpace(res.BaseCommit)
 
 	_, continuer := ag.(agent.Continuer)
-	req := agent.Request{Dir: repoDir, Prompt: t.Prompt, ModelID: t.ModelID, Family: t.Family, Effort: t.Effort}
+	req := agent.Request{Dir: repoDir, Prompt: withGuidance(t.Prompt, t.Plan), ModelID: t.ModelID, Family: t.Family, Effort: t.Effort, ReadOnly: t.Plan}
 	switch {
 	case ss.continued && continuer:
 		req.Continue = true
 		step("running %s agent (model: %s), continuing its conversation", ag.ID(), cmp.Or(t.ModelID, "auto"))
 	case len(history) > 0:
-		req.Prompt = replayPrompt(history, t.Prompt)
+		req.Prompt = replayPrompt(history, req.Prompt)
 		step("running %s agent (model: %s) with the thread so far", ag.ID(), cmp.Or(t.ModelID, "auto"))
 	default:
 		step("running %s agent (model: %s)", ag.ID(), cmp.Or(t.ModelID, "auto"))
@@ -191,6 +196,20 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	}
 	res.Reply = reply.String()
 	ss.continued = continuer
+	if t.Plan {
+		// A plan changes nothing, whatever the agent did.
+		if _, err := git(ctx, "reset", "-q", "--hard"); err != nil {
+			r.broken(ss, err)
+			return res, fmt.Errorf("discarding a plan's changes: %w", err)
+		}
+		if _, err := git(ctx, "clean", "-fdq"); err != nil {
+			r.broken(ss, err)
+			return res, fmt.Errorf("discarding a plan's changes: %w", err)
+		}
+		res.Asked = asksQuestions(res.Reply)
+		step("plan ready; waiting for the user")
+		return res, nil
+	}
 
 	step("collecting changes")
 	if _, err := git(ctx, "add", "-A"); err != nil {
@@ -201,7 +220,11 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 		return res, fmt.Errorf("git diff: %w", err)
 	}
 	if diff == "" {
-		step("agent made no changes")
+		if res.Asked = asksQuestions(res.Reply); res.Asked {
+			step("the agent asked questions; waiting for the user's answer")
+		} else {
+			step("agent made no changes")
+		}
 		return res, nil
 	}
 	res.Diff = diff

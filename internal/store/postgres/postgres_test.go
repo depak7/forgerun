@@ -693,6 +693,17 @@ func TestTurnsAndPushes(t *testing.T) {
 		t.Errorf("follow-up after the push: pr=%+v pushed=%v", rec.PR, rec.Pushed)
 	}
 
+	// A plan turn is recorded as one; a reply that asks is marked.
+	plan := task.New("https://github.com/o/r", "plan it")
+	plan.Plan = true
+	if err := s.Create(ctx, plan, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	finishTask(t, s, plan.ID, store.Outcome{State: task.Succeeded, Reply: "## Questions\nWhich file?", Asked: true})
+	if rec, _ := s.Get(ctx, plan.ID); !rec.Plan || !rec.Asked {
+		t.Errorf("plan turn: plan=%v asked=%v", rec.Plan, rec.Asked)
+	}
+
 	// A failed push records why, without marking anything pushed.
 	finishTask(t, s, third.ID, store.Outcome{State: task.Succeeded, Diff: "+c\n"})
 	failed := pr

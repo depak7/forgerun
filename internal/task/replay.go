@@ -28,6 +28,8 @@ func replayPrompt(history []Turn, prompt string) string {
 		switch {
 		case h.Failed:
 			b.WriteString("--- (That turn failed; its changes were discarded.)\n\n")
+		case h.Reply != "" && h.Plan:
+			fmt.Fprintf(&b, "--- Your plan (no files were changed):\n%s\n\n", clip(h.Reply, maxReplayReply))
 		case h.Reply != "":
 			fmt.Fprintf(&b, "--- Your reply:\n%s\n\n", clip(h.Reply, maxReplayReply))
 		}
