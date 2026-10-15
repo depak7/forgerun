@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +17,14 @@ import (
 	"github.com/depak7/forgerun/internal/task"
 )
 
+// cfgDatabase is the database name in url, for error messages.
+func cfgDatabase(url string) string {
+	if cfg, err := pgx.ParseConfig(url); err == nil {
+		return cfg.Database
+	}
+	return "unparsable URL"
+}
+
 // openTest connects to FORGERUN_TEST_DATABASE_URL and empties the tasks
 // and snapshots tables. Tests are skipped when the variable is unset.
 func openTest(t *testing.T) *Store {
@@ -22,6 +32,11 @@ func openTest(t *testing.T) *Store {
 	url := os.Getenv("FORGERUN_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("set FORGERUN_TEST_DATABASE_URL to run Postgres tests (see docker-compose.yml)")
+	}
+	// These tests empty tables. Refuse anything but a test database, so a
+	// URL copied from the dev setup can't wipe a running server's data.
+	if cfg, err := pgx.ParseConfig(url); err != nil || !strings.HasSuffix(cfg.Database, "_test") {
+		t.Fatalf("FORGERUN_TEST_DATABASE_URL must name a test database ending in _test (got %q): these tests empty tables", cfgDatabase(url))
 	}
 	ctx := context.Background()
 	s, err := Open(ctx, url)
