@@ -41,6 +41,7 @@ function server() {
       if (url.startsWith("/api/status")) return ok(status);
       if (url.startsWith("/api/snapshots")) return ok(snapshots);
       if (url.startsWith("/api/threads")) return ok([]);
+      if (url.startsWith("/api/repos")) return ok([{ full_name: "alice/secret-app", url: "https://github.com/alice/secret-app", private: true }]);
       return new Response("", { status: 404 });
     }),
   );
@@ -121,6 +122,16 @@ describe("NewTaskPage", () => {
     fireEvent.click(runButton());
     expect(await screen.findByText("thread page")).toBeTruthy();
     expect(posted).toEqual([{ repo: "https://github.com/depak7/playground", prompt: "Add a test", agent: "cursor", model: "auto", plan: true }]);
+  });
+
+  it("suggests the repos the user can push to", async () => {
+    server();
+    renderNew("/tasks/new");
+    await waitFor(() => expect(document.querySelector("#repo-choices option")).toBeTruthy());
+    const option = document.querySelector("#repo-choices option") as HTMLOptionElement;
+    expect(option.value).toBe("https://github.com/alice/secret-app");
+    expect(option.textContent).toBe("alice/secret-app (private)");
+    expect(repoInput().getAttribute("list")).toBe("repo-choices");
   });
 
   it("asks for a prompt before running", async () => {

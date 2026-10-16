@@ -116,6 +116,62 @@ func (g *GitHub) DefaultBranch(ctx context.Context, tok Token, repo Repo) (strin
 	return r.DefaultBranch, nil
 }
 
+// Access is what a token may do with a repo.
+type Access struct {
+	Private       bool
+	Push          bool // can push branches (and so open pull requests)
+	DefaultBranch string
+}
+
+// RepoAccess reports what tok may do with repo. A repo the token can't
+// see at all is ErrNoRepo.
+func (g *GitHub) RepoAccess(ctx context.Context, tok Token, repo Repo) (Access, error) {
+	var r struct {
+		Private       bool   `json:"private"`
+		DefaultBranch string `json:"default_branch"`
+		Permissions   struct {
+			Push bool `json:"push"`
+		} `json:"permissions"`
+	}
+	if err := g.call(ctx, tok, http.MethodGet, "/repos/"+repo.Owner+"/"+repo.Name, nil, &r); err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return Access{}, fmt.Errorf("%w: %s", ErrNoRepo, repo)
+		}
+		return Access{}, err
+	}
+	return Access{Private: r.Private, Push: r.Permissions.Push, DefaultBranch: r.DefaultBranch}, nil
+}
+
+// ErrNoRepo means the repo doesn't exist, or the token can't see it.
+var ErrNoRepo = errors.New("repo not found (or not shared with you)")
+
+// RepoInfo is one of a user's repos, for picking.
+type RepoInfo struct {
+	FullName string `json:"full_name"` // "owner/name"
+	URL      string `json:"html_url"`
+	Private  bool   `json:"private"`
+	Pushed   string `json:"pushed_at"`
+	Perms    struct {
+		Push bool `json:"push"`
+	} `json:"permissions"`
+}
+
+// PushableRepos lists the repos tok can push to, most recently pushed first
+// (up to 100).
+func (g *GitHub) PushableRepos(ctx context.Context, tok Token) ([]RepoInfo, error) {
+	var all []RepoInfo
+	if err := g.call(ctx, tok, http.MethodGet, "/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member", nil, &all); err != nil {
+		return nil, err
+	}
+	out := all[:0]
+	for _, r := range all {
+		if r.Perms.Push {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
 // PullRequest is the part of a pull request forgerun uses.
 type PullRequest struct {
 	Number int    `json:"number"`

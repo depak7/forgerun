@@ -143,7 +143,12 @@ func (s *Server) pushThread(w http.ResponseWriter, r *http.Request) {
 			s.log.Warn("no summary for the pull request", "thread", id, "err", err)
 		}
 	}
-	pub, err := s.prs.Publish(ctx, task.PublishRequest{
+	tok, err := s.tokenOf(ctx, thread[0].Owner)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	pub, err := s.prs.Publish(ctx, task.PublishRequest{Token: tok,
 		ThreadID: id, Repo: thread[0].Repo, BaseCommit: thread[0].BaseCommit, Patches: patches,
 		Summary: summary, Requests: requests, OpenPR: req.PR, Branch: pr.Branch, PRNumber: pr.Number,
 	})

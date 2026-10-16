@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import { useAgents, useModels, useSnapshots, useStatus, useThreads } from "../api/queries";
+import { useAgents, useModels, useRepos, useSnapshots, useStatus, useThreads } from "../api/queries";
 import type { Agent, ModelFamily, NewTask, Task } from "../api/types";
 import { checkRepo, isGitHub, normalizeRepo } from "../format";
 import styles from "./NewTask.module.css";
@@ -17,6 +17,7 @@ export function NewTaskPage() {
   const { data: status } = useStatus();
   const { data: snapshots } = useSnapshots();
   const { data: threads } = useThreads();
+  const { data: repos } = useRepos();
 
   const [repo, setRepo] = useState(params.get("repo") ?? "");
   const [prompt, setPrompt] = useState(params.get("prompt") ?? "");
@@ -121,7 +122,17 @@ export function NewTaskPage() {
                   placeholder="https://github.com/owner/name"
                   aria-describedby="repo-hint"
                   aria-invalid={repo !== "" && repoProblem !== ""}
+                  list="repo-choices"
+                  autoComplete="off"
                 />
+                <datalist id="repo-choices">
+                  {repos?.map((r) => (
+                    <option key={r.url} value={r.url}>
+                      {r.full_name}
+                      {r.private ? " (private)" : ""}
+                    </option>
+                  ))}
+                </datalist>
                 <span className={`${styles.badge} ${repoProblem ? styles.badgeBad : warm ? styles.badgeWarm : ""}`}>
                   {repoProblem ? "INVALID" : warm ? "● WARM SNAPSHOT" : "COLD START"}
                 </span>

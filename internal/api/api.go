@@ -54,7 +54,10 @@ type Config struct {
 // before any work is done. publish.Publisher implements it.
 type PRs interface {
 	Publish(ctx context.Context, req task.PublishRequest) (task.Published, error)
-	IsOpen(ctx context.Context, repo string, number int) (bool, error)
+	IsOpen(ctx context.Context, repo string, number int, user forge.Token) (bool, error)
+	// Access and Repos use the user's token, or the server's if it's zero.
+	Access(ctx context.Context, repo string, user forge.Token) (forge.Access, error)
+	Repos(ctx context.Context, user forge.Token) ([]forge.RepoInfo, error)
 }
 
 // Sessions is what the API needs from threads' open VMs. *task.Runner
@@ -106,6 +109,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/status", srv.status)
 	mux.HandleFunc("GET /api/snapshots", adminOnly(srv.listSnapshots))
 	mux.HandleFunc("GET /api/me", srv.me)
+	mux.HandleFunc("GET /api/repos", srv.listRepos)
 	mux.HandleFunc("GET /auth/github/login", srv.githubLogin)
 	mux.HandleFunc("GET /auth/github/callback", srv.githubCallback)
 	mux.HandleFunc("POST /auth/logout", srv.logout)
@@ -207,10 +211,13 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Refuse now rather than after the agent has done the work: the
-	// changes can only be pushed to a repo forgerun can push to.
+	// changes can only be pushed to a repo the user can push to.
 	if s.prs != nil {
 		if _, err := forge.ParseRepo(req.Repo); err != nil {
 			writeError(w, http.StatusBadRequest, "forgerun pushes the changes to a branch: "+err.Error())
+			return
+		}
+		if !s.checkPush(w, r, req.Repo) {
 			return
 		}
 	}
@@ -357,7 +364,12 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if parent.PR.Number > 0 && s.prs != nil {
-		open, err := s.prs.IsOpen(r.Context(), parent.Repo, parent.PR.Number)
+		tok, err := s.userToken(r)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		open, err := s.prs.IsOpen(r.Context(), parent.Repo, parent.PR.Number, tok)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "checking the pull request on GitHub: "+err.Error())
 			return

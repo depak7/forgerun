@@ -2,6 +2,8 @@ package task
 
 import (
 	"context"
+
+	"github.com/depak7/forgerun/internal/forge"
 )
 
 // SummaryPrompt is what forgerun asks an agent before pushing a thread with
@@ -54,4 +56,7 @@ type PublishRequest struct {
 	// (0 = none yet).
 	Branch   string
 	PRNumber int
+	// Token pushes and opens the pull request: the signed-in user's. The
+	// zero Token means the publisher's own (the server's GITHUB_TOKEN).
+	Token forge.Token
 }

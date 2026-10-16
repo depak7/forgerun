@@ -343,10 +343,10 @@ func TestPublishSquashesTurns(t *testing.T) {
 func TestIsOpen(t *testing.T) {
 	f := newFixture(t)
 	p := f.publisher(secret)
-	if open, err := p.IsOpen(context.Background(), "https://github.com/o/r", 7); err != nil || !open {
+	if open, err := p.IsOpen(context.Background(), "https://github.com/o/r", 7, forge.Token{}); err != nil || !open {
 		t.Errorf("open PR: %v, %v", open, err)
 	}
-	if open, err := p.IsOpen(context.Background(), "https://github.com/o/r", 8); err != nil || open {
+	if open, err := p.IsOpen(context.Background(), "https://github.com/o/r", 8, forge.Token{}); err != nil || open {
 		t.Errorf("merged PR: %v, %v", open, err)
 	}
 }
@@ -386,5 +386,23 @@ func TestPublishBranchThenOpenPR(t *testing.T) {
 	req.Branch = ""
 	if _, err := p.Publish(ctx, req); err == nil || !strings.Contains(err.Error(), "nothing to push") {
 		t.Errorf("empty push: %v", err)
+	}
+}
+
+// A signed-in user's token is used instead of the server's.
+func TestPublishWithUserToken(t *testing.T) {
+	f := newFixture(t)
+	p := f.publisher("github_pat_WRONG") // the server's token would be refused
+	req := f.request(t, "")
+	req.Token = forge.NewToken(secret)
+	if _, err := p.Publish(context.Background(), req); err != nil {
+		t.Fatalf("user token not used: %v", err)
+	}
+	p.Tokens = nil // no server token at all
+	if open, err := p.IsOpen(context.Background(), "https://github.com/o/r", 7, forge.NewToken(secret)); err != nil || !open {
+		t.Errorf("IsOpen with the user's token: %v, %v", open, err)
+	}
+	if _, err := p.IsOpen(context.Background(), "https://github.com/o/r", 7, forge.Token{}); err == nil {
+		t.Error("no token anywhere should fail")
 	}
 }

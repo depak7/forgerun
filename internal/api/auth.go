@@ -259,3 +259,81 @@ func adminOnly(h http.HandlerFunc) http.HandlerFunc {
 		h(w, r)
 	}
 }
+
+// userToken is the signed-in user's GitHub token, decrypted. In local mode
+// it's the zero Token: the server's own GITHUB_TOKEN is used.
+func (s *Server) userToken(r *http.Request) (forge.Token, error) {
+	return s.tokenOf(r.Context(), viewerOf(r).ID)
+}
+
+// tokenOf is a user's GitHub token; the zero Token for user 0 (local mode).
+func (s *Server) tokenOf(ctx context.Context, userID int64) (forge.Token, error) {
+	if s.auth == nil || userID == 0 {
+		return forge.Token{}, nil
+	}
+	u, err := s.store.GetUser(ctx, userID)
+	if err != nil {
+		return forge.Token{}, err
+	}
+	if u.Token == nil {
+		return forge.Token{}, errors.New("no GitHub token on file: sign out and in again")
+	}
+	raw, err := s.auth.Key.Open(u.Token)
+	if err != nil {
+		return forge.Token{}, err
+	}
+	return forge.NewToken(string(raw)), nil
+}
+
+// checkPush refuses a repo the user can't push to, in their terms.
+func (s *Server) checkPush(w http.ResponseWriter, r *http.Request, repo string) bool {
+	tok, err := s.userToken(r)
+	if err != nil {
+		s.internalError(w, r, err)
+		return false
+	}
+	acc, err := s.prs.Access(r.Context(), repo, tok)
+	switch {
+	case errors.Is(err, forge.ErrNoRepo):
+		writeError(w, http.StatusBadRequest, "GitHub doesn't show you this repo: check the URL, or that it's shared with you")
+		return false
+	case err != nil:
+		writeError(w, http.StatusBadGateway, "checking the repo on GitHub: "+err.Error())
+		return false
+	case !acc.Push:
+		writeError(w, http.StatusBadRequest, "you can read this repo but not push to it, so forgerun couldn't push the changes; fork it and use your fork")
+		return false
+	}
+	return true
+}
+
+// repoJSON is a repo the user can push to.
+type repoJSON struct {
+	FullName string `json:"full_name"`
+	URL      string `json:"url"`
+	Private  bool   `json:"private"`
+}
+
+// listRepos serves GET /api/repos: the repos the user can push to, most
+// recently pushed first.
+func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
+	out := []repoJSON{}
+	if s.prs == nil {
+		writeData(w, http.StatusOK, out)
+		return
+	}
+	tok, err := s.userToken(r)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	repos, err := s.prs.Repos(r.Context(), tok)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "listing your repos on GitHub: "+err.Error())
+		return
+	}
+	for _, re := range repos {
+		out = append(out, repoJSON{FullName: re.FullName, URL: re.URL, Private: re.Private})
+	}
+	writeData(w, http.StatusOK, out)
+}

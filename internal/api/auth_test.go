@@ -12,7 +12,9 @@ import (
 
 	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/seal"
+	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/memory"
+	"github.com/depak7/forgerun/internal/task"
 )
 
 // fakeGitHub plays github.com (OAuth) and api.github.com (/user): code
@@ -43,14 +45,14 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 
 const public = "https://forgerun.test"
 
-func authSetup(t *testing.T) (http.Handler, *memory.Store, seal.Key) {
+func authSetup(t *testing.T, opts ...func(*Config)) (http.Handler, *memory.Store, seal.Key) {
 	t.Helper()
 	gh := fakeGitHub(t)
 	key, _ := seal.ParseKey(strings.Repeat("ab", 32))
-	h, s, _ := setup(t, func(c *Config) {
+	h, s, _ := setup(t, append([]func(*Config){func(c *Config) {
 		c.Auth = &Auth{OAuth: &forge.OAuth{ClientID: "id", ClientSecret: "shh", BaseURL: gh.URL}, GitHub: &forge.GitHub{BaseURL: gh.URL},
 			PublicURL: public, Admins: []string{"DEPAK7"}, Key: key}
-	})
+	}}, opts...)...)
 	return h, s, key
 }
 
@@ -205,4 +207,55 @@ func TestLocalMode(t *testing.T) {
 		t.Errorf("local mode: %+v", me)
 	}
 	mustData(t, do(h, "GET", "/api/snapshots", ""), http.StatusOK)
+}
+
+// Signed-in users act on GitHub with their own token: repo checks, the
+// repo list, pull request checks and pushes.
+func TestUserTokensReachGitHub(t *testing.T) {
+	var tokens []string
+	var published []task.PublishRequest
+	prs := fakePRs{open: true, tokens: &tokens, got: &published, pub: task.Published{Branch: "forgerun/x"}}
+	h, s, _ := authSetup(t, func(c *Config) { c.PRs = prs })
+	alice := signIn(t, h, "alice")
+
+	var repos []repoJSON
+	json.Unmarshal(mustData(t, as(h, alice, "GET", "/api/repos", ""), http.StatusOK), &repos)
+	if len(repos) != 1 || repos[0].FullName != "o/r" || !repos[0].Private {
+		t.Errorf("repos = %+v", repos)
+	}
+	tk := decodeTask(t, mustData(t, as(h, alice, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"x"}`), http.StatusCreated))
+	s.Start(context.Background(), tk.ID)
+	s.Finish(context.Background(), tk.ID, store.Outcome{State: task.Succeeded, Diff: "+a\n", BaseCommit: "b"})
+	mustData(t, as(h, alice, "POST", "/api/threads/"+tk.ID+"/push", `{}`), http.StatusOK)
+	if len(published) != 1 || published[0].Token.Reveal() != "gho_alice" {
+		t.Errorf("push token = %q", published[0].Token.Reveal())
+	}
+	for _, tok := range tokens {
+		if tok != "gho_alice" {
+			t.Errorf("GitHub was called with %q, want alice's token", tok)
+		}
+	}
+	if len(tokens) < 2 {
+		t.Errorf("GitHub calls: %v", tokens)
+	}
+}
+
+func TestRepoAccessRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		prs  fakePRs
+		want string
+	}{
+		{"read only", fakePRs{readOnly: true}, "not push to it"},
+		{"not visible", fakePRs{noRepo: true}, "doesn't show you this repo"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, _ := authSetup(t, func(c *Config) { c.PRs = tc.prs })
+			bob := signIn(t, h, "bob")
+			_, apiErr := decode(t, as(h, bob, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"x"}`), http.StatusBadRequest)
+			if !strings.Contains(apiErr.Message, tc.want) {
+				t.Errorf("got %q", apiErr.Message)
+			}
+		})
+	}
 }

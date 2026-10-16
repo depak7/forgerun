@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/depak7/forgerun/internal/agent"
+	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/store"
@@ -532,9 +533,35 @@ type fakePRs struct {
 	pub    task.Published
 	pubErr error
 	got    *[]task.PublishRequest
+	// Access: can push unless readOnly; noRepo = GitHub doesn't show it.
+	readOnly, noRepo bool
+	tokens           *[]string // the user tokens it was given
 }
 
-func (f fakePRs) IsOpen(context.Context, string, int) (bool, error) { return f.open, f.err }
+func (f fakePRs) IsOpen(_ context.Context, _ string, _ int, tok forge.Token) (bool, error) {
+	f.saw(tok)
+	return f.open, f.err
+}
+
+func (f fakePRs) Access(_ context.Context, _ string, tok forge.Token) (forge.Access, error) {
+	f.saw(tok)
+	if f.noRepo {
+		return forge.Access{}, forge.ErrNoRepo
+	}
+	return forge.Access{Push: !f.readOnly}, nil
+}
+
+func (f fakePRs) Repos(_ context.Context, tok forge.Token) ([]forge.RepoInfo, error) {
+	f.saw(tok)
+	r := forge.RepoInfo{FullName: "o/r", URL: "https://github.com/o/r", Private: true}
+	return []forge.RepoInfo{r}, nil
+}
+
+func (f fakePRs) saw(tok forge.Token) {
+	if f.tokens != nil {
+		*f.tokens = append(*f.tokens, tok.Reveal())
+	}
+}
 
 func (f fakePRs) Publish(_ context.Context, req task.PublishRequest) (task.Published, error) {
 	if f.got != nil {

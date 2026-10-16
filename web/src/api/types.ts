@@ -122,3 +122,10 @@ export interface Me {
   avatar_url: string;
   admin: boolean;
 }
+
+// A repo the signed-in user can push to (GET /api/repos).
+export interface Repo {
+  full_name: string;
+  url: string;
+  private: boolean;
+}
