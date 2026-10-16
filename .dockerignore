@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+out/
+forgerun
+web/node_modules/
+internal/webui/dist/
+HANDOFF.md
+docs/architecture.excalidraw
+.git/

@@ -184,6 +184,10 @@ flowchart LR
   a crashed run left behind when it starts.
 - Settings lists the connected workers.
 
+To deploy it for other people (orchestrator on a server with HTTPS and sign-in, a worker on
+your machine), see [docs/deploying.md](docs/deploying.md): a Dockerfile and a compose file
+with automatic HTTPS are included (`deploy/`).
+
 ## API
 
 The UI uses the same JSON API (`{"success": true, "data": …}`):

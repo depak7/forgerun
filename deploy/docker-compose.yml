@@ -1,0 +1,51 @@
+# The orchestrator on a server: Postgres, forgerun server, and Caddy for
+# HTTPS (it gets a certificate for FORGERUN_DOMAIN by itself). Workers run
+# elsewhere and connect to https://$FORGERUN_DOMAIN. See docs/deploying.md.
+#
+#   cp .env.example .env    # fill it in
+#   docker compose up -d --build
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: forgerun
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: forgerun
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "forgerun"]
+      interval: 2s
+      retries: 15
+    restart: unless-stopped
+
+  forgerun:
+    build: ..
+    # Per-user limits: -user-live (waiting or running at once), -user-turns-per-day.
+    command: ["server", "-addr", "0.0.0.0:8080", "-out", "/home/forgerun/out", "-user-live", "1", "-user-turns-per-day", "20"]
+    env_file: .env
+    environment:
+      FORGERUN_DATABASE_URL: postgres://forgerun:${POSTGRES_PASSWORD}@postgres:5432/forgerun?sslmode=disable
+      FORGERUN_PUBLIC_URL: https://${FORGERUN_DOMAIN:?set FORGERUN_DOMAIN in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - logs:/home/forgerun/out
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    command: caddy reverse-proxy --from ${FORGERUN_DOMAIN} --to forgerun:8080
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy:/data
+    depends_on: [forgerun]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  logs:
+  caddy:

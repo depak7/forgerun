@@ -118,8 +118,8 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	if err != nil {
 		return err
 	}
-	if !isLoopback(*addr) {
-		log.Warn("listening on a non-loopback address: the API has no authentication yet", "addr", *addr)
+	if !isLoopback(*addr) && auth == nil {
+		log.Warn("listening on a non-loopback address with sign-in off: anyone who can reach it can use it (set GITHUB_OAUTH_CLIENT_ID)", "addr", *addr)
 	}
 
 	// Tasks left "running" by a crash have no worker anymore. (Remote
