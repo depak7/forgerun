@@ -1,4 +1,4 @@
-import { useAgents, useModels, useSnapshots, useStatus } from "../api/queries";
+import { useAgents, useMe, useModels, useSnapshots, useStatus } from "../api/queries";
 import type { Agent, Snapshot, Status } from "../api/types";
 import { formatBytes, formatDuration, formatWhen, repoName } from "../format";
 import styles from "./Settings.module.css";
@@ -10,6 +10,10 @@ import styles from "./Settings.module.css";
 export function SettingsPage() {
   const { data: agents } = useAgents();
   const { data: status } = useStatus();
+  const { data: me } = useMe();
+  if (me && !me.admin) {
+    return <p style={{ color: "var(--muted)" }}>Only an admin can see the server's settings.</p>;
+  }
 
   return (
     <div className={styles.page}>

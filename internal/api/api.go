@@ -45,6 +45,7 @@ type Config struct {
 	Snapshots    *SnapshotSettings // nil = snapshots are off
 	SessionIdle  time.Duration     // how long an idle session stays open; 0 = no limit
 	MaxSessions  int               // most sessions open at once; 0 = no limit
+	Auth         *Auth             // GitHub sign-in; nil = local mode (no sign-in, everyone is the admin)
 	Log          *slog.Logger
 }
 
@@ -77,6 +78,7 @@ type Server struct {
 	pushing      sync.Map // thread ID → struct{}, while it's being pushed
 	sessionIdle  time.Duration
 	maxSessions  int
+	auth         *Auth
 	outDir       string
 	githubUser   string
 	snapshots    *SnapshotSettings
@@ -86,7 +88,7 @@ type Server struct {
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
@@ -102,10 +104,14 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/threads/{id}/end", srv.endSession)
 	mux.HandleFunc("POST /api/threads/{id}/push", srv.pushThread)
 	mux.HandleFunc("GET /api/status", srv.status)
-	mux.HandleFunc("GET /api/snapshots", srv.listSnapshots)
+	mux.HandleFunc("GET /api/snapshots", adminOnly(srv.listSnapshots))
+	mux.HandleFunc("GET /api/me", srv.me)
+	mux.HandleFunc("GET /auth/github/login", srv.githubLogin)
+	mux.HandleFunc("GET /auth/github/callback", srv.githubCallback)
+	mux.HandleFunc("POST /auth/logout", srv.logout)
 	mux.HandleFunc("GET /api/models", srv.listModels)
 	mux.HandleFunc("GET /healthz", srv.health)
-	return mux
+	return srv.withViewer(mux)
 }
 
 // taskJSON is the API's view of a task. It is a promise to clients, kept
@@ -219,7 +225,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := task.New(req.Repo, req.Prompt)
-	t.ModelID, t.Plan = v.ID, req.Plan
+	t.ModelID, t.Plan, t.Owner = v.ID, req.Plan, viewerOf(r).ID
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.internalError(w, r, err)
 		return
@@ -372,7 +378,7 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := task.New(parent.Repo, req.Prompt)
-	t.ModelID, t.ParentID, t.Plan = v.ID, parent.ID, req.Plan
+	t.ModelID, t.ParentID, t.Plan, t.Owner = v.ID, parent.ID, req.Plan, parent.Owner
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.storeError(w, r, err)
 		return
@@ -402,7 +408,7 @@ func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	threads, err := s.store.ListThreads(r.Context(), limit)
+	threads, err := s.store.ListThreads(r.Context(), limit, viewerOf(r).owner())
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -533,7 +539,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	recs, err := s.store.List(r.Context(), limit)
+	recs, err := s.store.List(r.Context(), limit, viewerOf(r).owner())
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -546,11 +552,17 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
-	s.writeTask(w, r, r.PathValue("id"), http.StatusOK)
+	if rec, ok := s.getRecord(w, r); ok {
+		writeData(w, http.StatusOK, toJSON(rec))
+	}
 }
 
 func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	rec, ok := s.getRecord(w, r) // only the task's owner (or an admin) may cancel it
+	if !ok {
+		return
+	}
+	id := rec.ID
 	if !s.pool.Cancel(id) { // not running here: maybe still queued
 		err := s.store.Cancel(r.Context(), id)
 		if errors.Is(err, task.ErrInvalidTransition) {
@@ -762,8 +774,13 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 // getRecord loads the task named in the path, writing an error response if
 // that fails.
+// getRecord loads the task named in the path, if the viewer may see it.
+// Someone else's task is "not found": its existence isn't revealed.
 func (s *Server) getRecord(w http.ResponseWriter, r *http.Request) (store.Record, bool) {
 	rec, err := s.store.Get(r.Context(), r.PathValue("id"))
+	if err == nil && !viewerOf(r).canSee(rec) {
+		err = store.ErrNotFound
+	}
 	if err != nil {
 		s.storeError(w, r, err)
 		return store.Record{}, false

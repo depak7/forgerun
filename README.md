@@ -122,6 +122,16 @@ first start; the agent images are pulled the first time an agent runs.
 
 An agent without its key is still listed; only its tasks are refused.
 
+**Sign-in (optional).** Without these, forgerun runs in local mode: no accounts, everything
+is yours. With them, people sign in with GitHub and see only their own threads.
+
+| Variable | What for |
+|---|---|
+| `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | a GitHub OAuth App (callback: `<FORGERUN_PUBLIC_URL>/auth/github/callback`) |
+| `FORGERUN_PUBLIC_URL` | where browsers reach forgerun, e.g. `https://forgerun.example.com` |
+| `FORGERUN_SECRET_KEY` | encrypts users' GitHub tokens at rest: `openssl rand -hex 32` |
+| `FORGERUN_ADMINS` | GitHub usernames that see everything and the settings |
+
 ### Useful `serve` flags
 
 | Flag | Default | |

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -9,9 +10,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +24,7 @@ import (
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/publish"
 	"github.com/depak7/forgerun/internal/sandbox"
+	"github.com/depak7/forgerun/internal/seal"
 	"github.com/depak7/forgerun/internal/snapshots"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/postgres"
@@ -85,6 +89,10 @@ func serveCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	auth, err := signIn(os.Getenv, log)
+	if err != nil {
+		return err
+	}
 	if err := sandbox.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
@@ -145,7 +153,7 @@ func serveCmd(args []string) error {
 	srv := &http.Server{
 		Handler: api.LogRequests(log, routes(api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
 			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, OutDir: *out, GitHubUser: githubUser,
-			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Log: log}))),
+			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Log: log}))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -186,6 +194,7 @@ func serveCmd(args []string) error {
 func routes(apiHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiHandler)
+	mux.Handle("/auth/", apiHandler)
 	mux.Handle("/healthz", apiHandler)
 	mux.Handle("/", webui.Handler(webui.Files()))
 	return mux
@@ -292,4 +301,37 @@ func isLoopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// signIn reads the GitHub sign-in settings. With no OAuth client ID the
+// server runs in local mode: no sign-in, and every request is the admin.
+func signIn(getenv func(string) string, log *slog.Logger) (*api.Auth, error) {
+	id, secret := getenv("GITHUB_OAUTH_CLIENT_ID"), getenv("GITHUB_OAUTH_CLIENT_SECRET")
+	if id == "" {
+		log.Info("sign-in off (local mode): set GITHUB_OAUTH_CLIENT_ID to let people sign in with GitHub")
+		return nil, nil
+	}
+	if secret == "" {
+		return nil, errors.New("GITHUB_OAUTH_CLIENT_ID is set but GITHUB_OAUTH_CLIENT_SECRET isn't")
+	}
+	key, err := seal.ParseKey(getenv("FORGERUN_SECRET_KEY"))
+	if err != nil {
+		return nil, fmt.Errorf("FORGERUN_SECRET_KEY (encrypts users' GitHub tokens): %w", err)
+	}
+	public := strings.TrimRight(cmp.Or(getenv("FORGERUN_PUBLIC_URL"), "http://localhost:8080"), "/")
+	if u, err := url.Parse(public); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("FORGERUN_PUBLIC_URL %q must be like https://forgerun.example.com", public)
+	}
+	var admins []string
+	for _, a := range strings.Split(getenv("FORGERUN_ADMINS"), ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			admins = append(admins, a)
+		}
+	}
+	if len(admins) == 0 {
+		log.Warn("FORGERUN_ADMINS is empty: nobody can see settings or other people's threads")
+	}
+	log.Info("sign-in with GitHub on", "public_url", public, "admins", strings.Join(admins, ","))
+	return &api.Auth{OAuth: &forge.OAuth{ClientID: id, ClientSecret: secret}, GitHub: &forge.GitHub{},
+		PublicURL: public, Admins: admins, Key: key}, nil
 }

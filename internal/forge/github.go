@@ -24,8 +24,11 @@ type GitHub struct {
 
 // Identity is who a token acts as.
 type Identity struct {
-	Login   string    // e.g. "depak7"
-	Expires time.Time // zero if the token never expires
+	ID        int64  // GitHub's account ID: stable, unlike the login
+	Login     string // e.g. "depak7"
+	Name      string // "" if they didn't set one
+	AvatarURL string
+	Expires   time.Time // zero if the token never expires
 }
 
 // WhoAmI checks a token and returns who it belongs to and when it expires.
@@ -52,12 +55,15 @@ func (g *GitHub) WhoAmI(ctx context.Context, tok Token) (Identity, error) {
 		return Identity{}, fmt.Errorf("GitHub /user: HTTP %d: %s", resp.StatusCode, message(body))
 	}
 	var user struct {
-		Login string `json:"login"`
+		ID        int64  `json:"id"`
+		Login     string `json:"login"`
+		Name      string `json:"name"`
+		AvatarURL string `json:"avatar_url"`
 	}
 	if err := json.Unmarshal(body, &user); err != nil || user.Login == "" {
 		return Identity{}, fmt.Errorf("GitHub /user: unexpected response")
 	}
-	id := Identity{Login: user.Login}
+	id := Identity{ID: user.ID, Login: user.Login, Name: user.Name, AvatarURL: user.AvatarURL}
 	// Fine-grained and classic tokens with an expiry report it in a header,
 	// e.g. "2026-10-21 07:52:48 UTC".
 	if exp := resp.Header.Get("GitHub-Authentication-Token-Expiration"); exp != "" {

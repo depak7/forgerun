@@ -112,3 +112,13 @@ export interface Session {
   busy: boolean; // a step or a summary is running in it
   idle_until: string | null; // when it closes if left idle
 }
+
+// Who's signed in (GET /api/me).
+export interface Me {
+  signed_in: boolean;
+  sign_in: boolean; // the server uses GitHub sign-in (false = local mode, no accounts)
+  login: string;
+  name: string;
+  avatar_url: string;
+  admin: boolean;
+}

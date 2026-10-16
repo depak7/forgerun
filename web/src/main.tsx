@@ -1,4 +1,5 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ApiError } from "./api/client";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
@@ -25,7 +26,14 @@ const router = createBrowserRouter([
   },
 ]);
 
-const queryClient = new QueryClient({
+const queryClient: QueryClient = new QueryClient({
+  // Signed out (the login expired or was ended elsewhere): ask again who's
+  // signed in, which brings up the sign-in page.
+  queryCache: new QueryCache({
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 401) queryClient.invalidateQueries({ queryKey: ["me"] });
+    },
+  }),
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: true } },
 });
 

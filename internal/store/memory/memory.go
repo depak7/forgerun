@@ -25,6 +25,8 @@ type Store struct {
 	mu        sync.Mutex
 	tasks     map[string]*store.Record
 	diffs     map[string]string // by task id, kept apart like the diff column
+	users     map[int64]*store.User
+	logins    map[string]login
 	models    map[modelKey]models.Variant
 	snapshots map[int64]*store.Snapshot
 	lastID    int64 // the last snapshot id handed out
@@ -36,7 +38,7 @@ var _ store.Store = (*Store)(nil)
 // Agents are implied by their models: an agent exists if any of vs belongs
 // to it, and its default is the variant marked AgentDefault.
 func New(vs ...models.Variant) *Store {
-	s := &Store{tasks: map[string]*store.Record{}, diffs: map[string]string{}, models: map[modelKey]models.Variant{},
+	s := &Store{tasks: map[string]*store.Record{}, diffs: map[string]string{}, users: map[int64]*store.User{}, logins: map[string]login{}, models: map[modelKey]models.Variant{},
 		snapshots: map[int64]*store.Snapshot{}}
 	for _, v := range vs {
 		s.models[modelKey{v.AgentID, v.ID}] = v
@@ -59,7 +61,7 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 		return fmt.Errorf("creating task %s: no model %q for agent %s", t.ID, t.ModelID, agentID)
 	}
 	rec := &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, AgentID: agentID,
-		Model: m, State: task.Queued, Plan: t.Plan, ThreadID: t.ID, CreatedAt: time.Now()}
+		Model: m, State: task.Queued, Plan: t.Plan, Owner: t.Owner, ThreadID: t.ID, CreatedAt: time.Now()}
 	if t.ParentID != "" { // mirrors the Postgres thread rules and indexes
 		parent, ok := s.tasks[t.ParentID]
 		if !ok {
@@ -81,12 +83,17 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 	return nil
 }
 
-func (s *Store) ListThreads(_ context.Context, limit int) ([]store.Thread, error) {
+func (s *Store) ListThreads(_ context.Context, limit int, owner int64) ([]store.Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	byThread := map[string][]store.Record{}
 	for _, r := range s.tasks {
 		byThread[r.ThreadID] = append(byThread[r.ThreadID], *r)
+	}
+	for id := range byThread {
+		if root := s.tasks[id]; owner != 0 && (root == nil || root.Owner != owner) {
+			delete(byThread, id)
+		}
 	}
 	var threads []store.Thread
 	for id, recs := range byThread {
@@ -317,12 +324,14 @@ func (s *Store) Diff(_ context.Context, id string) (string, error) {
 	return s.diffs[id], nil
 }
 
-func (s *Store) List(_ context.Context, limit int) ([]store.Record, error) {
+func (s *Store) List(_ context.Context, limit int, owner int64) ([]store.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	recs := make([]store.Record, 0, len(s.tasks))
 	for _, r := range s.tasks {
-		recs = append(recs, *r)
+		if owner == 0 || r.Owner == owner {
+			recs = append(recs, *r)
+		}
 	}
 	slices.SortFunc(recs, func(a, b store.Record) int { return b.CreatedAt.Compare(a.CreatedAt) }) // newest first
 	if len(recs) > limit {
@@ -441,4 +450,59 @@ func (s *Store) transition(id string, from, to task.State) (*store.Record, error
 	}
 	r.State = to
 	return r, nil
+}
+
+type login struct {
+	user    int64
+	expires time.Time
+}
+
+func (s *Store) SaveUser(_ context.Context, u store.User) (store.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, old := range s.users {
+		if old.GitHubID == u.GitHubID {
+			old.Login, old.Name, old.AvatarURL = u.Login, u.Name, u.AvatarURL
+			if u.Token != nil {
+				old.Token = u.Token
+			}
+			return *old, nil
+		}
+	}
+	u.ID, u.CreatedAt = int64(len(s.users)+1), time.Now()
+	s.users[u.ID] = &u
+	return u, nil
+}
+
+func (s *Store) GetUser(_ context.Context, id int64) (store.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if u, ok := s.users[id]; ok {
+		return *u, nil
+	}
+	return store.User{}, fmt.Errorf("%w: %d", store.ErrUserNotFound, id)
+}
+
+func (s *Store) CreateLogin(_ context.Context, id string, userID int64, expires time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logins[id] = login{userID, expires}
+	return nil
+}
+
+func (s *Store) LoginUser(_ context.Context, id string) (store.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.logins[id]
+	if !ok || !time.Now().Before(l.expires) {
+		return store.User{}, store.ErrUserNotFound
+	}
+	return *s.users[l.user], nil
+}
+
+func (s *Store) DeleteLogin(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.logins, id)
+	return nil
 }

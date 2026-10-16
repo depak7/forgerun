@@ -133,7 +133,7 @@ func TestListNewestFirst(t *testing.T) {
 		time.Sleep(5 * time.Millisecond) // distinct created_at values
 	}
 
-	recs, err := s.List(ctx, 2)
+	recs, err := s.List(ctx, 2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -854,7 +854,7 @@ func TestListThreadsAndCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	threads, err := s.ListThreads(ctx, 10)
+	threads, err := s.ListThreads(ctx, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -874,7 +874,7 @@ func TestListThreadsAndCounts(t *testing.T) {
 	if !threads[0].UpdatedAt.After(threads[1].UpdatedAt) && !threads[0].UpdatedAt.Equal(threads[1].UpdatedAt) {
 		t.Errorf("not newest first: %v then %v", threads[0].UpdatedAt, threads[1].UpdatedAt)
 	}
-	if one, _ := s.ListThreads(ctx, 1); len(one) != 1 || one[0].ID != threads[0].ID {
+	if one, _ := s.ListThreads(ctx, 1, 0); len(one) != 1 || one[0].ID != threads[0].ID {
 		t.Errorf("limit 1 = %+v", one)
 	}
 
@@ -884,5 +884,57 @@ func TestListThreadsAndCounts(t *testing.T) {
 	}
 	if counts[task.Succeeded] != 1 || counts[task.Failed] != 1 || counts[task.Queued] != 1 || counts[task.Running] != 0 {
 		t.Errorf("counts = %v", counts)
+	}
+}
+
+func TestUsersAndLogins(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	u, err := s.SaveUser(ctx, store.User{GitHubID: 101, Login: "alice", Name: "Alice", Token: []byte("sealed-1")})
+	if err != nil || u.ID == 0 {
+		t.Fatalf("SaveUser = %+v, %v", u, err)
+	}
+	// Signing in again updates the profile and token, keeping the ID.
+	again, err := s.SaveUser(ctx, store.User{GitHubID: 101, Login: "alice2", Token: []byte("sealed-2")})
+	if err != nil || again.ID != u.ID || again.Login != "alice2" || string(again.Token) != "sealed-2" || again.Name != "" {
+		t.Errorf("second SaveUser = %+v, %v", again, err)
+	}
+	if err := s.CreateLogin(ctx, "hash-1", u.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.LoginUser(ctx, "hash-1"); err != nil || got.ID != u.ID {
+		t.Errorf("LoginUser = %+v, %v", got, err)
+	}
+	s.CreateLogin(ctx, "hash-old", u.ID, time.Now().Add(-time.Minute))
+	for _, id := range []string{"hash-old", "nope"} {
+		if _, err := s.LoginUser(ctx, id); !errors.Is(err, store.ErrUserNotFound) {
+			t.Errorf("LoginUser(%s): %v", id, err)
+		}
+	}
+	if err := s.DeleteLogin(ctx, "hash-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LoginUser(ctx, "hash-1"); !errors.Is(err, store.ErrUserNotFound) {
+		t.Errorf("after DeleteLogin: %v", err)
+	}
+
+	// Tasks remember their owner, and lists filter by it.
+	mine := task.New("https://github.com/o/r", "mine")
+	mine.Owner = u.ID
+	if err := s.Create(ctx, mine, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	theirs := task.New("https://github.com/o/r", "theirs")
+	s.Create(ctx, theirs, "cursor")
+	if rec, _ := s.Get(ctx, mine.ID); rec.Owner != u.ID {
+		t.Errorf("owner = %d", rec.Owner)
+	}
+	if recs, _ := s.List(ctx, 10, u.ID); len(recs) != 1 || recs[0].ID != mine.ID {
+		t.Errorf("own tasks: %v", idsOf(recs))
+	}
+	if threads, _ := s.ListThreads(ctx, 10, u.ID); len(threads) != 1 {
+		t.Errorf("own threads: %d", len(threads))
+	}
+	if threads, _ := s.ListThreads(ctx, 10, 0); len(threads) != 2 {
+		t.Errorf("everyone's threads: %d", len(threads))
 	}
 }

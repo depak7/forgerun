@@ -386,7 +386,7 @@ func TestCreateRejectsBadModelChoice(t *testing.T) {
 			if apiErr.Code != "invalid_request" || !strings.Contains(apiErr.Message, tc.wantText) {
 				t.Errorf("error = %+v, want message containing %q", apiErr, tc.wantText)
 			}
-			if recs, _ := s.List(context.Background(), 10); len(recs) != 0 {
+			if recs, _ := s.List(context.Background(), 10, 0); len(recs) != 0 {
 				t.Errorf("a rejected request created %d task(s)", len(recs))
 			}
 		})

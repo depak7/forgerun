@@ -228,7 +228,7 @@ func TestListThreadsAndCounts(t *testing.T) {
 	follow.ParentID = first.ID
 	s.Create(ctx, follow, "fake")
 
-	threads, _ := s.ListThreads(ctx, 10)
+	threads, _ := s.ListThreads(ctx, 10, 0)
 	if len(threads) != 1 || threads[0].ID != first.ID || threads[0].Steps != 2 || threads[0].Title != "first" ||
 		threads[0].Latest.ID != follow.ID || !slices.Equal(threads[0].Agents, []string{"fake", "fake"}) {
 		t.Errorf("threads = %+v", threads)

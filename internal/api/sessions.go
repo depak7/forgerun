@@ -43,7 +43,7 @@ func (s *Server) threadTasks(w http.ResponseWriter, r *http.Request) ([]store.Re
 		s.internalError(w, r, err)
 		return nil, false
 	}
-	if len(thread) == 0 || thread[0].ID != id {
+	if len(thread) == 0 || thread[0].ID != id || !viewerOf(r).canSee(thread[0]) {
 		writeError(w, http.StatusNotFound, "no thread "+id)
 		return nil, false
 	}

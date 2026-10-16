@@ -12,6 +12,10 @@ import (
 	"github.com/depak7/forgerun/internal/task"
 )
 
+// ErrUserNotFound is returned for an unknown user, or a login that has
+// expired or doesn't exist.
+var ErrUserNotFound = errors.New("user not found")
+
 // ErrNotFound is returned when no task has the given ID.
 var ErrNotFound = errors.New("task not found")
 
@@ -50,6 +54,7 @@ type Record struct {
 	HasDiff    bool        // the agent changed something; Store.Diff returns it
 	SnapshotID *int64      // the snapshot the task was restored from; nil = cold start
 	ParentID   string      // the task this one continues; "" for a thread's first task
+	Owner      int64       // the user who started it; 0 = none (from before accounts, or local mode)
 	ThreadID   string      // the thread's first task (its own ID for a first task)
 	PR         PullRequest // the thread's branch and pull request, as of this task
 	BaseCommit string      // the commit the agent started from; "" until known
@@ -124,6 +129,17 @@ type Thread struct {
 	UpdatedAt time.Time
 }
 
+// User is someone who signed in with GitHub.
+type User struct {
+	ID        int64
+	GitHubID  int64
+	Login     string // GitHub username
+	Name      string
+	AvatarURL string
+	Token     []byte // their GitHub token, encrypted; nil if none
+	CreatedAt time.Time
+}
+
 // Outcome is how a task ended.
 type Outcome struct {
 	State      task.State // Succeeded, Failed or Cancelled
@@ -152,8 +168,9 @@ type Store interface {
 	Create(ctx context.Context, t task.Task, agentID string) error
 	// ThreadTasks returns every task in a thread, oldest first.
 	ThreadTasks(ctx context.Context, threadID string) ([]Record, error)
-	// ListThreads returns threads with the most recent activity first.
-	ListThreads(ctx context.Context, limit int) ([]Thread, error)
+	// ListThreads returns threads with the most recent activity first:
+	// owner's only, or everyone's if owner is 0.
+	ListThreads(ctx context.Context, limit int, owner int64) ([]Thread, error)
 	// CountTasks returns how many tasks are in each state.
 	CountTasks(ctx context.Context) (map[task.State]int, error)
 	// Start moves a task from Queued to Running.
@@ -175,8 +192,21 @@ type Store interface {
 	Get(ctx context.Context, id string) (Record, error)
 	// Diff returns a task's changes as git diff output; "" if it has none.
 	Diff(ctx context.Context, id string) (string, error)
-	// List returns the most recent tasks first.
-	List(ctx context.Context, limit int) ([]Record, error)
+	// List returns the most recent tasks first: owner's only, or everyone's
+	// if owner is 0.
+	List(ctx context.Context, limit int, owner int64) ([]Record, error)
+
+	// SaveUser creates or updates the user with u.GitHubID (login, name,
+	// avatar, token) and returns it with its ID.
+	SaveUser(ctx context.Context, u User) (User, error)
+	// GetUser returns one user, or ErrUserNotFound.
+	GetUser(ctx context.Context, id int64) (User, error)
+	// CreateLogin records a signed-in browser: id is the hash of its cookie.
+	CreateLogin(ctx context.Context, id string, userID int64, expires time.Time) error
+	// LoginUser returns the user of an unexpired login, or ErrUserNotFound.
+	LoginUser(ctx context.Context, id string) (User, error)
+	// DeleteLogin signs a browser out. Deleting it twice is not an error.
+	DeleteLogin(ctx context.Context, id string) error
 	// GetAgent returns one agent, or ErrAgentNotFound.
 	GetAgent(ctx context.Context, id string) (Agent, error)
 	// ListAgents returns every enabled agent, sorted by id.

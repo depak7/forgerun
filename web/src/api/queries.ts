@@ -1,11 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "./client";
-import type { Agent, ModelList, Session, Snapshot, Status, Task, Thread } from "./types";
+import type { Agent, Me, ModelList, Session, Snapshot, Status, Task, Thread } from "./types";
 
 // Hooks for the data screens share. TanStack Query caches each by its key,
 // so the strip, sidebar and pages share one request, refreshed while the
 // page is open.
+
+// useMe is who's signed in. Any 401 refreshes it (see main.tsx), which
+// shows the sign-in page.
+export function useMe() {
+  return useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/api/me"), staleTime: 60_000 });
+}
 
 export function useStatus() {
   return useQuery({ queryKey: ["status"], queryFn: () => api<Status>("/api/status"), refetchInterval: 3000 });

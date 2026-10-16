@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -131,5 +132,31 @@ func TestGitHubTokens(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSignInSettings(t *testing.T) {
+	log := slog.New(slog.DiscardHandler)
+	env := func(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
+	if a, err := signIn(env(nil), log); a != nil || err != nil {
+		t.Errorf("no client ID: local mode, got %v, %v", a, err)
+	}
+	full := map[string]string{"GITHUB_OAUTH_CLIENT_ID": "id", "GITHUB_OAUTH_CLIENT_SECRET": "s",
+		"FORGERUN_SECRET_KEY": strings.Repeat("ab", 32), "FORGERUN_ADMINS": " depak7 , other ", "FORGERUN_PUBLIC_URL": "https://f.example/"}
+	a, err := signIn(env(full), log)
+	if err != nil || a.PublicURL != "https://f.example" || len(a.Admins) != 2 || a.Admins[0] != "depak7" {
+		t.Errorf("full settings: %+v, %v", a, err)
+	}
+	for _, missing := range []string{"GITHUB_OAUTH_CLIENT_SECRET", "FORGERUN_SECRET_KEY"} {
+		kv := maps.Clone(full)
+		delete(kv, missing)
+		if _, err := signIn(env(kv), log); err == nil || !strings.Contains(err.Error(), missing) {
+			t.Errorf("without %s: %v", missing, err)
+		}
+	}
+	kv := maps.Clone(full)
+	kv["FORGERUN_PUBLIC_URL"] = "forgerun.example"
+	if _, err := signIn(env(kv), log); err == nil {
+		t.Error("a public URL without a scheme should be refused")
 	}
 }

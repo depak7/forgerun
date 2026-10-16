@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -52,15 +53,15 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	// branch and pull request; if the parent doesn't exist, nothing is inserted.
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id, pr_requested,
-		                   parent_id, thread_id, pr_url, pr_number, pr_branch, plan)
+		                   parent_id, thread_id, pr_url, pr_number, pr_branch, plan, owner_id)
 		SELECT $1, $2, $3, $4, $5,
 		       COALESCE(NULLIF($6, ''), (SELECT default_model_id FROM agents WHERE id = $4)),
 		       COALESCE(p.pr_requested, false),
-		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch, $8
+		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch, $8, $9
 		FROM (SELECT NULLIF($7::text, '') AS parent) want
 		LEFT JOIN tasks p ON p.id = want.parent
 		WHERE want.parent IS NULL OR p.id IS NOT NULL`,
-		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID, t.Plan)
+		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID, t.Plan, nullableID(t.Owner))
 	if err != nil {
 		return fmt.Errorf("creating task %s: %w", t.ID, threadError(err)) // includes the FK error for an unknown model
 	}
@@ -70,7 +71,7 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	return nil
 }
 
-func (s *Store) ListThreads(ctx context.Context, limit int) ([]store.Thread, error) {
+func (s *Store) ListThreads(ctx context.Context, limit int, owner int64) ([]store.Thread, error) {
 	// One row per thread: its first task, size, agents in order, newest step.
 	rows, err := s.pool.Query(ctx, `
 		SELECT root.id, root.prompt, root.repo, count(*),
@@ -78,9 +79,10 @@ func (s *Store) ListThreads(ctx context.Context, limit int) ([]store.Thread, err
 		       (array_agg(t.id ORDER BY t.created_at DESC, t.id DESC))[1],
 		       max(COALESCE(t.finished_at, t.started_at, t.created_at)) AS updated
 		FROM tasks t JOIN tasks root ON root.id = t.thread_id
+		WHERE $2 = 0 OR root.owner_id = $2
 		GROUP BY root.id, root.prompt, root.repo
 		ORDER BY updated DESC, root.id DESC
-		LIMIT $1`, limit)
+		LIMIT $1`, limit, owner)
 	if err != nil {
 		return nil, fmt.Errorf("listing threads: %w", err)
 	}
@@ -271,7 +273,7 @@ const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, 
 // selectColumns is the task (aliased t) plus its model.
 const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.diff IS NOT NULL,
 	t.snapshot_id, t.pr_requested, t.pr_url, t.pr_error, t.base_commit, t.summary,
-	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.plan, t.asked, t.created_at, t.started_at, t.finished_at, ` + modelColumns
+	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.plan, t.asked, t.owner_id, t.created_at, t.started_at, t.finished_at, ` + modelColumns
 
 const fromTasks = ` FROM tasks t
 	JOIN models m ON m.agent_id = t.agent_id AND m.id = t.model_id
@@ -295,8 +297,10 @@ func (s *Store) Diff(ctx context.Context, id string) (string, error) {
 	return deref(diff), err
 }
 
-func (s *Store) List(ctx context.Context, limit int) ([]store.Record, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+selectColumns+fromTasks+` ORDER BY t.created_at DESC, t.id DESC LIMIT $1`, limit)
+func (s *Store) List(ctx context.Context, limit int, owner int64) ([]store.Record, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+selectColumns+fromTasks+`
+		WHERE $2 = 0 OR t.owner_id = $2
+		ORDER BY t.created_at DESC, t.id DESC LIMIT $1`, limit, owner)
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
 	}
@@ -490,13 +494,14 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		errMsg, logPath                     *string // nil = NULL
 		prURL, prError, baseCommit, summary *string
 		parentID, prBranch, reply           *string
+		owner                               *int64
 		prNumber                            *int
 		startedAt, finishedAt               *time.Time
 	)
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
 		&errMsg, &logPath, &rec.HasDiff, &rec.SnapshotID,
 		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary,
-		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &rec.CreatedAt, &startedAt, &finishedAt,
+		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &owner, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
 		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR)
 	if err != nil {
@@ -513,6 +518,9 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	if prNumber != nil {
 		rec.PR.Number = *prNumber
 	}
+	if owner != nil {
+		rec.Owner = *owner
+	}
 	rec.StartedAt, rec.FinishedAt = startedAt, finishedAt
 	return rec, nil
 }
@@ -526,6 +534,14 @@ func nullable(s string) *string {
 }
 
 // nullableInt maps 0 to SQL NULL.
+// nullableID maps 0 (no row) to NULL.
+func nullableID(id int64) *int64 {
+	if id == 0 {
+		return nil
+	}
+	return &id
+}
+
 func nullableInt(n int) *int {
 	if n == 0 {
 		return nil
@@ -539,4 +555,69 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func (s *Store) SaveUser(ctx context.Context, u store.User) (store.User, error) {
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO users (github_id, login, name, avatar_url, github_token)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (github_id) DO UPDATE SET login = $2, name = $3, avatar_url = $4,
+			github_token = COALESCE($5, users.github_token), last_login_at = now()
+		RETURNING `+userColumns, u.GitHubID, u.Login, nullable(u.Name), nullable(u.AvatarURL), u.Token)
+	saved, err := scanUser(row)
+	if err != nil {
+		return store.User{}, fmt.Errorf("saving user %s: %w", u.Login, err)
+	}
+	return saved, nil
+}
+
+func (s *Store) GetUser(ctx context.Context, id int64) (store.User, error) {
+	u, err := scanUser(s.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.User{}, fmt.Errorf("%w: %d", store.ErrUserNotFound, id)
+	}
+	return u, err
+}
+
+func (s *Store) CreateLogin(ctx context.Context, id string, userID int64, expires time.Time) error {
+	if _, err := s.pool.Exec(ctx, `INSERT INTO logins (id, user_id, expires_at) VALUES ($1, $2, $3)`, id, userID, expires); err != nil {
+		return fmt.Errorf("creating a login: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) LoginUser(ctx context.Context, id string) (store.User, error) {
+	u, err := scanUser(s.pool.QueryRow(ctx, `SELECT `+prefixed("u.", userColumns)+`
+		FROM logins l JOIN users u ON u.id = l.user_id
+		WHERE l.id = $1 AND l.expires_at > now()`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.User{}, store.ErrUserNotFound
+	}
+	return u, err
+}
+
+func (s *Store) DeleteLogin(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM logins WHERE id = $1`, id)
+	return err
+}
+
+const userColumns = `id, github_id, login, name, avatar_url, github_token, created_at`
+
+// prefixed qualifies each of a comma-separated column list, e.g. "u.id, u.login".
+func prefixed(prefix, columns string) string {
+	parts := strings.Split(columns, ", ")
+	for i, p := range parts {
+		parts[i] = prefix + p
+	}
+	return strings.Join(parts, ", ")
+}
+
+func scanUser(row pgx.Row) (store.User, error) {
+	var u store.User
+	var name, avatar *string
+	if err := row.Scan(&u.ID, &u.GitHubID, &u.Login, &name, &avatar, &u.Token, &u.CreatedAt); err != nil {
+		return store.User{}, err
+	}
+	u.Name, u.AvatarURL = deref(name), deref(avatar)
+	return u, nil
 }

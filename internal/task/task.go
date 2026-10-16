@@ -35,6 +35,7 @@ type Task struct {
 	ID       string
 	ThreadID string // the thread's first task; "" = this task starts a thread
 	ParentID string // the task this one follows; "" for a thread's first task
+	Owner    int64  // the user who started it; 0 = nobody signed in (local mode)
 	Repo     string // git URL
 	Prompt   string
 	AgentID  string // which agent runs it; "" = Runner.DefaultAgent
