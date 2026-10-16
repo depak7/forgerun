@@ -25,7 +25,8 @@ type Snapshotter interface {
 
 // RestoreRequest says which repo's snapshot to start a task from.
 type RestoreRequest struct {
-	TaskID  string // also the new VM's name
+	TaskID  string // the task the VM is for
+	VMName  string // the new VM's name; "" = TaskID
 	Repo    string
 	AgentID string
 	RepoDir string         // checkout inside the VM

@@ -314,11 +314,11 @@ func TestFetchers(t *testing.T) {
 		return task.Result{}, nil
 	}), 1, slog.New(slog.DiscardHandler))
 	p.poll = 10 * time.Millisecond
-	p.Fetchers = func(_ context.Context, owner int64, repo string) (task.Fetcher, error) {
-		if strings.HasSuffix(repo, "broken") {
-			return nil, errors.New("no access to " + repo)
+	p.Fetchers = func(_ context.Context, rec store.Record) (task.Fetcher, error) {
+		if strings.HasSuffix(rec.Repo, "broken") {
+			return nil, errors.New("no access to " + rec.Repo)
 		}
-		if owner != 7 {
+		if rec.Owner != 7 {
 			return nil, errors.New("wrong owner")
 		}
 		return fakeFetcher{}, nil

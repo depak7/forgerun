@@ -1,5 +1,5 @@
-import { useAgents, useMe, useModels, useSnapshots, useStatus } from "../api/queries";
-import type { Agent, Snapshot, Status } from "../api/types";
+import { useAgents, useMe, useModels, useSnapshots, useStatus, useWorkers } from "../api/queries";
+import type { Agent, Snapshot, Status, WorkerInfo } from "../api/types";
 import { formatBytes, formatDuration, formatWhen, repoName } from "../format";
 import styles from "./Settings.module.css";
 
@@ -41,6 +41,15 @@ export function SettingsPage() {
         </h2>
         <div className={styles.card}>{status && <PullRequests status={status} />}</div>
       </section>
+
+      {status?.remote_workers && (
+        <section className={styles.section} aria-labelledby="workers">
+          <h2 id="workers" className="label">
+            Workers
+          </h2>
+          <Workers />
+        </section>
+      )}
 
       <section className={styles.section} aria-labelledby="sessions">
         <h2 id="sessions" className="label">
@@ -182,6 +191,44 @@ function PullRequests({ status }: { status: Status }) {
   );
 }
 
+// Workers lists the worker machines connected to this orchestrator.
+function Workers() {
+  const { data: workers } = useWorkers(true);
+  if (!workers) return null;
+  if (workers.length === 0) {
+    return (
+      <div className={styles.card}>
+        <p className={styles.note}>
+          No worker is connected, so new turns wait in the queue. Start one on a machine with virtualization:{" "}
+          <code>forgerun worker -server {window.location.origin}</code>, with the same <code>FORGERUN_WORKER_TOKEN</code>.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className={styles.list}>
+      {workers.map((w: WorkerInfo) => (
+        <div key={w.name} className={styles.row}>
+          <div className={styles.agentName}>
+            <span className="mono">{w.name}</span>
+            <span className={styles.sub}>seen {formatWhen(w.last_seen)}</span>
+          </div>
+          <div className={styles.agentKey}>
+            <span className={`${styles.tag} ${styles.good}`}>CONNECTED</span>
+            <span className={styles.sub}>{w.agents.join(", ")}</span>
+          </div>
+          <div className={styles.agentState}>
+            <span className={styles.sub}>
+              {w.running} running · {w.sessions} session{w.sessions === 1 ? "" : "s"} open
+              {w.max_sessions > 0 ? ` of ${w.max_sessions}` : ""}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Sessions({ status }: { status: Status }) {
   const s = status.sessions;
   return (
@@ -206,8 +253,12 @@ function Snapshots({ status }: { status: Status }) {
     return (
       <div className={styles.card}>
         <div className={styles.facts}>
-          <span className={`${styles.tag} ${styles.bad}`}>OFF</span>
-          <span>Every task starts cold (a fresh clone). Start the server with snapshots on to reuse prepared VMs.</span>
+          <span className={`${styles.tag} ${status.remote_workers ? styles.dim : styles.bad}`}>{status.remote_workers ? "ON WORKERS" : "OFF"}</span>
+          <span>
+            {status.remote_workers
+              ? "Snapshots are kept on each worker machine, which manages its own."
+              : "Every task starts cold (a fresh clone). Start the server with snapshots on to reuse prepared VMs."}
+          </span>
         </div>
       </div>
     );

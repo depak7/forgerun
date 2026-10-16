@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -190,4 +191,40 @@ func tail(s string, n int) string {
 		return s
 	}
 	return "…" + s[len(s)-n:]
+}
+
+// RemoveLeftovers kills and removes every VM whose name starts with
+// prefix: VMs a previous run of this process left behind (it crashed or
+// was killed). Processes sharing a machine use different prefixes, so
+// none removes another's VMs. It returns how many it removed.
+func RemoveLeftovers(ctx context.Context, prefix string) (int, error) {
+	if prefix == "" {
+		return 0, errors.New("RemoveLeftovers needs a prefix")
+	}
+	n := 0
+	var cursor string
+	for {
+		var opts []microsandbox.SandboxListOption
+		if cursor != "" {
+			opts = append(opts, microsandbox.WithListCursor(cursor))
+		}
+		page, err := microsandbox.ListSandboxesWith(ctx, opts...)
+		if err != nil {
+			return n, fmt.Errorf("listing VMs: %w", err)
+		}
+		for _, h := range page.Sandboxes {
+			if !strings.HasPrefix(h.Name(), prefix) {
+				continue
+			}
+			_ = h.Kill(ctx) // already stopped is fine
+			if err := microsandbox.RemoveSandbox(ctx, h.Name()); err != nil && !microsandbox.IsKind(err, microsandbox.ErrSandboxNotFound) {
+				return n, fmt.Errorf("removing leftover VM %s: %w", h.Name(), err)
+			}
+			n++
+		}
+		if page.NextCursor == nil || *page.NextCursor == "" {
+			return n, nil
+		}
+		cursor = *page.NextCursor
+	}
 }

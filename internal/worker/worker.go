@@ -48,7 +48,7 @@ type Pool struct {
 	// Fetchers, if set, says how a task's repo is fetched: a Fetcher for
 	// repos the VM can't clone itself (private ones), nil for the others.
 	// owner is the task's user (0 = none), whose GitHub access is used.
-	Fetchers func(ctx context.Context, owner int64, repo string) (task.Fetcher, error)
+	Fetchers func(ctx context.Context, rec store.Record) (task.Fetcher, error)
 
 	mu      sync.Mutex
 	running map[string]context.CancelCauseFunc // task ID → cancel, for tasks running here
@@ -82,6 +82,17 @@ func (p *Pool) Nudge() {
 	case p.nudge <- struct{}{}:
 	default:
 	}
+}
+
+// Running lists the tasks running in this pool.
+func (p *Pool) Running() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ids := make([]string, 0, len(p.running))
+	for id := range p.running {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // Cancel stops a task running in this pool. It reports false if the task
@@ -127,7 +138,7 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	var res task.Result
 	var err error
 	if p.Fetchers != nil {
-		t.Fetch, err = p.Fetchers(taskCtx, rec.Owner, rec.Repo)
+		t.Fetch, err = p.Fetchers(taskCtx, rec)
 	}
 	if err == nil && t.ParentID != "" {
 		err = p.threadContext(taskCtx, rec, &t)

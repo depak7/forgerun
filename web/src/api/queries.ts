@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "./client";
-import type { Agent, Me, ModelList, Repo, Session, Snapshot, Status, Task, Thread } from "./types";
+import type { Agent, Me, ModelList, Repo, Session, Snapshot, Status, Task, Thread, WorkerInfo } from "./types";
 
 // Hooks for the data screens share. TanStack Query caches each by its key,
 // so the strip, sidebar and pages share one request, refreshed while the
@@ -16,6 +16,11 @@ export function useMe() {
 // useRepos lists the repos the user can push to, for the repo picker.
 export function useRepos() {
   return useQuery({ queryKey: ["repos"], queryFn: () => api<Repo[]>("/api/repos"), staleTime: 5 * 60_000, retry: false });
+}
+
+// useWorkers lists connected worker machines (admins only).
+export function useWorkers(enabled: boolean) {
+  return useQuery({ queryKey: ["workers"], queryFn: () => api<WorkerInfo[]>("/api/workers"), enabled, refetchInterval: 5000 });
 }
 
 export function useStatus() {

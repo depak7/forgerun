@@ -28,6 +28,7 @@ function status(over: Partial<Status> = {}): Status {
     snapshots: { enabled: true, count: 1, bytes: 5e9, budget_bytes: 20e9, max_age_seconds: 604800, sweep_seconds: 600 },
     tasks: { queued: 0, running: 0 },
     require_zdr: false,
+    remote_workers: false,
     sessions: { open: 1, max: 4, idle_seconds: 1800 },
     ...over,
   };
@@ -37,8 +38,9 @@ const snapshots = [
 ];
 
 // serve answers the page's requests; the model list depends on ?agent=.
-function serve(st: Status) {
+function serve(st: Status, extra: Record<string, unknown> = {}) {
   const routes: Record<string, unknown> = {
+    ...extra,
     "/api/agents": agents,
     "/api/status": st,
     "/api/snapshots": snapshots,
@@ -97,6 +99,15 @@ describe("SettingsPage", () => {
     renderPage(<SettingsPage />);
     expect(await screen.findByText("1 open of 4")).toBeTruthy();
     expect(screen.getByText(/closes after 30 min without a message/)).toBeTruthy();
+  });
+
+  it("lists connected workers when they run apart", async () => {
+    const routes = { "/api/workers": [{ name: "deepak-mac", last_seen: new Date().toISOString(), agents: ["claude-code", "cursor"], sessions: 1, max_sessions: 4, running: 1 }] };
+    serve(status({ remote_workers: true }), routes);
+    renderPage(<SettingsPage />);
+    expect(await screen.findByText("deepak-mac")).toBeTruthy();
+    expect(screen.getByText("CONNECTED")).toBeTruthy();
+    expect(screen.getByText(/1 running · 1 session open of 4/)).toBeTruthy();
   });
 
   it("says when snapshots are off", async () => {

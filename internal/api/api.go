@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +47,7 @@ type Config struct {
 	SessionIdle  time.Duration     // how long an idle session stays open; 0 = no limit
 	MaxSessions  int               // most sessions open at once; 0 = no limit
 	Auth         *Auth             // GitHub sign-in; nil = local mode (no sign-in, everyone is the admin)
+	Workers      Workers           // remote workers; nil = they run in this process
 	Log          *slog.Logger
 }
 
@@ -58,6 +60,22 @@ type PRs interface {
 	// Access and Repos use the user's token, or the server's if it's zero.
 	Access(ctx context.Context, repo string, user forge.Token) (forge.Access, error)
 	Repos(ctx context.Context, user forge.Token) ([]forge.RepoInfo, error)
+}
+
+// WorkerInfo is a worker machine connected to the orchestrator.
+type WorkerInfo struct {
+	Name        string    `json:"name"`
+	LastSeen    time.Time `json:"last_seen"`
+	Agents      []string  `json:"agents"` // agents it has keys for
+	Sessions    int       `json:"sessions"`
+	MaxSessions int       `json:"max_sessions"`
+	Running     int       `json:"running"`
+}
+
+// Workers lists connected workers; set only when workers run apart from
+// the orchestrator (forgerun server).
+type Workers interface {
+	Workers() []WorkerInfo
 }
 
 // Sessions is what the API needs from threads' open VMs. *task.Runner
@@ -82,6 +100,7 @@ type Server struct {
 	sessionIdle  time.Duration
 	maxSessions  int
 	auth         *Auth
+	workers      Workers
 	outDir       string
 	githubUser   string
 	snapshots    *SnapshotSettings
@@ -91,7 +110,7 @@ type Server struct {
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, workers: cfg.Workers, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
@@ -110,6 +129,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/snapshots", adminOnly(srv.listSnapshots))
 	mux.HandleFunc("GET /api/me", srv.me)
 	mux.HandleFunc("GET /api/repos", srv.listRepos)
+	mux.HandleFunc("GET /api/workers", adminOnly(srv.listWorkers))
 	mux.HandleFunc("GET /auth/github/login", srv.githubLogin)
 	mux.HandleFunc("GET /auth/github/callback", srv.githubCallback)
 	mux.HandleFunc("POST /auth/logout", srv.logout)
@@ -312,11 +332,29 @@ func (s *Server) checkAgent(w http.ResponseWriter, r *http.Request, agentID stri
 		return false
 	}
 	// Checked now so the user hears at once, not after the task waits in the queue.
+	if s.workers != nil {
+		// Agent keys live on the workers: ask what they reported.
+		if live := s.workers.Workers(); len(live) > 0 && !workersCanRun(live, agentID) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("no connected worker has a key for %s; set it on a worker, or pick another agent", agentID))
+			return false
+		}
+		return true // no worker connected yet: the turn waits in the queue
+	}
 	if err := s.agents.Check(r.Context(), agentID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return false
 	}
 	return true
+}
+
+// workersCanRun reports whether any of the workers has a key for an agent.
+func workersCanRun(workers []WorkerInfo, agentID string) bool {
+	for _, w := range workers {
+		if slices.Contains(w.Agents, agentID) {
+			return true
+		}
+	}
+	return false
 }
 
 // runnable reports whether forgerun has an adapter for the agent.
@@ -486,8 +524,9 @@ type statusJSON struct {
 		MaxAgeSec   int64 `json:"max_age_seconds"` // 0 = never expire
 		SweepSec    int64 `json:"sweep_seconds"`
 	} `json:"snapshots"`
-	RequireZDR bool `json:"require_zdr"` // only zero-data-retention models are accepted
-	Sessions   struct {
+	RequireZDR    bool `json:"require_zdr"`    // only zero-data-retention models are accepted
+	RemoteWorkers bool `json:"remote_workers"` // workers run apart (forgerun server + forgerun worker)
+	Sessions      struct {
 		Open        int   `json:"open"`
 		Max         int   `json:"max"`          // 0 = no limit
 		IdleSeconds int64 `json:"idle_seconds"` // an idle session closes after this; 0 = never
@@ -501,7 +540,7 @@ type statusJSON struct {
 // status serves GET /api/status.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	var out statusJSON
-	out.RequireZDR = s.requireZDR
+	out.RequireZDR, out.RemoteWorkers = s.requireZDR, s.workers != nil
 	if s.sessions != nil {
 		out.Sessions.Open = s.sessions.OpenSessions()
 	}
@@ -706,6 +745,9 @@ func (s *Server) credential(ctx context.Context, agentID string) *credentialJSON
 	if err != nil {
 		return nil
 	}
+	if s.workers != nil { // keys live on the workers
+		return &credentialJSON{Name: a.Credential(), Set: workersCanRun(s.workers.Workers(), agentID)}
+	}
 	return &credentialJSON{Name: a.Credential(), Set: s.agents.Check(ctx, agentID) == nil}
 }
 
@@ -865,4 +907,14 @@ func validateRepo(raw string) error {
 // questions, or it's a plan to approve.
 func waitsForUser(r store.Record) bool {
 	return r.State == task.Succeeded && (r.Asked || r.Plan)
+}
+
+// listWorkers serves GET /api/workers: the worker machines connected to
+// this orchestrator, or an empty list when workers run in-process.
+func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
+	out := []WorkerInfo{}
+	if s.workers != nil {
+		out = append(out, s.workers.Workers()...)
+	}
+	writeData(w, http.StatusOK, out)
 }

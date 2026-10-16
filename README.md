@@ -146,6 +146,44 @@ is yours. With them, people sign in with GitHub and see only their own threads.
 
 Run `./forgerun serve -h` for all of them.
 
+## One machine, or orchestrator and workers apart
+
+`forgerun serve` runs everything in one process: the web UI, the API and the VMs.
+To run the VMs elsewhere (for example the orchestrator on a small VPS, the VMs on a
+machine at home), use two roles of the same binary:
+
+```sh
+# the orchestrator: web UI, API, Postgres, sign-in, pushing. No virtualization needed.
+FORGERUN_WORKER_TOKEN=… ./forgerun server
+
+# a worker, on any macOS (Apple Silicon) or Linux (KVM) machine. It dials out over
+# HTTPS, so nothing needs opening on its side. Agent keys live here, not on the server.
+FORGERUN_WORKER_TOKEN=… CURSOR_API_KEY=… ./forgerun worker -server https://forgerun.example.com
+```
+
+```mermaid
+flowchart LR
+    subgraph O["forgerun server (any VPS)"]
+        UI2["web UI · API"] --- Q[("Postgres queue")]
+        Q --- P2["push to GitHub"]
+    end
+    subgraph W["forgerun worker (your machine)"]
+        R2["runner · sessions"] --> V2["microVMs"]
+    end
+    W -- "claim turns · stream logs · heartbeat (HTTPS, outbound)" --> O
+```
+
+- **Turns wait in the queue** while no worker is connected, and start as soon as one is.
+  Run several workers; each takes turns from the same queue.
+- **A thread sticks to the worker holding its VM.** If that worker goes away, its running
+  turn fails after 30 seconds and the next message rebuilds the session on any worker.
+- **Secrets:** agent keys stay on the workers, users' GitHub tokens on the orchestrator.
+  For a private repo, the turn's token goes to the worker in memory, to fetch the code on
+  that host; it never enters a VM.
+- Each worker keeps its own warm-start snapshots (`~/.forgerun/worker`), and removes VMs
+  a crashed run left behind when it starts.
+- Settings lists the connected workers.
+
 ## API
 
 The UI uses the same JSON API (`{"success": true, "data": …}`):
@@ -159,7 +197,8 @@ The UI uses the same JSON API (`{"success": true, "data": …}`):
 | `GET /api/tasks/{id}/log`, `/diff` | a turn's live log (Range supported) and diff |
 | `POST /api/threads/{id}/push` | push unpushed turns as one commit; `{"pr": true}` also opens a pull request |
 | `GET /api/threads/{id}/session`, `POST …/end` | a thread's session, and closing it |
-| `GET /api/threads`, `/api/agents`, `/api/models`, `/api/status`, `/api/snapshots` | lists for the UI |
+| `GET /api/threads`, `/api/agents`, `/api/models`, `/api/status`, `/api/snapshots`, `/api/repos`, `/api/workers` | lists for the UI |
+| `/api/worker/…` | the worker protocol: claim, log, finish, heartbeat (worker token) |
 
 ## Development
 
@@ -173,7 +212,7 @@ make dev-web                                     # UI with live reload on :5173
 ```
 
 ```
-cmd/forgerun/       serve (API + workers + UI) and run (one task, no database)
+cmd/forgerun/       serve (everything), server (orchestrator only), worker, run (one task, no database)
 internal/agent/     agent adapters: Cursor, Claude Code
 internal/task/      the runner: sessions, turns, replay
 internal/sandbox/   the only package that talks to microsandbox
@@ -181,6 +220,7 @@ internal/snapshots/ warm-start snapshots and their cleanup
 internal/publish/   pushing branches and pull requests (host-side git)
 internal/store/     Postgres (migrations) and an in-memory store for tests
 internal/worker/    the worker pool
+internal/remote/    workers on other machines: the orchestrator side and the worker side
 internal/api/       HTTP handlers
 web/                the React UI (embedded with -tags webui)
 images/             agent VM images

@@ -185,6 +185,29 @@ func (s *sessions) info(thread string) SessionInfo {
 	return info
 }
 
+// list describes every open session.
+func (s *sessions) list() []OpenSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]OpenSession, 0, len(s.open))
+	for thread, ss := range s.open {
+		o := OpenSession{Thread: thread, Agent: ss.agentID, Busy: ss.busy}
+		if !ss.busy && s.idle > 0 {
+			o.IdleUntil = ss.used.Add(s.idle)
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// OpenSession is one open session, as a worker reports it.
+type OpenSession struct {
+	Thread    string    `json:"thread"`
+	Agent     string    `json:"agent"`
+	Busy      bool      `json:"busy"`
+	IdleUntil time.Time `json:"idle_until"` // zero if busy or open-ended
+}
+
 func (s *sessions) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

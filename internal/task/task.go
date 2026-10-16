@@ -109,6 +109,10 @@ type Runner struct {
 	Snapshots Snapshotter
 	// SessionIdle closes a session unused for this long; 0 = never.
 	SessionIdle time.Duration
+	// VMPrefix starts every VM's name, marking which process owns it (an
+	// all-in-one server and a worker can share a machine); at startup a
+	// process removes VMs with its prefix that a crash left behind.
+	VMPrefix string
 	// MaxSessions is how many sessions may be open at once; the least
 	// recently used idle one is closed to make room. 0 = no limit.
 	MaxSessions int
@@ -305,8 +309,8 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 	ss.sb = r.restore(ctx, ag, t, cfg, step)
 	warm := ss.sb != nil
 	if !warm {
-		step("creating sandbox %s (%s)", t.ID, ag.Image())
-		if ss.sb, err = sandbox.New(ctx, t.ID, cfg); err != nil {
+		step("creating sandbox %s (%s)", r.VMPrefix+t.ID, ag.Image())
+		if ss.sb, err = sandbox.New(ctx, r.VMPrefix+t.ID, cfg); err != nil {
 			return nil, err
 		}
 		if t.Fetch != nil {
@@ -354,6 +358,9 @@ func (r *Runner) CloseSession(thread string) error {
 
 // Session reports a thread's session.
 func (r *Runner) Session(thread string) SessionInfo { return r.open().info(thread) }
+
+// Sessions lists the open sessions.
+func (r *Runner) Sessions() []OpenSession { return r.open().list() }
 
 // OpenSessions is how many sessions are open.
 func (r *Runner) OpenSessions() int { return r.open().count() }
@@ -495,7 +502,7 @@ func (r *Runner) restore(ctx context.Context, ag agent.Agent, t Task, cfg sandbo
 		return nil
 	}
 	sb, err := r.Snapshots.Restore(ctx, RestoreRequest{
-		TaskID: t.ID, Repo: t.Repo, AgentID: ag.ID(), RepoDir: repoDir, Config: cfg, Fetch: t.Fetch,
+		TaskID: t.ID, VMName: r.VMPrefix + t.ID, Repo: t.Repo, AgentID: ag.ID(), RepoDir: repoDir, Config: cfg, Fetch: t.Fetch,
 	}, step)
 	switch {
 	case errors.Is(err, ErrNoSnapshot):

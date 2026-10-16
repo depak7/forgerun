@@ -27,7 +27,11 @@ func main() {
 	case "run":
 		err = runCmd(os.Args[2:])
 	case "serve":
-		err = serveCmd(os.Args[2:])
+		err = serveCmd(os.Args[2:], false)
+	case "server":
+		err = serveCmd(os.Args[2:], true)
+	case "worker":
+		err = workerCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -47,12 +51,16 @@ func usage() {
                  [-model family] [-require-zdr] [-snapshots=false]
                  [-session-idle 30m] [-sessions 4]
                  [-snapshot-max-age 168h] [-snapshot-budget 20GB] [-snapshot-sweep 10m]
+  forgerun server [the same flags as serve]   the orchestrator alone: API, web UI, database; no VMs here
+  forgerun worker -server https://… [-name n] [-workers 2] [-sessions 4] [-snapshots=false]
+                                            runs turns for a forgerun server; dials out, nothing to open
   forgerun run   -repo <git-url> -prompt <task> [-agent cursor] [-model m] [-effort e] [-timeout 15m] [-out out]
 
 The database URL defaults to $FORGERUN_DATABASE_URL, then the docker-compose dev database.
 Agents read their credential when a task needs it: CURSOR_API_KEY (cursor),
 CLAUDE_CODE_OAUTH_TOKEN (claude-code, from claude setup-token). serve also
 needs GITHUB_TOKEN to push threads' branches and open pull requests.
+server and worker share FORGERUN_WORKER_TOKEN; agent keys belong on the workers.
 `)
 	os.Exit(64)
 }

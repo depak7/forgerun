@@ -33,8 +33,16 @@ import (
 	"github.com/depak7/forgerun/internal/worker"
 )
 
-func serveCmd(args []string) error {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+// serveCmd runs forgerun: the orchestrator (API, web UI, database,
+// pushing) and, unless orchestratorOnly, its workers in the same process.
+// With orchestratorOnly ("forgerun server") workers run elsewhere and
+// connect with "forgerun worker".
+func serveCmd(args []string, orchestratorOnly bool) error {
+	name := "serve"
+	if orchestratorOnly {
+		name = "server"
+	}
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on")
 	workers := fs.Int("workers", 2, "how many tasks may run at once")
 	timeout := fs.Duration("timeout", 15*time.Minute, "max time per turn")
@@ -93,7 +101,12 @@ func serveCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := sandbox.EnsureRuntime(ctx); err != nil {
+	workerToken := os.Getenv("FORGERUN_WORKER_TOKEN")
+	if orchestratorOnly {
+		if len(workerToken) < 16 {
+			return errors.New("forgerun server needs FORGERUN_WORKER_TOKEN (at least 16 characters, e.g. openssl rand -hex 32): workers connect with it")
+		}
+	} else if err := sandbox.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
 
@@ -106,12 +119,16 @@ func serveCmd(args []string) error {
 		log.Warn("listening on a non-loopback address: the API has no authentication yet", "addr", *addr)
 	}
 
-	// Tasks left "running" by a crash have no worker anymore.
-	if n, err := db.FailRunning(ctx, "server restarted"); err != nil {
-		ln.Close()
-		return err
-	} else if n > 0 {
-		log.Warn("marked orphaned running tasks as failed", "count", n)
+	// Tasks left "running" by a crash have no worker anymore. (Remote
+	// workers keep running across an orchestrator restart; the reaper
+	// fails only turns none of them reports.)
+	if !orchestratorOnly {
+		if n, err := db.FailRunning(ctx, "server restarted"); err != nil {
+			ln.Close()
+			return err
+		} else if n > 0 {
+			log.Warn("marked orphaned running tasks as failed", "count", n)
+		}
 	}
 
 	if *maxSessions > 0 && *maxSessions < *workers {
@@ -120,7 +137,8 @@ func serveCmd(args []string) error {
 		*maxSessions = *workers
 	}
 	runner := &task.Runner{Agents: agents, DefaultAgent: *defaultAgent, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout,
-		AgentIdle: *agentIdle, Stdout: io.Discard, Log: log, SessionIdle: *sessionIdle, MaxSessions: *maxSessions}
+		AgentIdle: *agentIdle, Stdout: io.Discard, Log: log, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, VMPrefix: serveVMPrefix}
+	removeLeftoverVMs(ctx, serveVMPrefix, log)
 	var prs api.PRs // stays a nil interface when PRs are off (a nil *Publisher in it wouldn't be)
 	var publisher *publish.Publisher
 	if prTokens != nil {
@@ -131,6 +149,13 @@ func serveCmd(args []string) error {
 		}
 		publisher = &publish.Publisher{Tokens: prTokens, GitHub: &forge.GitHub{}}
 		prs = publisher
+	}
+	if orchestratorOnly {
+		return orchestrate(ctx, stop, ln, db, log, orchestratorConfig{
+			api: api.Config{Store: db, Agents: agents, Agent: *defaultAgent, DefaultModel: *defaultModel, RequireZDR: *requireZDR,
+				PRs: prs, OutDir: *out, GitHubUser: githubUser, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Log: log},
+			workerToken: workerToken, publisher: publisher, prTokens: prTokens,
+		})
 	}
 	sweepsDone := make(chan struct{})
 	var snapshotSettings *api.SnapshotSettings // nil = snapshots off
@@ -154,7 +179,7 @@ func serveCmd(args []string) error {
 		pool.Fetchers = repoFetchers(db, auth, publisher, log)
 	}
 	srv := &http.Server{
-		Handler: api.LogRequests(log, routes(api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
+		Handler: routes(nil, api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
 			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, OutDir: *out, GitHubUser: githubUser,
 			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Log: log}))),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -192,10 +217,14 @@ func serveCmd(args []string) error {
 	return runErr
 }
 
-// routes sends /api/ and /healthz to the API and everything else to the
-// web app (a placeholder page unless built with -tags webui).
-func routes(apiHandler http.Handler) http.Handler {
+// routes sends /api/ and /healthz to the API, /api/worker/ to remote
+// workers' endpoints (if there are any), and everything else to the web
+// app (a placeholder page unless built with -tags webui).
+func routes(workers, apiHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	if workers != nil {
+		mux.Handle("/api/worker/", workers) // not request-logged: heartbeats every few seconds
+	}
 	mux.Handle("/api/", apiHandler)
 	mux.Handle("/auth/", apiHandler)
 	mux.Handle("/healthz", apiHandler)
@@ -342,9 +371,10 @@ func signIn(getenv func(string) string, log *slog.Logger) (*api.Auth, error) {
 // repoFetchers fetches private repos on this host, with the task owner's
 // GitHub token (or the server's): their VMs never hold a GitHub credential.
 // Public repos are cloned by the VM itself, which is faster.
-func repoFetchers(db store.Store, auth *api.Auth, p *publish.Publisher, log *slog.Logger) func(context.Context, int64, string) (task.Fetcher, error) {
-	return func(ctx context.Context, owner int64, repo string) (task.Fetcher, error) {
-		tok, err := auth.Token(ctx, db, owner)
+func repoFetchers(db store.Store, auth *api.Auth, p *publish.Publisher, log *slog.Logger) func(context.Context, store.Record) (task.Fetcher, error) {
+	return func(ctx context.Context, rec store.Record) (task.Fetcher, error) {
+		repo := rec.Repo
+		tok, err := auth.Token(ctx, db, rec.Owner)
 		if err != nil {
 			return nil, err
 		}

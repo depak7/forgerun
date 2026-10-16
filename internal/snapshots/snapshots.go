@@ -57,7 +57,7 @@ func (m *Manager) Restore(ctx context.Context, req task.RestoreRequest, logf fun
 		return nil, err
 	}
 
-	sb, err := sandbox.Restore(ctx, snap.Ref, req.TaskID, req.Config)
+	sb, err := sandbox.Restore(ctx, snap.Ref, cmp.Or(req.VMName, req.TaskID), req.Config)
 	if err != nil {
 		// The snapshot itself is unusable (e.g. missing or corrupt). Remove
 		// it so later tasks don't trip over it too; the next successful

@@ -14,6 +14,7 @@ export interface Status {
     sweep_seconds: number;
   };
   require_zdr: boolean; // only zero-data-retention models are accepted
+  remote_workers: boolean; // workers run apart from the orchestrator
   sessions: { open: number; max: number; idle_seconds: number }; // 0 = no limit / never
   tasks: { queued: number; running: number };
 }
@@ -128,4 +129,14 @@ export interface Repo {
   full_name: string;
   url: string;
   private: boolean;
+}
+
+// A worker machine connected to the orchestrator (GET /api/workers).
+export interface WorkerInfo {
+  name: string;
+  last_seen: string;
+  agents: string[];
+  sessions: number;
+  max_sessions: number;
+  running: number;
 }

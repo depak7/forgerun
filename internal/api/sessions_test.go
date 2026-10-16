@@ -164,3 +164,32 @@ func equalRequests(a, b task.PublishRequest) bool {
 	jb, _ := json.Marshal(b)
 	return string(ja) == string(jb)
 }
+
+type fakeWorkers []WorkerInfo
+
+func (f fakeWorkers) Workers() []WorkerInfo { return f }
+
+// With workers apart, the agent keys are theirs: the orchestrator trusts
+// what they report, and queues turns when no worker is connected.
+func TestAgentKeysOnWorkers(t *testing.T) {
+	body := func(agent string) string {
+		return `{"repo":"https://github.com/o/r","prompt":"x","agent":"` + agent + `"}`
+	}
+	// No worker yet: other-agent has no key on this server, but it's queued.
+	h, _, _ := setup(t, func(c *Config) { c.Workers = fakeWorkers{} })
+	mustData(t, do(h, "POST", "/api/tasks", body("other-agent")), http.StatusCreated)
+
+	h, _, _ = setup(t, func(c *Config) { c.Workers = fakeWorkers{{Name: "mac", Agents: []string{"cursor"}}} })
+	mustData(t, do(h, "POST", "/api/tasks", body("cursor")), http.StatusCreated)
+	_, apiErr := decode(t, do(h, "POST", "/api/tasks", body("other-agent")), http.StatusBadRequest)
+	if !strings.Contains(apiErr.Message, "no connected worker has a key for other-agent") {
+		t.Errorf("got %q", apiErr.Message)
+	}
+	var agents []agentJSON
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/agents", ""), http.StatusOK), &agents)
+	for _, a := range agents {
+		if want := a.ID == "cursor"; a.Credential == nil || a.Credential.Set != want {
+			t.Errorf("%s: credential %+v, want set=%v", a.ID, a.Credential, want)
+		}
+	}
+}

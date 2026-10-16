@@ -14,6 +14,7 @@ const status = {
   snapshots: { enabled: false, count: 0, bytes: 0, budget_bytes: 0, max_age_seconds: 0, sweep_seconds: 0 },
   tasks: { queued: 0, running: 0 },
   require_zdr: false,
+  remote_workers: false,
   sessions: { open: 0, max: 4, idle_seconds: 1800 },
 };
 const me = (over: object) => ({ signed_in: true, sign_in: true, login: "alice", name: "Alice", avatar_url: "", admin: false, ...over });
