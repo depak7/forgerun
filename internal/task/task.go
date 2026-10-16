@@ -98,6 +98,9 @@ type Runner struct {
 	Timeout      time.Duration // per turn
 	Stdout       io.Writer     // live progress; also saved to each turn's log
 	Log          *slog.Logger  // session events; nil = discard
+	// LogSink, if set, also gets each turn's log as it's written (a remote
+	// worker streams it to the orchestrator). nil = the local file only.
+	LogSink func(taskID string) io.WriteCloser
 	// AgentIdle stops an agent that produces no output and changes no
 	// files for this long, failing the turn early. 0 = never.
 	AgentIdle time.Duration
@@ -150,6 +153,11 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	}
 	defer logFile.Close()
 	logs := io.MultiWriter(cmp.Or[io.Writer](r.Stdout, io.Discard), logFile)
+	if r.LogSink != nil {
+		sink := r.LogSink(t.ID)
+		defer sink.Close() // flushes what's left
+		logs = io.MultiWriter(logs, sink)
+	}
 	step := func(format string, a ...any) { fmt.Fprintf(logs, "==> "+format+"\n", a...) }
 
 	ag, err := r.Agents.Get(cmp.Or(t.AgentID, r.DefaultAgent))

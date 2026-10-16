@@ -262,12 +262,24 @@ func (s *Store) RecordPush(_ context.Context, threadID string, p store.Push) err
 	return nil
 }
 
-func (s *Store) Claim(_ context.Context) (store.Record, bool, error) {
+func (s *Store) Claim(ctx context.Context) (store.Record, bool, error) {
+	return s.ClaimFor(ctx, nil, nil)
+}
+
+func (s *Store) ClaimFor(_ context.Context, prefer, avoid []string) (store.Record, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Preferred threads first, then the oldest; avoided threads never.
+	before := func(a, b *store.Record) bool {
+		pa, pb := slices.Contains(prefer, a.ThreadID), slices.Contains(prefer, b.ThreadID)
+		if pa != pb {
+			return pa
+		}
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
 	var oldest *store.Record
 	for _, r := range s.tasks {
-		if r.State == task.Queued && (oldest == nil || r.CreatedAt.Before(oldest.CreatedAt)) {
+		if r.State == task.Queued && !slices.Contains(avoid, r.ThreadID) && (oldest == nil || before(r, oldest)) {
 			oldest = r
 		}
 	}
@@ -277,6 +289,18 @@ func (s *Store) Claim(_ context.Context) (store.Record, bool, error) {
 	now := time.Now()
 	oldest.State, oldest.StartedAt = task.Running, &now
 	return *oldest, true, nil
+}
+
+func (s *Store) Running(_ context.Context) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []string
+	for id, r := range s.tasks {
+		if r.State == task.Running {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 func (s *Store) Cancel(_ context.Context, id string) error {

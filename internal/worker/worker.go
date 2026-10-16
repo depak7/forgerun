@@ -21,9 +21,23 @@ var _ Executor = (*task.Runner)(nil)
 
 var errCancelledByUser = errors.New("cancelled by user")
 
-// Pool is a fixed number of workers pulling tasks from a store.
+// Queue is where a pool gets turns and reports how they ended: the
+// database for an all-in-one server (store.Store is one), or a remote
+// orchestrator for a worker on another machine.
+type Queue interface {
+	// Claim takes the next queued turn and marks it running; ok is false
+	// when there's none.
+	Claim(ctx context.Context) (rec store.Record, ok bool, err error)
+	Finish(ctx context.Context, id string, o store.Outcome) error
+	ThreadTasks(ctx context.Context, threadID string) ([]store.Record, error)
+	Diff(ctx context.Context, id string) (string, error)
+}
+
+var _ Queue = (store.Store)(nil)
+
+// Pool is a fixed number of workers pulling tasks from a queue.
 type Pool struct {
-	store   store.Store
+	store   Queue
 	exec    Executor
 	workers int
 	poll    time.Duration
@@ -40,7 +54,7 @@ type Pool struct {
 	running map[string]context.CancelCauseFunc // task ID → cancel, for tasks running here
 }
 
-func New(s store.Store, e Executor, workers int, log *slog.Logger) *Pool {
+func New(s Queue, e Executor, workers int, log *slog.Logger) *Pool {
 	return &Pool{
 		store:   s,
 		exec:    e,

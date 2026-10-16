@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
@@ -235,5 +236,29 @@ func TestListThreadsAndCounts(t *testing.T) {
 	}
 	if counts, _ := s.CountTasks(ctx); counts[task.Succeeded] != 1 || counts[task.Queued] != 1 {
 		t.Errorf("counts = %v", counts)
+	}
+}
+
+func TestClaimFor(t *testing.T) {
+	s, ctx := New(fakeDefault), context.Background()
+	a, b, c := task.New("r", "a"), task.New("r", "b"), task.New("r", "c")
+	for _, tk := range []task.Task{a, b, c} {
+		s.Create(ctx, tk, "fake")
+		time.Sleep(time.Millisecond) // distinct creation times
+	}
+	// b's thread is open here: it comes first. a's is open elsewhere: skipped.
+	rec, ok, _ := s.ClaimFor(ctx, []string{b.ID}, []string{a.ID})
+	if !ok || rec.ID != b.ID {
+		t.Fatalf("claimed %s, want b", rec.ID)
+	}
+	rec, _, _ = s.ClaimFor(ctx, nil, []string{a.ID})
+	if rec.ID != c.ID {
+		t.Errorf("claimed %s, want c", rec.ID)
+	}
+	if _, ok, _ := s.ClaimFor(ctx, nil, []string{a.ID}); ok {
+		t.Error("an avoided thread was claimed")
+	}
+	if running, _ := s.Running(ctx); len(running) != 2 {
+		t.Errorf("running = %v", running)
 	}
 }

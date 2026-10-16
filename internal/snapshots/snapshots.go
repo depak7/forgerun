@@ -19,10 +19,23 @@ import (
 	"github.com/depak7/forgerun/internal/task"
 )
 
+// Store keeps the record of snapshots: forgerun's database on an
+// all-in-one server (store.Store is one), or a file on a worker machine,
+// since snapshots live on the machine that made them.
+type Store interface {
+	CurrentSnapshot(ctx context.Context, repo, agentID string) (store.Snapshot, error)
+	UseSnapshot(ctx context.Context, taskID string, snapshotID int64) error
+	ReplaceSnapshot(ctx context.Context, snap store.Snapshot) (saved store.Snapshot, retired *store.Snapshot, err error)
+	MarkSnapshotDeleted(ctx context.Context, id int64) error
+	ListSnapshots(ctx context.Context) ([]store.Snapshot, error)
+}
+
+var _ Store = (store.Store)(nil)
+
 // Manager saves, restores and cleans up snapshots. It is safe for
 // concurrent use.
 type Manager struct {
-	Store store.Store
+	Store Store
 	// Prefix starts the name of every snapshot group this manager owns
 	// ("" = "forgerun"). Sweep only ever touches groups with its prefix,
 	// so tests use their own and can't delete a server's snapshots.

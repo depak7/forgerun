@@ -938,3 +938,27 @@ func TestUsersAndLogins(t *testing.T) {
 		t.Errorf("everyone's threads: %d", len(threads))
 	}
 }
+
+func TestClaimFor(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	a, b, c := task.New("https://github.com/o/r", "a"), task.New("https://github.com/o/r", "b"), task.New("https://github.com/o/r", "c")
+	for _, tk := range []task.Task{a, b, c} {
+		if err := s.Create(ctx, tk, "cursor"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	rec, ok, err := s.ClaimFor(ctx, []string{b.ID}, []string{a.ID})
+	if err != nil || !ok || rec.ID != b.ID {
+		t.Fatalf("claimed %s (%v, %v), want b", rec.ID, ok, err)
+	}
+	if rec, _, _ := s.ClaimFor(ctx, nil, []string{a.ID}); rec.ID != c.ID {
+		t.Errorf("claimed %s, want c", rec.ID)
+	}
+	if _, ok, _ := s.ClaimFor(ctx, nil, []string{a.ID}); ok {
+		t.Error("an avoided thread was claimed")
+	}
+	if running, _ := s.Running(ctx); len(running) != 2 {
+		t.Errorf("running = %v", running)
+	}
+}

@@ -183,6 +183,12 @@ type Store interface {
 	// Claim atomically moves the oldest Queued task to Running and returns it.
 	// ok is false when the queue is empty. Safe to call from many workers.
 	Claim(ctx context.Context) (rec Record, ok bool, err error)
+	// ClaimFor is Claim for one worker among several: tasks of threads in
+	// prefer (its open sessions) come first, and tasks of threads in avoid
+	// (open on other workers) are skipped.
+	ClaimFor(ctx context.Context, prefer, avoid []string) (rec Record, ok bool, err error)
+	// Running lists the IDs of every Running task.
+	Running(ctx context.Context) ([]string, error)
 	// Cancel moves a Queued task to Cancelled. Running tasks are cancelled by
 	// their worker instead, which then calls Finish.
 	Cancel(ctx context.Context, id string) error

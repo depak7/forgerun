@@ -206,6 +206,16 @@ func (s *Store) RecordPush(ctx context.Context, threadID string, p store.Push) e
 }
 
 func (s *Store) Claim(ctx context.Context) (store.Record, bool, error) {
+	return s.ClaimFor(ctx, nil, nil)
+}
+
+func (s *Store) ClaimFor(ctx context.Context, prefer, avoid []string) (store.Record, bool, error) {
+	if prefer == nil {
+		prefer = []string{}
+	}
+	if avoid == nil {
+		avoid = []string{}
+	}
 	// SKIP LOCKED: rows another worker is claiming right now are skipped
 	// instead of waited on. FROM models joins the model so RETURNING has it.
 	row := s.pool.QueryRow(ctx, `
@@ -213,11 +223,12 @@ func (s *Store) Claim(ctx context.Context) (store.Record, bool, error) {
 		FROM models m, agents a
 		WHERE m.agent_id = t.agent_id AND m.id = t.model_id AND a.id = t.agent_id
 			AND t.state = 'queued' AND t.id = (
-			SELECT id FROM tasks WHERE state = 'queued'
-			ORDER BY created_at, id
+			SELECT id FROM tasks
+			WHERE state = 'queued' AND NOT (thread_id = ANY($2))
+			ORDER BY thread_id = ANY($1) DESC, created_at, id
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1)
-		RETURNING `+selectColumns)
+		RETURNING `+selectColumns, prefer, avoid)
 	rec, err := scanRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Record{}, false, nil
@@ -226,6 +237,14 @@ func (s *Store) Claim(ctx context.Context) (store.Record, bool, error) {
 		return store.Record{}, false, fmt.Errorf("claiming task: %w", err)
 	}
 	return rec, true, nil
+}
+
+func (s *Store) Running(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id FROM tasks WHERE state = 'running'`)
+	if err != nil {
+		return nil, fmt.Errorf("listing running tasks: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
 func (s *Store) Cancel(ctx context.Context, id string) error {
