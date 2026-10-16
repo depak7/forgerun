@@ -58,8 +58,11 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	snapshotBudget := byteSize(20e9)
 	fs.Var(&snapshotBudget, "snapshot-budget", "total disk for snapshots, e.g. 500MB or 20GB; least recently used are deleted first (0 = no limit)")
 	snapshotSweep := fs.Duration("snapshot-sweep", 10*time.Minute, "how often to check snapshot limits and clean up")
+	turnsPerDay := fs.Int("user-turns-per-day", 20, "turns each signed-in user (not admins) may start per 24 hours (0 = no limit)")
+	userLive := fs.Int("user-live", 1, "turns each signed-in user (not admins) may have waiting or running at once (0 = no limit)")
 	dbURL := dbFlag(fs)
 	fs.Parse(args)
+	limits := api.Limits{TurnsPerDay: *turnsPerDay, Live: *userLive}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
@@ -153,7 +156,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	if orchestratorOnly {
 		return orchestrate(ctx, stop, ln, db, log, orchestratorConfig{
 			api: api.Config{Store: db, Agents: agents, Agent: *defaultAgent, DefaultModel: *defaultModel, RequireZDR: *requireZDR,
-				PRs: prs, OutDir: *out, GitHubUser: githubUser, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Log: log},
+				PRs: prs, OutDir: *out, GitHubUser: githubUser, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, Log: log},
 			workerToken: workerToken, publisher: publisher, prTokens: prTokens,
 		})
 	}
@@ -181,7 +184,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	srv := &http.Server{
 		Handler: routes(nil, api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
 			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, OutDir: *out, GitHubUser: githubUser,
-			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Log: log}))),
+			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, Log: log}))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

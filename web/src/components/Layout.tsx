@@ -67,6 +67,7 @@ function StatusStrip() {
           →
         </Link>
       ))}
+      {status?.paused && <span className={styles.missing}>NEW TASKS PAUSED</span>}
       {status?.snapshots.enabled && (
         <span className={styles.stripRight}>
           SNAPSHOTS {formatBytes(status.snapshots.bytes)}

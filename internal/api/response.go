@@ -53,6 +53,8 @@ func errorCode(status int) string {
 		return "conflict"
 	case http.StatusRequestEntityTooLarge:
 		return "payload_too_large"
+	case http.StatusTooManyRequests:
+		return "limit"
 	case http.StatusServiceUnavailable:
 		return "unavailable"
 	default:

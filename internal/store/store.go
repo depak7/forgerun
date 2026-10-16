@@ -187,6 +187,9 @@ type Store interface {
 	// prefer (its open sessions) come first, and tasks of threads in avoid
 	// (open on other workers) are skipped.
 	ClaimFor(ctx context.Context, prefer, avoid []string) (rec Record, ok bool, err error)
+	// UserUsage counts a user's tasks: created since a time, and queued or
+	// running now.
+	UserUsage(ctx context.Context, owner int64, since time.Time) (created, live int, err error)
 	// Running lists the IDs of every Running task.
 	Running(ctx context.Context) ([]string, error)
 	// Cancel moves a Queued task to Cancelled. Running tasks are cancelled by

@@ -962,3 +962,23 @@ func TestClaimFor(t *testing.T) {
 		t.Errorf("running = %v", running)
 	}
 }
+
+func TestUserUsage(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	u, _ := s.SaveUser(ctx, store.User{GitHubID: 9, Login: "carol"})
+	for i, state := range []task.State{task.Queued, task.Succeeded} {
+		tk := task.New("https://github.com/o/r", fmt.Sprint(i))
+		tk.Owner = u.ID
+		s.Create(ctx, tk, "cursor")
+		if state == task.Succeeded {
+			finishTask(t, s, tk.ID, store.Outcome{State: task.Succeeded})
+		}
+	}
+	created, live, err := s.UserUsage(ctx, u.ID, time.Now().Add(-time.Hour))
+	if err != nil || created != 2 || live != 1 {
+		t.Errorf("UserUsage = %d, %d, %v", created, live, err)
+	}
+	if created, _, _ := s.UserUsage(ctx, u.ID, time.Now().Add(time.Hour)); created != 0 {
+		t.Errorf("since the future: %d", created)
+	}
+}

@@ -259,3 +259,44 @@ func TestRepoAccessRefusals(t *testing.T) {
 		})
 	}
 }
+
+// Signed-in users are limited (admins aren't), and an admin can pause new
+// tasks for everyone else.
+func TestLimitsAndPause(t *testing.T) {
+	h, s, _ := authSetup(t, func(c *Config) { c.Limits = Limits{TurnsPerDay: 2, Live: 1} })
+	alice, admin := signIn(t, h, "alice"), signIn(t, h, "depak7")
+	body := `{"repo":"https://github.com/o/r","prompt":"x"}`
+
+	first := decodeTask(t, mustData(t, as(h, alice, "POST", "/api/tasks", body), http.StatusCreated))
+	_, apiErr := decode(t, as(h, alice, "POST", "/api/tasks", body), http.StatusTooManyRequests)
+	if !strings.Contains(apiErr.Message, "waiting or running") || apiErr.Code != "limit" {
+		t.Errorf("second at once: %+v", apiErr)
+	}
+	ctx := context.Background()
+	s.Start(ctx, first.ID)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded})
+	second := decodeTask(t, mustData(t, as(h, alice, "POST", "/api/tasks/"+first.ID+"/followups", `{"prompt":"more"}`), http.StatusCreated))
+	s.Start(ctx, second.ID)
+	s.Finish(ctx, second.ID, store.Outcome{State: task.Succeeded})
+	_, apiErr = decode(t, as(h, alice, "POST", "/api/tasks", body), http.StatusTooManyRequests)
+	if !strings.Contains(apiErr.Message, "your 2 turns for today") {
+		t.Errorf("over the day: %q", apiErr.Message)
+	}
+	mustData(t, as(h, admin, "POST", "/api/tasks", body), http.StatusCreated) // admins aren't limited
+
+	// Paused: others are refused; status says so; resuming lets them in again.
+	decode(t, as(h, alice, "POST", "/api/admin/pause", `{"paused":true}`), http.StatusForbidden)
+	mustData(t, as(h, admin, "POST", "/api/admin/pause", `{"paused":true}`), http.StatusOK)
+	bob := signIn(t, h, "bob")
+	_, apiErr = decode(t, as(h, bob, "POST", "/api/tasks", body), http.StatusServiceUnavailable)
+	if !strings.Contains(apiErr.Message, "paused by the admin") {
+		t.Errorf("paused: %q", apiErr.Message)
+	}
+	var st statusJSON
+	json.Unmarshal(mustData(t, as(h, bob, "GET", "/api/status", ""), http.StatusOK), &st)
+	if !st.Paused || st.Limits.TurnsPerDay != 2 || st.Limits.Live != 1 {
+		t.Errorf("status = paused %v, limits %+v", st.Paused, st.Limits)
+	}
+	mustData(t, as(h, admin, "POST", "/api/admin/pause", `{"paused":false}`), http.StatusOK)
+	mustData(t, as(h, bob, "POST", "/api/tasks", body), http.StatusCreated)
+}

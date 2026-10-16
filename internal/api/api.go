@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/depak7/forgerun/internal/agent"
@@ -48,6 +49,7 @@ type Config struct {
 	MaxSessions  int               // most sessions open at once; 0 = no limit
 	Auth         *Auth             // GitHub sign-in; nil = local mode (no sign-in, everyone is the admin)
 	Workers      Workers           // remote workers; nil = they run in this process
+	Limits       Limits            // per-user limits (signed-in users who aren't admins)
 	Log          *slog.Logger
 }
 
@@ -101,6 +103,8 @@ type Server struct {
 	maxSessions  int
 	auth         *Auth
 	workers      Workers
+	limits       Limits
+	paused       atomic.Bool // an admin paused new tasks
 	outDir       string
 	githubUser   string
 	snapshots    *SnapshotSettings
@@ -110,7 +114,7 @@ type Server struct {
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, workers: cfg.Workers, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, workers: cfg.Workers, limits: cfg.Limits, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
@@ -130,6 +134,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/me", srv.me)
 	mux.HandleFunc("GET /api/repos", srv.listRepos)
 	mux.HandleFunc("GET /api/workers", adminOnly(srv.listWorkers))
+	mux.HandleFunc("POST /api/admin/pause", adminOnly(srv.pause))
 	mux.HandleFunc("GET /auth/github/login", srv.githubLogin)
 	mux.HandleFunc("GET /auth/github/callback", srv.githubCallback)
 	mux.HandleFunc("POST /auth/logout", srv.logout)
@@ -220,6 +225,9 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Plan     bool   `json:"plan"`  // plan first: the agent proposes, changes nothing, and waits
 	}
 	if !decodeBody(w, r, &req) {
+		return
+	}
+	if !s.allowTurn(w, r) {
 		return
 	}
 	if err := validateRepo(req.Repo); err != nil {
@@ -387,6 +395,9 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.allowTurn(w, r) {
+		return
+	}
 	// Explain the thread rules in the user's terms; the store enforces them too.
 	if !parent.State.Terminal() {
 		writeError(w, http.StatusConflict, "task "+parent.ID+" is still "+string(parent.State)+"; follow up when it finishes")
@@ -526,7 +537,12 @@ type statusJSON struct {
 	} `json:"snapshots"`
 	RequireZDR    bool `json:"require_zdr"`    // only zero-data-retention models are accepted
 	RemoteWorkers bool `json:"remote_workers"` // workers run apart (forgerun server + forgerun worker)
-	Sessions      struct {
+	Paused        bool `json:"paused"`         // an admin paused new tasks
+	Limits        struct {
+		TurnsPerDay int `json:"turns_per_day"` // 0 = no limit
+		Live        int `json:"live"`          // queued or running at once; 0 = no limit
+	} `json:"limits"`
+	Sessions struct {
 		Open        int   `json:"open"`
 		Max         int   `json:"max"`          // 0 = no limit
 		IdleSeconds int64 `json:"idle_seconds"` // an idle session closes after this; 0 = never
@@ -540,7 +556,8 @@ type statusJSON struct {
 // status serves GET /api/status.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	var out statusJSON
-	out.RequireZDR, out.RemoteWorkers = s.requireZDR, s.workers != nil
+	out.RequireZDR, out.RemoteWorkers, out.Paused = s.requireZDR, s.workers != nil, s.paused.Load()
+	out.Limits.TurnsPerDay, out.Limits.Live = s.limits.TurnsPerDay, s.limits.Live
 	if s.sessions != nil {
 		out.Sessions.Open = s.sessions.OpenSessions()
 	}
@@ -917,4 +934,53 @@ func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
 		out = append(out, s.workers.Workers()...)
 	}
 	writeData(w, http.StatusOK, out)
+}
+
+// Limits bound what each signed-in user may run, since the server's agent
+// keys pay for it. Admins, and local mode, aren't limited.
+type Limits struct {
+	TurnsPerDay int // turns started in the last 24 hours; 0 = no limit
+	Live        int // turns queued or running at once; 0 = no limit
+}
+
+// allowTurn refuses a new turn when an admin paused new tasks, or the
+// user is over a limit, in their terms.
+func (s *Server) allowTurn(w http.ResponseWriter, r *http.Request) bool {
+	v := viewerOf(r)
+	if s.paused.Load() && !v.Admin {
+		writeError(w, http.StatusServiceUnavailable, "new tasks are paused by the admin for now; try again later")
+		return false
+	}
+	if v.Admin || v.ID == 0 || (s.limits.TurnsPerDay == 0 && s.limits.Live == 0) {
+		return true
+	}
+	created, live, err := s.store.UserUsage(r.Context(), v.ID, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		s.internalError(w, r, err)
+		return false
+	}
+	switch {
+	case s.limits.Live > 0 && live >= s.limits.Live:
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("you already have %d turn(s) waiting or running; wait for it to finish", live))
+		return false
+	case s.limits.TurnsPerDay > 0 && created >= s.limits.TurnsPerDay:
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("you've used your %d turns for today; more tomorrow", s.limits.TurnsPerDay))
+		return false
+	}
+	return true
+}
+
+// pause serves POST /api/admin/pause {"paused": bool}: stop (or resume)
+// taking new tasks. Running ones carry on. It lasts until the server
+// restarts.
+func (s *Server) pause(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Paused bool `json:"paused"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	s.paused.Store(req.Paused)
+	s.log.Warn("new tasks paused by an admin", "paused", req.Paused, "by", viewerOf(r).Login)
+	writeData(w, http.StatusOK, map[string]bool{"paused": req.Paused})
 }

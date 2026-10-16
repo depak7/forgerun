@@ -291,6 +291,23 @@ func (s *Store) ClaimFor(_ context.Context, prefer, avoid []string) (store.Recor
 	return *oldest, true, nil
 }
 
+func (s *Store) UserUsage(_ context.Context, owner int64, since time.Time) (created, live int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.tasks {
+		if r.Owner != owner {
+			continue
+		}
+		if !r.CreatedAt.Before(since) {
+			created++
+		}
+		if r.State == task.Queued || r.State == task.Running {
+			live++
+		}
+	}
+	return created, live, nil
+}
+
 func (s *Store) Running(_ context.Context) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

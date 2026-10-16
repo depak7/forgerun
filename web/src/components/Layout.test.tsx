@@ -15,6 +15,8 @@ const status = {
   tasks: { queued: 0, running: 0 },
   require_zdr: false,
   remote_workers: false,
+  paused: false,
+  limits: { turns_per_day: 20, live: 1 },
   sessions: { open: 0, max: 4, idle_seconds: 1800 },
 };
 const me = (over: object) => ({ signed_in: true, sign_in: true, login: "alice", name: "Alice", avatar_url: "", admin: false, ...over });

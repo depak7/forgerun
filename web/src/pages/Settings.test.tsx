@@ -1,4 +1,4 @@
-import { cleanup, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Status } from "../api/types";
 import { renderPage } from "../test-utils";
@@ -29,6 +29,8 @@ function status(over: Partial<Status> = {}): Status {
     tasks: { queued: 0, running: 0 },
     require_zdr: false,
     remote_workers: false,
+    paused: false,
+    limits: { turns_per_day: 20, live: 1 },
     sessions: { open: 1, max: 4, idle_seconds: 1800 },
     ...over,
   };
@@ -108,6 +110,15 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("deepak-mac")).toBeTruthy();
     expect(screen.getByText("CONNECTED")).toBeTruthy();
     expect(screen.getByText(/1 running · 1 session open of 4/)).toBeTruthy();
+  });
+
+  it("shows the limits and pauses new tasks", async () => {
+    serve(status());
+    renderPage(<SettingsPage />);
+    expect(await screen.findByText(/may have 1 turn waiting or running, and start 20 turns a day/)).toBeTruthy();
+    const fetchMock = globalThis.fetch as unknown as { mock: { calls: [RequestInfo, RequestInit?][] } };
+    fireEvent.click(screen.getByRole("button", { name: /pause new tasks/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u, i]) => u.toString() === "/api/admin/pause" && i?.method === "POST")).toBe(true));
   });
 
   it("says when snapshots are off", async () => {

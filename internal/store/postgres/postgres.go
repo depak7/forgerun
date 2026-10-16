@@ -239,6 +239,16 @@ func (s *Store) ClaimFor(ctx context.Context, prefer, avoid []string) (store.Rec
 	return rec, true, nil
 }
 
+func (s *Store) UserUsage(ctx context.Context, owner int64, since time.Time) (created, live int, err error) {
+	err = s.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE created_at >= $2),
+		count(*) FILTER (WHERE state IN ('queued', 'running'))
+		FROM tasks WHERE owner_id = $1`, owner, since).Scan(&created, &live)
+	if err != nil {
+		return 0, 0, fmt.Errorf("counting tasks of user %d: %w", owner, err)
+	}
+	return created, live, nil
+}
+
 func (s *Store) Running(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id FROM tasks WHERE state = 'running'`)
 	if err != nil {

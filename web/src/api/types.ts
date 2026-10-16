@@ -15,6 +15,8 @@ export interface Status {
   };
   require_zdr: boolean; // only zero-data-retention models are accepted
   remote_workers: boolean; // workers run apart from the orchestrator
+  paused: boolean; // an admin paused new tasks
+  limits: { turns_per_day: number; live: number }; // per signed-in user; 0 = no limit
   sessions: { open: number; max: number; idle_seconds: number }; // 0 = no limit / never
   tasks: { queued: number; running: number };
 }

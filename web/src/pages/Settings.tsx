@@ -1,3 +1,5 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { api } from "../api/client";
 import { useAgents, useMe, useModels, useSnapshots, useStatus, useWorkers } from "../api/queries";
 import type { Agent, Snapshot, Status, WorkerInfo } from "../api/types";
 import { formatBytes, formatDuration, formatWhen, repoName } from "../format";
@@ -50,6 +52,13 @@ export function SettingsPage() {
           <Workers />
         </section>
       )}
+
+      <section className={styles.section} aria-labelledby="intake">
+        <h2 id="intake" className="label">
+          Usage
+        </h2>
+        <div className={styles.card}>{status && <Intake status={status} />}</div>
+      </section>
 
       <section className={styles.section} aria-labelledby="sessions">
         <h2 id="sessions" className="label">
@@ -225,6 +234,30 @@ function Workers() {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// Intake is the per-user limits and the switch that pauses new tasks.
+function Intake({ status }: { status: Status }) {
+  const queryClient = useQueryClient();
+  const toggle = useMutation({
+    mutationFn: (paused: boolean) => api<{ paused: boolean }>("/api/admin/pause", { method: "POST", body: JSON.stringify({ paused }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["status"] }),
+  });
+  const l = status.limits;
+  return (
+    <div className={styles.facts}>
+      <span className={`${styles.tag} ${status.paused ? styles.bad : styles.good}`}>{status.paused ? "PAUSED" : "OPEN"}</span>
+      <span style={{ flex: "1 1 360px" }}>
+        Each signed-in user (not admins) may have {l.live > 0 ? `${l.live} turn${l.live === 1 ? "" : "s"}` : "any number of turns"} waiting
+        or running, and start {l.turns_per_day > 0 ? `${l.turns_per_day} turns` : "unlimited turns"} a day: your agent keys pay
+        for them. {status.paused ? "New tasks are paused for everyone but admins; running ones carry on." : ""}
+      </span>
+      <button type="button" className={styles.button} disabled={toggle.isPending} onClick={() => toggle.mutate(!status.paused)}>
+        {status.paused ? "[ resume new tasks ]" : "[ pause new tasks ]"}
+      </button>
+      {toggle.error && <span className={styles.badText}>{toggle.error.message}</span>}
     </div>
   );
 }
