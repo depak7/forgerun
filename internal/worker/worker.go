@@ -31,6 +31,11 @@ type Pool struct {
 
 	nudge chan struct{}
 
+	// Fetchers, if set, says how a task's repo is fetched: a Fetcher for
+	// repos the VM can't clone itself (private ones), nil for the others.
+	// owner is the task's user (0 = none), whose GitHub access is used.
+	Fetchers func(ctx context.Context, owner int64, repo string) (task.Fetcher, error)
+
 	mu      sync.Mutex
 	running map[string]context.CancelCauseFunc // task ID → cancel, for tasks running here
 }
@@ -107,7 +112,10 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 		AgentID: rec.AgentID, ModelID: rec.Model.ID, Family: rec.Model.Family, Effort: rec.Model.Effort, Plan: rec.Plan}
 	var res task.Result
 	var err error
-	if t.ParentID != "" {
+	if p.Fetchers != nil {
+		t.Fetch, err = p.Fetchers(taskCtx, rec.Owner, rec.Repo)
+	}
+	if err == nil && t.ParentID != "" {
 		err = p.threadContext(taskCtx, rec, &t)
 	}
 	if err == nil {

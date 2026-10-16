@@ -150,6 +150,9 @@ func serveCmd(args []string) error {
 		close(sweepsDone)
 	}
 	pool := worker.New(db, runner, *workers, log)
+	if publisher != nil {
+		pool.Fetchers = repoFetchers(db, auth, publisher, log)
+	}
 	srv := &http.Server{
 		Handler: api.LogRequests(log, routes(api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
 			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, OutDir: *out, GitHubUser: githubUser,
@@ -334,4 +337,26 @@ func signIn(getenv func(string) string, log *slog.Logger) (*api.Auth, error) {
 	log.Info("sign-in with GitHub on", "public_url", public, "admins", strings.Join(admins, ","))
 	return &api.Auth{OAuth: &forge.OAuth{ClientID: id, ClientSecret: secret}, GitHub: &forge.GitHub{},
 		PublicURL: public, Admins: admins, Key: key}, nil
+}
+
+// repoFetchers fetches private repos on this host, with the task owner's
+// GitHub token (or the server's): their VMs never hold a GitHub credential.
+// Public repos are cloned by the VM itself, which is faster.
+func repoFetchers(db store.Store, auth *api.Auth, p *publish.Publisher, log *slog.Logger) func(context.Context, int64, string) (task.Fetcher, error) {
+	return func(ctx context.Context, owner int64, repo string) (task.Fetcher, error) {
+		tok, err := auth.Token(ctx, db, owner)
+		if err != nil {
+			return nil, err
+		}
+		acc, err := p.Access(ctx, repo, tok)
+		if err != nil {
+			// Can't tell (GitHub unreachable?): let the VM try a plain clone.
+			log.Warn("checking whether a repo is private", "repo", repo, "err", err)
+			return nil, nil
+		}
+		if !acc.Private {
+			return nil, nil
+		}
+		return p.Fetcher(tok), nil
+	}
 }

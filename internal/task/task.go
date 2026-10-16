@@ -48,6 +48,9 @@ type Task struct {
 	// ThreadBase is the commit the thread's first turn started from; ""
 	// for a first turn (it starts from the default branch's latest).
 	ThreadBase string
+	// Fetch, if set, gets the repo's code on the host (private repos): the
+	// VM never clones from GitHub itself. nil = the VM clones directly.
+	Fetch Fetcher
 	// History loads the thread's earlier turns, oldest first. It's called
 	// only when the thread's session has to be (re)built; nil = none.
 	History func(ctx context.Context) ([]Turn, error)
@@ -298,9 +301,16 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 		if ss.sb, err = sandbox.New(ctx, t.ID, cfg); err != nil {
 			return nil, err
 		}
-		step("cloning %s", t.Repo)
-		if _, err := ss.sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"clone", "--depth=1", t.Repo, repoDir}}); err != nil {
-			return nil, fmt.Errorf("clone: %w", err)
+		if t.Fetch != nil {
+			step("fetching %s on the host (private repo)", t.Repo)
+			if err := HostClone(ctx, ss.sb, t.Fetch, t.Repo, repoDir); err != nil {
+				return nil, fmt.Errorf("clone: %w", err)
+			}
+		} else {
+			step("cloning %s", t.Repo)
+			if _, err := ss.sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"clone", "--depth=1", t.Repo, repoDir}}); err != nil {
+				return nil, fmt.Errorf("clone: %w", err)
+			}
 		}
 	}
 	var history []Turn
@@ -311,7 +321,7 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 	}
 	if t.ThreadBase != "" {
 		step("rebuilding the thread's work (%d earlier turn(s))", len(history))
-		if err := rebuild(ctx, ss.sb, t.ThreadBase, history); err != nil {
+		if err := rebuild(ctx, ss.sb, t, history); err != nil {
 			return nil, err
 		}
 	}
@@ -477,7 +487,7 @@ func (r *Runner) restore(ctx context.Context, ag agent.Agent, t Task, cfg sandbo
 		return nil
 	}
 	sb, err := r.Snapshots.Restore(ctx, RestoreRequest{
-		TaskID: t.ID, Repo: t.Repo, AgentID: ag.ID(), RepoDir: repoDir, Config: cfg,
+		TaskID: t.ID, Repo: t.Repo, AgentID: ag.ID(), RepoDir: repoDir, Config: cfg, Fetch: t.Fetch,
 	}, step)
 	switch {
 	case errors.Is(err, ErrNoSnapshot):

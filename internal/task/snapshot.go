@@ -30,6 +30,7 @@ type RestoreRequest struct {
 	AgentID string
 	RepoDir string         // checkout inside the VM
 	Config  sandbox.Config // CPUs, memory, lifetime and secrets for the new VM
+	Fetch   Fetcher        // set for private repos: the code comes from the host
 }
 
 // SnapshotRequest says which VM state to keep and how to clean it first.

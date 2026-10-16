@@ -50,12 +50,17 @@ func clip(s string, n int) string {
 
 // rebuild puts a new session's checkout where the thread left off: the
 // thread's start commit, then each earlier turn's changes as a commit.
-func rebuild(ctx context.Context, sb *sandbox.Sandbox, base string, history []Turn) error {
+func rebuild(ctx context.Context, sb *sandbox.Sandbox, t Task, history []Turn) error {
 	git := func(args ...string) error {
 		_, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: append([]string{"-C", repoDir}, args...)})
 		return err
 	}
-	if err := git("fetch", "-q", "--depth=1", "origin", base); err != nil {
+	base := t.ThreadBase
+	if t.Fetch != nil {
+		if _, err := HostFetch(ctx, sb, t.Fetch, t.Repo, base, repoDir); err != nil {
+			return fmt.Errorf("fetching the thread's start commit: %w", err)
+		}
+	} else if err := git("fetch", "-q", "--depth=1", "origin", base); err != nil {
 		return fmt.Errorf("fetching the thread's start commit: %w", err)
 	}
 	if err := git("checkout", "-q", "-B", "forgerun-session", base); err != nil {

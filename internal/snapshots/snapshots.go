@@ -59,7 +59,7 @@ func (m *Manager) Restore(ctx context.Context, req task.RestoreRequest, logf fun
 
 	// A failure here (e.g. the network) doesn't mean the snapshot is bad,
 	// so it's kept; only this VM is discarded.
-	commit, err := update(ctx, sb, req.RepoDir)
+	commit, err := update(ctx, sb, req)
 	if err != nil {
 		sb.Destroy()
 		return nil, err
@@ -159,7 +159,14 @@ func clean(ctx context.Context, sb *sandbox.Sandbox, req task.SnapshotRequest) (
 
 // update brings a restored checkout to the latest commit of the remote's
 // default branch, like a git pull that can't conflict. It returns the commit.
-func update(ctx context.Context, sb *sandbox.Sandbox, dir string) (string, error) {
+func update(ctx context.Context, sb *sandbox.Sandbox, req task.RestoreRequest) (string, error) {
+	dir := req.RepoDir
+	if req.Fetch != nil { // a private repo: the host fetches, the VM has no credentials
+		if _, err := task.HostFetch(ctx, sb, req.Fetch, req.Repo, "", dir); err != nil {
+			return "", err
+		}
+		return resetToDefault(ctx, sb, dir)
+	}
 	// Ask the remote which branch is the default, in case it changed
 	// (e.g. master renamed to main) since the snapshot was taken.
 	if _, err := git(ctx, sb, dir, "remote", "set-head", "origin", "--auto"); err != nil {

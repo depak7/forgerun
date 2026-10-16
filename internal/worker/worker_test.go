@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -287,5 +288,50 @@ func TestFollowUpContext(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("follow-up never ran")
+	}
+}
+
+type fakeFetcher struct{}
+
+func (fakeFetcher) Fetch(context.Context, string, string) ([]byte, string, error) {
+	return nil, "main", nil
+}
+
+// The worker asks how each task's repo is fetched, for its owner; an error
+// there fails the task before any VM starts.
+func TestFetchers(t *testing.T) {
+	s := memory.New(fakeDefault)
+	ok, broken := task.New("https://github.com/o/private", "x"), task.New("https://github.com/o/broken", "y")
+	ok.Owner = 7
+	for _, tk := range []task.Task{ok, broken} {
+		if err := s.Create(context.Background(), tk, "fake"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := make(chan task.Task, 2)
+	p := New(s, fakeExec(func(_ context.Context, tk task.Task) (task.Result, error) {
+		got <- tk
+		return task.Result{}, nil
+	}), 1, slog.New(slog.DiscardHandler))
+	p.poll = 10 * time.Millisecond
+	p.Fetchers = func(_ context.Context, owner int64, repo string) (task.Fetcher, error) {
+		if strings.HasSuffix(repo, "broken") {
+			return nil, errors.New("no access to " + repo)
+		}
+		if owner != 7 {
+			return nil, errors.New("wrong owner")
+		}
+		return fakeFetcher{}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	waitState(t, s, ok.ID, task.Succeeded)
+	if tk := <-got; tk.Fetch == nil {
+		t.Error("the task wasn't given its fetcher")
+	}
+	rec := waitState(t, s, broken.ID, task.Failed)
+	if !strings.Contains(rec.Error, "no access") {
+		t.Errorf("error = %q", rec.Error)
 	}
 }

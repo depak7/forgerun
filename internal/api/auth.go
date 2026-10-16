@@ -268,17 +268,23 @@ func (s *Server) userToken(r *http.Request) (forge.Token, error) {
 
 // tokenOf is a user's GitHub token; the zero Token for user 0 (local mode).
 func (s *Server) tokenOf(ctx context.Context, userID int64) (forge.Token, error) {
-	if s.auth == nil || userID == 0 {
+	return s.auth.Token(ctx, s.store, userID)
+}
+
+// Token is a user's GitHub token, decrypted. Without sign-in (a nil Auth),
+// or for user 0, it's the zero Token: the server's own is used.
+func (a *Auth) Token(ctx context.Context, st store.Store, userID int64) (forge.Token, error) {
+	if a == nil || userID == 0 {
 		return forge.Token{}, nil
 	}
-	u, err := s.store.GetUser(ctx, userID)
+	u, err := st.GetUser(ctx, userID)
 	if err != nil {
 		return forge.Token{}, err
 	}
 	if u.Token == nil {
 		return forge.Token{}, errors.New("no GitHub token on file: sign out and in again")
 	}
-	raw, err := s.auth.Key.Open(u.Token)
+	raw, err := a.Key.Open(u.Token)
 	if err != nil {
 		return forge.Token{}, err
 	}
