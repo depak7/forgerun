@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -56,7 +57,7 @@ func usage() {
                                             runs turns for a forgerun server; dials out, nothing to open
   forgerun run   -repo <git-url> -prompt <task> [-agent cursor] [-model m] [-effort e] [-timeout 15m] [-out out]
 
-The database URL defaults to $FORGERUN_DATABASE_URL, then the docker-compose dev database.
+The database URL defaults to $FORGERUN_DATABASE_URL, then $DATABASE_URL, then the docker-compose dev database.
 Agents read their credential when a task needs it: CURSOR_API_KEY (cursor),
 CLAUDE_CODE_OAUTH_TOKEN (claude-code, from claude setup-token). serve also
 needs GITHUB_TOKEN to push threads' branches and open pull requests.
@@ -122,11 +123,9 @@ func runCmd(args []string) error {
 
 const defaultDatabaseURL = "postgres://forgerun:forgerun@localhost:5433/forgerun?sslmode=disable"
 
-// dbFlag registers -db on fs. Precedence: flag, then env, then default.
+// dbFlag registers -db on fs. Precedence: flag, then FORGERUN_DATABASE_URL,
+// then DATABASE_URL (what many platforms set), then the dev database.
 func dbFlag(fs *flag.FlagSet) *string {
-	def := os.Getenv("FORGERUN_DATABASE_URL")
-	if def == "" {
-		def = defaultDatabaseURL
-	}
-	return fs.String("db", def, "Postgres URL (env FORGERUN_DATABASE_URL)")
+	def := cmp.Or(os.Getenv("FORGERUN_DATABASE_URL"), os.Getenv("DATABASE_URL"), defaultDatabaseURL)
+	return fs.String("db", def, "Postgres URL (env FORGERUN_DATABASE_URL or DATABASE_URL)")
 }

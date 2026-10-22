@@ -4,6 +4,7 @@ import { useAgents, useLogTail, useNow, useStatus, useThreads } from "../api/que
 import type { Thread } from "../api/types";
 import { StateLabel } from "../components/StateLabel";
 import { agentChain, formatElapsed, formatWhen, repoName, shortID } from "../format";
+import { keyState } from "../lib/keys";
 import styles from "./Tasks.module.css";
 
 type Filter = "all" | "attention" | "succeeded" | "failed";
@@ -193,8 +194,9 @@ function modelLabel(model: string, effort: string): string {
 function FirstRun() {
   const { data: agents } = useAgents();
   const { data: status } = useStatus();
-  const ready = agents?.filter((a) => a.credential?.set).map((a) => a.id) ?? [];
-  const missing = agents?.filter((a) => a.credential && !a.credential.set) ?? [];
+  const ready = agents?.filter((a) => keyState(a) === "set").map((a) => a.id) ?? [];
+  const free = agents?.filter((a) => keyState(a) === "optional").map((a) => a.id) ?? [];
+  const missing = agents?.filter((a) => keyState(a) === "missing") ?? [];
   return (
     <section className={styles.firstRun} aria-label="Get started">
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -206,7 +208,8 @@ function FirstRun() {
         <li>
           <span className={styles.stepNum}>1</span>
           <span>
-            <strong style={{ fontWeight: 500 }}>Credentials:</strong> {ready.length > 0 ? `${ready.join(", ")} ready.` : "no agent has a credential yet."}{" "}
+            <strong style={{ fontWeight: 500 }}>Credentials:</strong> {ready.length > 0 ? `${ready.join(", ")} ready.` : free.length > 0 ? "" : "no agent has a credential yet."}{" "}
+            {free.length > 0 && `${free.join(", ")} ready with free models (no key needed). `}
             {missing.map((a) => (
               <span key={a.id}>
                 {a.id} needs <span className="mono">{a.credential?.name}</span> on the server.{" "}

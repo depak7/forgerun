@@ -12,7 +12,15 @@ afterEach(() => {
 const agents = [
   { id: "claude-code", name: "Claude Code", default_model: "sonnet", runnable: true, credential: { name: "CLAUDE_CODE_OAUTH_TOKEN", set: false, optional: false } },
   { id: "cursor", name: "Cursor", default_model: "auto", runnable: true, credential: { name: "CURSOR_API_KEY", set: true, optional: false } },
+  { id: "opencode", name: "OpenCode", default_model: "big-pickle", runnable: true, credential: { name: "OPENCODE_API_KEY", set: false, optional: true } },
 ];
+const opencodeModels = {
+  agent: "opencode", runnable: true, default: "big-pickle",
+  models: [
+    { id: "big-pickle", name: "Big Pickle (free)", efforts: [], default_effort: "", thinking: false, fast: false, zdr: false, keyless: true },
+    { id: "kimi-k3", name: "Kimi K3", efforts: [], default_effort: "", thinking: false, fast: false, zdr: false, keyless: false },
+  ],
+};
 const cursorModels = {
   agent: "cursor", runnable: true, default: "auto",
   models: [
@@ -37,6 +45,7 @@ function server() {
       }
       if (url.startsWith("/api/agents")) return ok(agents);
       if (url.startsWith("/api/models?agent=cursor")) return ok(cursorModels);
+      if (url.startsWith("/api/models?agent=opencode")) return ok(opencodeModels);
       if (url.startsWith("/api/models")) return ok({ agent: "claude-code", runnable: true, default: "sonnet", models: [{ id: "sonnet", name: "Sonnet", efforts: ["low", "high"], default_effort: "", thinking: false, fast: false, zdr: false, keyless: false }] });
       if (url.startsWith("/api/status")) return ok(status);
       if (url.startsWith("/api/snapshots")) return ok(snapshots);
@@ -76,6 +85,28 @@ describe("NewTaskPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /claude-code/ }));
     expect(await screen.findByText(/claude-code has no credential on this server: set CLAUDE_CODE_OAUTH_TOKEN/)).toBeTruthy();
     expect(runButton().disabled).toBe(true);
+  });
+
+  // A missing key blocks only models that need it: free ones run without.
+  it("runs free models without the agent's key", async () => {
+    const posted = server();
+    renderNew("/tasks/new?prompt=Add%20a%20test&repo=https://github.com/depak7/playground");
+    fireEvent.click(await screen.findByRole("button", { name: /opencode/ }));
+    expect(screen.getByText("KEY OPTIONAL")).toBeTruthy();
+    expect(screen.getByText(/Free models run without a key; the others need OPENCODE_API_KEY/)).toBeTruthy();
+    const model = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    await waitFor(() => expect(model.value).toBe("big-pickle"));
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+
+    fireEvent.change(model, { target: { value: "kimi-k3" } });
+    expect(await screen.findByText(/kimi-k3 needs OPENCODE_API_KEY on the server: pick a free model, or set the key/)).toBeTruthy();
+    expect(runButton().disabled).toBe(true);
+
+    fireEvent.change(model, { target: { value: "big-pickle" } });
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+    fireEvent.click(runButton());
+    expect(await screen.findByText("thread page")).toBeTruthy();
+    expect(posted).toEqual([{ repo: "https://github.com/depak7/playground", prompt: "Add a test", agent: "opencode", model: "big-pickle" }]);
   });
 
   it("checks the repo as you type and needs a GitHub repo to push to", async () => {

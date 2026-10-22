@@ -158,6 +158,9 @@
 .keyMissing {
   color: var(--failed);
 }
+.keyOptional {
+  color: var(--faint);
+}
 .agentNote {
   font-size: 13px;
   color: var(--muted);

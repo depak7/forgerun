@@ -160,3 +160,22 @@ func TestSignInSettings(t *testing.T) {
 		t.Error("a public URL without a scheme should be refused")
 	}
 }
+
+// Without -addr, serve stays on this machine, unless the host assigns a
+// port (PORT): then it listens on every interface.
+func TestDefaultAddr(t *testing.T) {
+	env := func(port string) func(string) string {
+		return func(k string) string {
+			if k == "PORT" {
+				return port
+			}
+			return ""
+		}
+	}
+	if got := defaultAddr(env("")); got != "127.0.0.1:8080" {
+		t.Errorf("no PORT: %q", got)
+	}
+	if got := defaultAddr(env("31337")); got != "0.0.0.0:31337" {
+		t.Errorf("PORT=31337: %q", got)
+	}
+}

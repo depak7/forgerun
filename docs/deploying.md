@@ -82,6 +82,31 @@ thread sticks to the worker holding its VM.
   token). Anyone with the worker token can pretend to be a worker and receive turns
   (including private repos' fetch tokens): rotate it if it leaks.
 
+## The orchestrator on a container platform
+
+Any platform that builds and runs a Dockerfile works for the orchestrator (it runs no VMs),
+with a managed Postgres from the same platform or elsewhere. Build from the repo's
+`Dockerfile`; the image runs `forgerun server`. Set:
+
+| Variable | |
+|---|---|
+| `FORGERUN_DATABASE_URL` (or `DATABASE_URL`) | the Postgres URL, e.g. `…?sslmode=require`. With a connection pooler in front, use its direct (non-pooled) address. |
+| `FORGERUN_PUBLIC_URL` | the app's `https://…` address; the GitHub OAuth App's URLs follow it, as in step 1 |
+| `FORGERUN_SECRET_KEY`, `FORGERUN_WORKER_TOKEN` | `openssl rand -hex 32` each |
+| `GITHUB_TOKEN`, `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `FORGERUN_ADMINS` | as in step 1 |
+| `PORT` | usually set by the platform; forgerun listens on `0.0.0.0:$PORT` (8080 if unset) |
+
+The migrations run on the first start. Workers connect as in step 2, with
+`FORGERUN_SERVER` set to the app's address.
+
+- **Run exactly one instance.** The orchestrator keeps the connected workers in memory.
+- **Disk:** turn logs are files under `/home/forgerun/out`. On platforms whose disk is
+  wiped on restart, finished turns' logs are lost then (their diffs, replies and threads
+  are in Postgres); mount a volume there to keep them.
+- **Sleeping instances:** a connected worker reports in every 2 seconds, which counts as
+  traffic. On a database that bills compute time, note that the orchestrator checks the
+  queue every few seconds while a worker waits for work.
+
 ## All on one machine instead
 
 `forgerun serve` runs the orchestrator and the VMs in one process. To share it from your

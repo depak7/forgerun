@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAgents, useModels, useRepos, useSnapshots, useStatus, useThreads } from "../api/queries";
+import { blockedByKey, keyLabel, keyState } from "../lib/keys";
 import type { Agent, ModelFamily, NewTask, Task } from "../api/types";
 import { checkRepo, isGitHub, normalizeRepo } from "../format";
 import styles from "./NewTask.module.css";
@@ -29,7 +30,7 @@ export function NewTaskPage() {
   const [planFirst, setPlanFirst] = useState(false);
 
   // Defaults once data arrives: the most recent repo, and the first agent
-  // with its credential set.
+  // that can run here (its key set, or free models that need none).
   useEffect(() => {
     if (repo === "" && threads && threads.length > 0) setRepo(threads[0].repo);
     // Only when threads first arrive: never overwrite what the user typed.
@@ -37,7 +38,7 @@ export function NewTaskPage() {
   useEffect(() => {
     if (agentId === "" && agents && agents.length > 0) {
       const runnable = agents.filter((a) => a.runnable);
-      setAgentId((runnable.find((a) => a.credential?.set) ?? runnable[0] ?? agents[0]).id);
+      setAgentId((runnable.find((a) => keyState(a) !== "missing") ?? runnable[0] ?? agents[0]).id);
     }
   }, [agents, agentId]);
 
@@ -78,7 +79,7 @@ export function NewTaskPage() {
     },
   });
 
-  const blocked = blockedReason(repoProblem, repo, agent, prompt, family);
+  const blocked = blockedReason(repoProblem, repo, agent, prompt, family, fam);
   const submit = () => {
     if (!blocked && !create.isPending) create.mutate(body);
   };
@@ -163,7 +164,8 @@ export function NewTaskPage() {
             <div className={styles.agents}>
               {agents?.map((a) => {
                 const on = a.id === agentId;
-                const set = a.credential?.set ?? false;
+                const key = keyState(a);
+                const set = key !== "missing";
                 return (
                   <button
                     key={a.id}
@@ -175,7 +177,9 @@ export function NewTaskPage() {
                   >
                     <span className={styles.agentTop}>
                       <span>{a.id}</span>
-                      <span className={`${styles.key} ${set ? styles.keySet : styles.keyMissing}`}>{set ? "KEY SET" : "KEY MISSING"}</span>
+                      <span className={`${styles.key} ${key === "set" ? styles.keySet : key === "optional" ? styles.keyOptional : styles.keyMissing}`}>
+                        {keyLabel(key) || "NO KEY NEEDED"}
+                      </span>
                     </span>
                     <span className={styles.agentNote}>{agentNote(a)}</span>
                   </button>
@@ -292,22 +296,33 @@ export function NewTaskPage() {
 }
 
 // blockedReason explains why the task can't be started yet, or "".
-function blockedReason(repoProblem: string, repo: string, agent: Agent | undefined, prompt: string, family: string): string {
+// fam is the chosen model: one that needs no key runs without the agent's.
+function blockedReason(
+  repoProblem: string,
+  repo: string,
+  agent: Agent | undefined,
+  prompt: string,
+  family: string,
+  fam: ModelFamily | undefined,
+): string {
   if (repoProblem) return repoProblem;
   if (!isGitHub(repo)) return "forgerun pushes each task's changes to a branch, so the repo must be on github.com.";
   if (!agent) return "Pick an agent.";
   if (!agent.runnable) return `forgerun has no adapter for ${agent.id}.`;
-  if (agent.credential && !agent.credential.set) {
-    return `${agent.id} has no credential on this server: set ${agent.credential.name}, or pick another agent.`;
-  }
   if (!family) return "Pick a model.";
+  if (blockedByKey(agent, fam)) {
+    return keyState(agent) === "optional"
+      ? `${family} needs ${agent.credential?.name} on the server: pick a free model, or set the key.`
+      : `${agent.id} has no credential on this server: set ${agent.credential?.name}, or pick another agent.`;
+  }
   if (prompt.trim() === "") return "Say what the agent should do.";
   return "";
 }
 
 function agentNote(a: Agent): string {
   if (!a.runnable) return "Not available on this server.";
-  if (a.credential && !a.credential.set) return `Needs ${a.credential.name} on the server.`;
+  if (keyState(a) === "optional") return `Free models run without a key; the others need ${a.credential?.name}.`;
+  if (keyState(a) === "missing") return `Needs ${a.credential?.name} on the server.`;
   return `${a.name}; default model ${a.default_model}.`;
 }
 

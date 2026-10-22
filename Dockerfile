@@ -19,11 +19,16 @@ RUN CGO_ENABLED=1 go build -tags webui -trimpath -ldflags="-s -w" -o /forgerun .
 
 FROM debian:bookworm-slim
 # git pushes branches; ca-certificates for GitHub over HTTPS.
+# The log folder is writable by any user: some platforms run the container
+# as their own user, not this one.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* \
- && useradd --create-home --uid 10001 forgerun
+ && useradd --create-home --uid 10001 forgerun \
+ && mkdir -p /home/forgerun/out && chmod 1777 /home/forgerun/out
 COPY --from=go /forgerun /usr/local/bin/forgerun
 USER forgerun
 WORKDIR /home/forgerun
+# It listens on 0.0.0.0:$PORT; platforms that assign a port override it.
+ENV PORT=8080
 EXPOSE 8080
 ENTRYPOINT ["forgerun"]
-CMD ["server", "-addr", "0.0.0.0:8080", "-out", "/home/forgerun/out"]
+CMD ["server", "-out", "/home/forgerun/out"]

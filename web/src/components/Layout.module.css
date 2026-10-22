@@ -106,6 +106,9 @@
 .missing {
   color: var(--failed);
 }
+.optional {
+  color: var(--faint);
+}
 
 .main {
   flex: 999 1 560px;

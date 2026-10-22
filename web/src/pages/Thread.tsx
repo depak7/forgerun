@@ -8,6 +8,7 @@ import { StateLabel } from "../components/StateLabel";
 import { agentChain, branchURL, formatElapsed, formatWhen, repoName, shortID } from "../format";
 import { parsePatch } from "../lib/diff";
 import { Summary } from "../lib/summary";
+import { blockedByKey, keyState } from "../lib/keys";
 import styles from "./Thread.module.css";
 
 const isLive = (t: Task) => t.state === "queued" || t.state === "running";
@@ -356,7 +357,7 @@ function Composer(props: {
     );
   }
   const agentInfo = agents?.find((a) => a.id === agent);
-  const missingKey = agentInfo?.credential && !agentInfo.credential.set;
+  const missingKey = blockedByKey(agentInfo, models?.models.find((m) => m.id === model));
   const canSend = props.draft.trim() !== "" && model !== "" && !missingKey && !send.isPending;
   return (
     <div className={styles.composerWrap}>
@@ -399,7 +400,7 @@ function Composer(props: {
               .map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.id}
-                  {a.credential && !a.credential.set ? " (key missing)" : ""}
+                  {keyState(a) === "missing" ? " (key missing)" : keyState(a) === "optional" ? " (free models only)" : ""}
                 </option>
               ))}
           </select>

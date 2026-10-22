@@ -5,6 +5,7 @@ import { useAgents, useMe, useStatus, useThreads } from "../api/queries";
 import type { Me } from "../api/types";
 import { LandingPage } from "../pages/Landing";
 import { formatBytes, shortID } from "../format";
+import { keyState } from "../lib/keys";
 import styles from "./Layout.module.css";
 
 // The frame around every page: the status strip, the sidebar, and the page
@@ -121,10 +122,8 @@ function Sidebar({ me }: { me: Me }) {
             .map((a) => (
               <span key={a.id} className={styles.credRow}>
                 <span>{a.id}</span>
-                <span
-                  className={a.credential?.set ? styles.set : styles.missing}
-                >
-                  {a.credential?.set ? "SET" : "MISSING"}
+                <span className={keyState(a) === "set" ? styles.set : keyState(a) === "optional" ? styles.optional : styles.missing}>
+                  {keyState(a) === "set" ? "SET" : keyState(a) === "optional" ? "OPTIONAL" : "MISSING"}
                 </span>
               </span>
             ))}

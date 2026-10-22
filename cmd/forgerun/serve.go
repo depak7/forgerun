@@ -43,7 +43,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 		name = "server"
 	}
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
-	addr := fs.String("addr", "127.0.0.1:8080", "address to listen on")
+	addr := fs.String("addr", defaultAddr(os.Getenv), "address to listen on (with env PORT set: 0.0.0.0:$PORT)")
 	workers := fs.Int("workers", 2, "how many tasks may run at once")
 	timeout := fs.Duration("timeout", 15*time.Minute, "max time per turn")
 	sessionIdle := fs.Duration("session-idle", 30*time.Minute, "close a thread's session (its VM) after this long without a message (0 = never)")
@@ -323,6 +323,15 @@ func checkModels(ctx context.Context, db store.Store, agentID, defaultModel stri
 		return "", 0, fmt.Errorf("agent %q has no usable default model: %w", agentID, err)
 	}
 	return v.ID, len(cat.Families()), nil
+}
+
+// defaultAddr is where serve listens without -addr: this machine only, or
+// every interface on $PORT when the platform assigns one.
+func defaultAddr(getenv func(string) string) string {
+	if port := getenv("PORT"); port != "" {
+		return "0.0.0.0:" + port
+	}
+	return "127.0.0.1:8080"
 }
 
 // isLoopback reports whether addr only accepts connections from this machine.
