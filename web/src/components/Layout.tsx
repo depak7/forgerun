@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { useAgents, useMe, useStatus, useThreads } from "../api/queries";
 import type { Me } from "../api/types";
-import { SignInPage } from "../pages/SignIn";
+import { LandingPage } from "../pages/Landing";
 import { formatBytes, shortID } from "../format";
 import styles from "./Layout.module.css";
 
@@ -12,7 +12,7 @@ import styles from "./Layout.module.css";
 export function Layout() {
   const { data: me } = useMe();
   if (!me) return null; // a moment, while we learn who's signed in
-  if (!me.signed_in) return <SignInPage />;
+  if (!me.signed_in) return <LandingPage />;
   return (
     <div className={styles.app}>
       <StatusStrip />
