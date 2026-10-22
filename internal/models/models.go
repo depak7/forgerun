@@ -24,6 +24,7 @@ type Variant struct {
 	IsDefault    bool // used when a request omits effort
 	AgentDefault bool // the variant used when nothing names a model (one per agent)
 	ZDR          bool
+	Keyless      bool // runs without the agent's credential (e.g. a free model)
 }
 
 // Choice is what a request asks for. Empty strings and nil pointers mean
@@ -44,6 +45,7 @@ type Family struct {
 	Thinking      bool     // a thinking variant exists
 	Fast          bool     // a fast variant exists
 	ZDR           bool     // every variant has zero data retention
+	Keyless       bool     // every variant runs without the agent's credential
 }
 
 // ErrInvalidChoice means no variant matches the request.
@@ -85,7 +87,7 @@ func NewCatalog(agent string, vs []Variant) *Catalog {
 		f, ok := c.families[v.Family]
 		if !ok {
 			f = &family{
-				Family:   Family{ID: v.Family, ZDR: true},
+				Family:   Family{ID: v.Family, ZDR: true, Keyless: true},
 				variants: map[key]Variant{},
 				defaults: map[bool]string{},
 			}
@@ -96,6 +98,7 @@ func NewCatalog(agent string, vs []Variant) *Catalog {
 		f.Thinking = f.Thinking || v.Thinking
 		f.Fast = f.Fast || v.Fast
 		f.ZDR = f.ZDR && v.ZDR
+		f.Keyless = f.Keyless && v.Keyless
 		if v.IsDefault && !v.Fast {
 			f.defaults[v.Thinking] = v.Effort
 		}

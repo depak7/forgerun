@@ -942,3 +942,54 @@ func TestListSnapshots(t *testing.T) {
 		t.Errorf("off: %s", rec.Body)
 	}
 }
+
+// A model that needs no key (a free one) runs without the agent's key;
+// the agent's other models still need it. In split mode, a worker that can
+// run the agent is enough for a keyless model.
+func TestKeylessModels(t *testing.T) {
+	free := models.Variant{ID: "other-free", AgentID: "other-agent", Family: "other-free", Name: "Free", IsDefault: true, Keyless: true}
+	serve := func(workers Workers) http.Handler {
+		cfg := Config{Store: memory.New(append(slices.Clone(testModels), free)...), Pool: &fakePool{}, Agent: "cursor", Log: slog.New(slog.DiscardHandler),
+			Agents: agent.NewSet(agent.StaticCredentials{"CURSOR_API_KEY": "k"}, &agent.Cursor{}, otherAgent{})}
+		if workers != nil {
+			cfg.Workers = workers
+		}
+		return New(cfg)
+	}
+	const freeTask = `{"repo":"https://x.com/r","prompt":"p","agent":"other-agent","model":"other-free"}`
+	const paidTask = `{"repo":"https://x.com/r","prompt":"p","agent":"other-agent","model":"other-x"}`
+
+	h := serve(nil)
+	if tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", freeTask), http.StatusCreated)); tk.ModelID != "other-free" {
+		t.Errorf("free task on model %q", tk.ModelID)
+	}
+	if _, apiErr := decode(t, do(h, "POST", "/api/tasks", paidTask), http.StatusBadRequest); !strings.Contains(apiErr.Message, "set OTHER_KEY") {
+		t.Errorf("paid task without a key: %q", apiErr.Message)
+	}
+	// The listing says the key is optional, and which models need none.
+	var agents []agentJSON
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/agents", ""), http.StatusOK), &agents)
+	for _, a := range agents {
+		if want := a.ID == "other-agent"; a.Credential != nil && a.Credential.Optional != want {
+			t.Errorf("%s: optional = %v, want %v", a.ID, a.Credential.Optional, want)
+		}
+	}
+	data, _ := decode(t, do(h, "GET", "/api/models?agent=other-agent", ""), http.StatusOK)
+	var list struct{ Models []familyJSON }
+	json.Unmarshal(data, &list)
+	for _, f := range list.Models {
+		if f.Keyless != (f.ID == "other-free") {
+			t.Errorf("model %s: keyless = %v", f.ID, f.Keyless)
+		}
+	}
+
+	// Split mode: a worker with the adapter but no key runs the free model only.
+	h = serve(fakeWorkers{{Name: "w", Agents: []string{"cursor"}, Adapters: []string{"cursor", "other-agent"}}})
+	mustData(t, do(h, "POST", "/api/tasks", freeTask), http.StatusCreated)
+	if _, apiErr := decode(t, do(h, "POST", "/api/tasks", paidTask), http.StatusBadRequest); !strings.Contains(apiErr.Message, "no connected worker has a key for other-agent") {
+		t.Errorf("paid task, no worker with the key: %q", apiErr.Message)
+	}
+	// A worker without the adapter at all can't run even the free model.
+	h = serve(fakeWorkers{{Name: "w", Agents: []string{"cursor"}, Adapters: []string{"cursor"}}})
+	decode(t, do(h, "POST", "/api/tasks", freeTask), http.StatusBadRequest)
+}

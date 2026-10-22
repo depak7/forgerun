@@ -424,7 +424,8 @@ func (s *Server) Workers() []api.WorkerInfo {
 	s.init()
 	var out []api.WorkerInfo
 	for n, wk := range s.live() {
-		out = append(out, api.WorkerInfo{Name: n, LastSeen: wk.lastSeen, Agents: wk.hb.Agents,
+		// Lists, never null: a worker without keys reports none.
+		out = append(out, api.WorkerInfo{Name: n, LastSeen: wk.lastSeen, Agents: orEmpty(wk.hb.Agents), Adapters: orEmpty(wk.hb.Adapters),
 			Sessions: len(wk.hb.Sessions), MaxSessions: wk.hb.MaxSessions, Running: len(wk.hb.Running)})
 	}
 	slices.SortFunc(out, func(a, b api.WorkerInfo) int { return strings.Compare(a.Name, b.Name) })
@@ -498,4 +499,12 @@ func newID() string {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// orEmpty is ss, or an empty list for nil, so it encodes as [] not null.
+func orEmpty(ss []string) []string {
+	if ss == nil {
+		return []string{}
+	}
+	return ss
 }

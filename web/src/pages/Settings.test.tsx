@@ -10,17 +10,17 @@ afterEach(() => {
 });
 
 const agents = [
-  { id: "claude-code", name: "Claude Code", default_model: "sonnet", runnable: true, credential: { name: "CLAUDE_CODE_OAUTH_TOKEN", set: true } },
-  { id: "cursor", name: "Cursor", default_model: "auto", runnable: true, credential: { name: "CURSOR_API_KEY", set: false } },
+  { id: "claude-code", name: "Claude Code", default_model: "sonnet", runnable: true, credential: { name: "CLAUDE_CODE_OAUTH_TOKEN", set: true, optional: false } },
+  { id: "cursor", name: "Cursor", default_model: "auto", runnable: true, credential: { name: "CURSOR_API_KEY", set: false, optional: false } },
 ];
 const claudeModels = {
   agent: "claude-code", runnable: true, default: "sonnet",
   models: [
-    { id: "sonnet", name: "Sonnet", efforts: ["low", "medium", "high"], default_effort: "medium", thinking: true, fast: false, zdr: true },
-    { id: "haiku", name: "Haiku", efforts: [], default_effort: "", thinking: false, fast: true, zdr: false },
+    { id: "sonnet", name: "Sonnet", efforts: ["low", "medium", "high"], default_effort: "medium", thinking: true, fast: false, zdr: true, keyless: false },
+    { id: "haiku", name: "Haiku", efforts: [], default_effort: "", thinking: false, fast: true, zdr: false, keyless: false },
   ],
 };
-const cursorModels = { agent: "cursor", runnable: true, default: "auto", models: [{ id: "auto", name: "Auto", efforts: [], default_effort: "", thinking: false, fast: false, zdr: true }] };
+const cursorModels = { agent: "cursor", runnable: true, default: "auto", models: [{ id: "auto", name: "Auto", efforts: [], default_effort: "", thinking: false, fast: false, zdr: true, keyless: false }] };
 
 function status(over: Partial<Status> = {}): Status {
   return {
@@ -40,14 +40,15 @@ const snapshots = [
 ];
 
 // serve answers the page's requests; the model list depends on ?agent=.
+// extra adds routes or replaces them.
 function serve(st: Status, extra: Record<string, unknown> = {}) {
   const routes: Record<string, unknown> = {
-    ...extra,
     "/api/agents": agents,
     "/api/status": st,
     "/api/snapshots": snapshots,
     "/api/models?agent=claude-code": claudeModels,
     "/api/models?agent=cursor": cursorModels,
+    ...extra,
   };
   vi.stubGlobal(
     "fetch",
@@ -80,6 +81,23 @@ describe("SettingsPage", () => {
     expect(screen.getByText("2 models · 1 with ZDR · default sonnet")).toBeTruthy();
   });
 
+  it("says a key is optional when free models run without it", async () => {
+    const opencode = { id: "opencode", name: "OpenCode", default_model: "big-pickle", runnable: true, credential: { name: "OPENCODE_API_KEY", set: false, optional: true } };
+    const opencodeModels = {
+      agent: "opencode", runnable: true, default: "big-pickle",
+      models: [
+        { id: "big-pickle", name: "Big Pickle (free)", efforts: [], default_effort: "", thinking: false, fast: false, zdr: false, keyless: true },
+        { id: "kimi-k3", name: "Kimi K3", efforts: [], default_effort: "", thinking: false, fast: false, zdr: false, keyless: false },
+      ],
+    };
+    serve(status(), { "/api/agents": [opencode], "/api/models?agent=opencode": opencodeModels });
+    renderPage(<SettingsPage />);
+    expect(await screen.findByText("KEY OPTIONAL")).toBeTruthy();
+    expect(screen.queryByText("KEY MISSING")).toBeNull();
+    expect(screen.getByText(/Free models run without it/)).toBeTruthy();
+    expect(await screen.findByText("2 models · 0 with ZDR · 1 need no key · default big-pickle")).toBeTruthy();
+  });
+
   it("explains pull requests that are off", async () => {
     serve(status({ pull_requests: { enabled: false, github_user: "" } }));
     renderPage(<SettingsPage />);
@@ -104,12 +122,19 @@ describe("SettingsPage", () => {
   });
 
   it("lists connected workers when they run apart", async () => {
-    const routes = { "/api/workers": [{ name: "deepak-mac", last_seen: new Date().toISOString(), agents: ["claude-code", "cursor"], sessions: 1, max_sessions: 4, running: 1 }] };
+    const routes = { "/api/workers": [{ name: "deepak-mac", last_seen: new Date().toISOString(), agents: ["claude-code", "cursor"], adapters: ["claude-code", "cursor", "opencode"], sessions: 1, max_sessions: 4, running: 1 }] };
     serve(status({ remote_workers: true }), routes);
     renderPage(<SettingsPage />);
     expect(await screen.findByText("deepak-mac")).toBeTruthy();
     expect(screen.getByText("CONNECTED")).toBeTruthy();
     expect(screen.getByText(/1 running · 1 session open of 4/)).toBeTruthy();
+  });
+
+  it("says when a worker has no agent keys", async () => {
+    const routes = { "/api/workers": [{ name: "bare", last_seen: new Date().toISOString(), agents: [], adapters: ["opencode"], sessions: 0, max_sessions: 4, running: 0 }] };
+    serve(status({ remote_workers: true }), routes);
+    renderPage(<SettingsPage />);
+    expect(await screen.findByText("no agent keys · models that need none")).toBeTruthy();
   });
 
   it("shows the limits and pauses new tasks", async () => {

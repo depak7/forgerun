@@ -15,8 +15,8 @@ const status = {
   tasks: { queued: 0, running: 1 },
 };
 const agents = [
-  { id: "claude-code", name: "Claude Code", default_model: "sonnet", runnable: true, credential: { name: "CLAUDE_CODE_OAUTH_TOKEN", set: false } },
-  { id: "cursor", name: "Cursor", default_model: "auto", runnable: true, credential: { name: "CURSOR_API_KEY", set: true } },
+  { id: "claude-code", name: "Claude Code", default_model: "sonnet", runnable: true, credential: { name: "CLAUDE_CODE_OAUTH_TOKEN", set: false, optional: false } },
+  { id: "cursor", name: "Cursor", default_model: "auto", runnable: true, credential: { name: "CURSOR_API_KEY", set: true, optional: false } },
 ];
 
 function task(over: Partial<Task>): Task {

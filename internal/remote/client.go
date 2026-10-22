@@ -215,11 +215,13 @@ func (u *logUpload) Close() error {
 }
 
 // Heartbeats reports to the orchestrator every few seconds until ctx ends,
-// and carries out the commands it sends back.
-func (c *Client) Heartbeats(ctx context.Context, pool *worker.Pool, runner *task.Runner, agents []string, maxSessions int) {
+// and carries out the commands it sends back. agents are the agents this
+// worker has keys for, adapters every agent it can run (models that need no
+// key run on any of them).
+func (c *Client) Heartbeats(ctx context.Context, pool *worker.Pool, runner *task.Runner, agents, adapters []string, maxSessions int) {
 	connected := false
 	for {
-		hb := Heartbeat{Worker: c.Name, Agents: agents, MaxSessions: maxSessions, Sessions: runner.Sessions(), Running: pool.Running()}
+		hb := Heartbeat{Worker: c.Name, Agents: agents, Adapters: adapters, MaxSessions: maxSessions, Sessions: runner.Sessions(), Running: pool.Running()}
 		var reply HeartbeatReply
 		hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		_, err := c.postJSON(hctx, pathHeartbeat, hb, &reply)

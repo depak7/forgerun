@@ -72,16 +72,18 @@ func workerCmd(args []string) error {
 
 	// Agent keys live on the worker: the orchestrator never needs them.
 	agents := agent.NewSet(agent.EnvCredentials{}, agent.Builtin()...)
-	var ids []string // the agents this worker has keys for: what it tells the orchestrator
+	// What it tells the orchestrator: the agents it has keys for, and every
+	// agent it can run, for models that need no key (OpenCode's free ones).
+	var ids []string
 	for _, id := range agents.IDs() {
 		if err := agents.Check(ctx, id); err != nil {
-			log.Warn("agent has no credential on this worker; it won't be offered from here", "agent", id, "err", err)
+			log.Warn("agent has no credential on this worker; only its models that need no key run here", "agent", id, "err", err)
 			continue
 		}
 		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
-		return errors.New("this worker has no agent keys (CURSOR_API_KEY, CLAUDE_CODE_OAUTH_TOKEN): it couldn't run anything")
+		log.Warn("this worker has no agent keys: it runs only models that need none")
 	}
 	if err := sandbox.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
@@ -115,7 +117,7 @@ func workerCmd(args []string) error {
 	pool.Fetchers = client.Fetchers
 	heartbeatsDone := make(chan struct{})
 	go func() {
-		client.Heartbeats(ctx, pool, runner, ids, *maxSessions)
+		client.Heartbeats(ctx, pool, runner, ids, agents.IDs(), *maxSessions)
 		close(heartbeatsDone)
 	}()
 	go runner.RunSessions(ctx)

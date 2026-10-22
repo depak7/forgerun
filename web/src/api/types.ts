@@ -26,7 +26,8 @@ export interface Agent {
   name: string;
   default_model: string;
   runnable: boolean;
-  credential: { name: string; set: boolean } | null;
+  // optional: some of the agent's models (e.g. free ones) run without it
+  credential: { name: string; set: boolean; optional: boolean } | null;
 }
 
 export interface Task {
@@ -77,6 +78,7 @@ export interface ModelFamily {
   thinking: boolean;
   fast: boolean;
   zdr: boolean;
+  keyless: boolean; // runs without the agent's key (e.g. a free model)
 }
 
 export interface ModelList {
@@ -137,7 +139,8 @@ export interface Repo {
 export interface WorkerInfo {
   name: string;
   last_seen: string;
-  agents: string[];
+  agents: string[]; // agents it has keys for
+  adapters: string[]; // every agent it can run; models that need no key run on these
   sessions: number;
   max_sessions: number;
   running: number;

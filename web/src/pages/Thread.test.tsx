@@ -23,14 +23,14 @@ function task(over: Partial<Task>): Task {
 }
 
 const agents = [
-  { id: "claude-code", name: "Claude Code", default_model: "sonnet", runnable: true, credential: { name: "CLAUDE_CODE_OAUTH_TOKEN", set: true } },
-  { id: "cursor", name: "Cursor", default_model: "auto", runnable: true, credential: { name: "CURSOR_API_KEY", set: true } },
+  { id: "claude-code", name: "Claude Code", default_model: "sonnet", runnable: true, credential: { name: "CLAUDE_CODE_OAUTH_TOKEN", set: true, optional: false } },
+  { id: "cursor", name: "Cursor", default_model: "auto", runnable: true, credential: { name: "CURSOR_API_KEY", set: true, optional: false } },
 ];
 const models = (agent: string) => ({
   agent, runnable: true, default: agent === "cursor" ? "auto" : "sonnet",
   models: agent === "cursor"
-    ? [{ id: "auto", name: "Auto", efforts: [], default_effort: "", thinking: false, fast: false, zdr: true }]
-    : [{ id: "sonnet", name: "Sonnet", efforts: [], default_effort: "", thinking: false, fast: false, zdr: false }],
+    ? [{ id: "auto", name: "Auto", efforts: [], default_effort: "", thinking: false, fast: false, zdr: true, keyless: false }]
+    : [{ id: "sonnet", name: "Sonnet", efforts: [], default_effort: "", thinking: false, fast: false, zdr: false, keyless: false }],
 });
 const patch = "diff --git a/x_test.go b/x_test.go\n--- a/x_test.go\n+++ b/x_test.go\n@@ -1,1 +1,2 @@\n package x\n+// new test\n";
 

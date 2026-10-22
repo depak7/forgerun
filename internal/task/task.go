@@ -42,6 +42,7 @@ type Task struct {
 	ModelID  string // exact agent model id; "" or "auto" lets the agent choose
 	Family   string // the model's family, e.g. "opus"; "" if unknown
 	Effort   string // the model's effort, e.g. "high"; "" = the agent's default
+	Keyless  bool   // the model runs without the agent's credential
 	// Plan makes this a plan-only turn: the agent reads and proposes, and
 	// any changes it makes are discarded.
 	Plan bool
@@ -196,7 +197,11 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 		step("running %s agent (model: %s)", ag.ID(), cmp.Or(t.ModelID, "auto"))
 	}
 	reply := &tailBuffer{max: maxReply}
-	if err := r.runAgent(ctx, ag, sb, req, io.MultiWriter(logs, reply), step); err != nil {
+	out := io.MultiWriter(logs, reply) // the reply is the end of the output
+	if _, ok := ag.(agent.Replier); ok {
+		req.Reply, out = reply, logs // the agent says what its reply was
+	}
+	if err := r.runAgent(ctx, ag, sb, req, out, step); err != nil {
 		res.Reply = reply.String()
 		// Keep the session in step with the database: a failed turn
 		// records no changes, so it keeps none.
@@ -300,7 +305,7 @@ func (r *Runner) acquire(ctx context.Context, ag agent.Agent, t Task, step func(
 // plus every earlier turn's changes, each as a commit.
 func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *session, step func(string, ...any)) ([]Turn, error) {
 	// The credential is fetched now, for this session only.
-	secrets, err := r.Agents.Secrets(ctx, ag)
+	secrets, err := r.Agents.Secrets(ctx, ag, t.Keyless)
 	if err != nil {
 		return nil, err
 	}

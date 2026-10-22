@@ -297,7 +297,7 @@ func (s *Store) transition(ctx context.Context, id string, from, to task.State, 
 // modelColumns is a model row; agent_default is derived from its agent's
 // default_model_id. Queries alias models as m and agents as a.
 const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, m.fast, m.is_default,
-	COALESCE(m.id = a.default_model_id, false), m.zdr`
+	COALESCE(m.id = a.default_model_id, false), m.zdr, m.keyless`
 
 // selectColumns is the task (aliased t) plus its model.
 const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.diff IS NOT NULL,
@@ -392,7 +392,7 @@ func (s *Store) ListModels(ctx context.Context) ([]models.Variant, error) {
 	}
 	vs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (models.Variant, error) {
 		var v models.Variant
-		err := row.Scan(&v.ID, &v.AgentID, &v.Family, &v.Name, &v.Effort, &v.Thinking, &v.Fast, &v.IsDefault, &v.AgentDefault, &v.ZDR)
+		err := row.Scan(&v.ID, &v.AgentID, &v.Family, &v.Name, &v.Effort, &v.Thinking, &v.Fast, &v.IsDefault, &v.AgentDefault, &v.ZDR, &v.Keyless)
 		return v, err
 	})
 	if err != nil {
@@ -532,7 +532,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary,
 		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &owner, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
-		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR)
+		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR, &rec.Model.Keyless)
 	if err != nil {
 		return store.Record{}, err
 	}

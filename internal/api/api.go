@@ -68,7 +68,8 @@ type PRs interface {
 type WorkerInfo struct {
 	Name        string    `json:"name"`
 	LastSeen    time.Time `json:"last_seen"`
-	Agents      []string  `json:"agents"` // agents it has keys for
+	Agents      []string  `json:"agents"`   // agents it has keys for
+	Adapters    []string  `json:"adapters"` // every agent it can run; models that need no key run on these
 	Sessions    int       `json:"sessions"`
 	MaxSessions int       `json:"max_sessions"`
 	Running     int       `json:"running"`
@@ -255,7 +256,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, ok := s.resolveModel(w, r, agentID, models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast})
-	if !ok {
+	if !ok || !s.checkKey(w, r, agentID, v) {
 		return
 	}
 
@@ -322,9 +323,8 @@ func (s *Server) resolveModel(w http.ResponseWriter, r *http.Request, agentID st
 	return v, true
 }
 
-// checkAgent makes sure a task can run on agentID now: forgerun has an
-// adapter for it, it's enabled, and its credential is configured. It writes
-// the error response itself if not.
+// checkAgent makes sure forgerun has an adapter for agentID and it's
+// enabled. It writes the error response itself if not.
 func (s *Server) checkAgent(w http.ResponseWriter, r *http.Request, agentID string) bool {
 	if _, err := s.agents.Get(agentID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -339,14 +339,31 @@ func (s *Server) checkAgent(w http.ResponseWriter, r *http.Request, agentID stri
 		s.internalError(w, r, err)
 		return false
 	}
-	// Checked now so the user hears at once, not after the task waits in the queue.
+	return true
+}
+
+// checkKey makes sure a task on model v can run now: its agent's credential
+// is configured, unless the model runs without one. Checked when the task
+// is created so the user hears at once, not after it waits in the queue. It
+// writes the error response itself if not.
+func (s *Server) checkKey(w http.ResponseWriter, r *http.Request, agentID string, v models.Variant) bool {
 	if s.workers != nil {
 		// Agent keys live on the workers: ask what they reported.
-		if live := s.workers.Workers(); len(live) > 0 && !workersCanRun(live, agentID) {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("no connected worker has a key for %s; set it on a worker, or pick another agent", agentID))
+		live := s.workers.Workers()
+		if len(live) == 0 {
+			return true // no worker connected yet: the turn waits in the queue
+		}
+		if v.Keyless && workersHave(live, agentID) {
+			return true
+		}
+		if !workersCanRun(live, agentID) {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("no connected worker has a key for %s; set it on a worker, or pick another agent or model", agentID))
 			return false
 		}
-		return true // no worker connected yet: the turn waits in the queue
+		return true
+	}
+	if v.Keyless {
+		return true
 	}
 	if err := s.agents.Check(r.Context(), agentID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -359,6 +376,17 @@ func (s *Server) checkAgent(w http.ResponseWriter, r *http.Request, agentID stri
 func workersCanRun(workers []WorkerInfo, agentID string) bool {
 	for _, w := range workers {
 		if slices.Contains(w.Agents, agentID) {
+			return true
+		}
+	}
+	return false
+}
+
+// workersHave reports whether any of the workers has an adapter for an
+// agent, key or not: enough for models that need no key.
+func workersHave(workers []WorkerInfo, agentID string) bool {
+	for _, w := range workers {
+		if slices.Contains(w.Adapters, agentID) || slices.Contains(w.Agents, agentID) {
 			return true
 		}
 	}
@@ -435,7 +463,7 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, ok := s.resolveModel(w, r, agentID, models.Choice{Model: req.Model, Effort: req.Effort, Thinking: req.Thinking, Fast: req.Fast})
-	if !ok {
+	if !ok || !s.checkKey(w, r, agentID, v) {
 		return
 	}
 	t := task.New(parent.Repo, req.Prompt)
@@ -754,18 +782,26 @@ type agentJSON struct {
 type credentialJSON struct {
 	Name string `json:"name"` // e.g. "CLAUDE_CODE_OAUTH_TOKEN"; "" if the agent needs none
 	Set  bool   `json:"set"`
+	// Optional: some of the agent's models run without it (e.g. free ones).
+	Optional bool `json:"optional"`
 }
 
 // credential reports an agent's credential, or nil without an adapter.
-func (s *Server) credential(ctx context.Context, agentID string) *credentialJSON {
+// vs are the enabled models, to tell whether any runs without it.
+func (s *Server) credential(ctx context.Context, agentID string, vs []models.Variant) *credentialJSON {
 	a, err := s.agents.Get(agentID)
 	if err != nil {
 		return nil
 	}
+	c := &credentialJSON{Name: a.Credential(), Optional: slices.ContainsFunc(vs, func(v models.Variant) bool {
+		return v.AgentID == agentID && v.Keyless
+	})}
 	if s.workers != nil { // keys live on the workers
-		return &credentialJSON{Name: a.Credential(), Set: workersCanRun(s.workers.Workers(), agentID)}
+		c.Set = workersCanRun(s.workers.Workers(), agentID)
+	} else {
+		c.Set = s.agents.Check(ctx, agentID) == nil
 	}
-	return &credentialJSON{Name: a.Credential(), Set: s.agents.Check(ctx, agentID) == nil}
+	return c
 }
 
 func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
@@ -783,7 +819,7 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 	for _, a := range agents {
 		cat := models.NewCatalog(a.ID, vs)
 		out = append(out, agentJSON{ID: a.ID, Name: a.Name, DefaultModel: s.defaultFamily(a.ID, cat), Runnable: s.runnable(a.ID),
-			Credential: s.credential(r.Context(), a.ID)})
+			Credential: s.credential(r.Context(), a.ID, vs)})
 	}
 	writeData(w, http.StatusOK, out)
 }
@@ -796,6 +832,7 @@ type familyJSON struct {
 	Thinking      bool     `json:"thinking"`
 	Fast          bool     `json:"fast"`
 	ZDR           bool     `json:"zdr"`
+	Keyless       bool     `json:"keyless"` // runs without the agent's credential
 }
 
 // listModels serves GET /api/models?agent=<id>; without ?agent= it lists
@@ -824,7 +861,7 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 			efforts = []string{} // encode as [], never null
 		}
 		out = append(out, familyJSON{ID: f.ID, Name: f.Name, Efforts: efforts, DefaultEffort: f.DefaultEffort,
-			Thinking: f.Thinking, Fast: f.Fast, ZDR: f.ZDR})
+			Thinking: f.Thinking, Fast: f.Fast, ZDR: f.ZDR, Keyless: f.Keyless})
 	}
 	writeData(w, http.StatusOK, struct {
 		Agent    string       `json:"agent"`

@@ -48,6 +48,7 @@ FORGERUN_SERVER=https://forgerun.example.com
 FORGERUN_WORKER_TOKEN=…                     # the same value as on the server
 CURSOR_API_KEY=…
 CLAUDE_CODE_OAUTH_TOKEN=…                   # from: claude setup-token
+OPENCODE_API_KEY=…                          # optional: OpenCode's free models need none
 ENV
 chmod 600 ~/.forgerun-worker.env
 set -a && . ~/.forgerun-worker.env && set +a && caffeinate -i ./forgerun worker

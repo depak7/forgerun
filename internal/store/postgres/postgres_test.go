@@ -320,11 +320,17 @@ func TestSeededModelsAreReachable(t *testing.T) {
 	if len(vs) < 200 {
 		t.Fatalf("only %d models; is the seed migration applied?", len(vs))
 	}
-	wantDefault := map[string]string{"cursor": "auto", "claude-code": "sonnet"} // agents.default_model_id
+	wantDefault := map[string]string{"cursor": "auto", "claude-code": "sonnet", "opencode": "big-pickle"} // agents.default_model_id
 	for agentID, want := range wantDefault {
 		cat := models.NewCatalog(agentID, vs)
 		if cat.DefaultFamily() != want {
 			t.Errorf("%s default family = %q, want %q", agentID, cat.DefaultFamily(), want)
+		}
+	}
+	// Only OpenCode's free models run without a key; the default is one of them.
+	for _, v := range vs {
+		if want := v.AgentID == "opencode" && strings.HasSuffix(v.Name, "(free)"); v.Keyless != want {
+			t.Errorf("%s/%s: keyless = %v, want %v", v.AgentID, v.ID, v.Keyless, want)
 		}
 	}
 	// Every seeded variant can be chosen through its own agent's catalog.

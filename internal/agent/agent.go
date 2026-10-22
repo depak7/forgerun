@@ -27,6 +27,10 @@ type Request struct {
 	// its own read-only mode if it has one. forgerun discards any changes
 	// a read-only run makes anyway.
 	ReadOnly bool
+	// Reply receives what the agent finally said, for agents that are
+	// Repliers; nil = not wanted. Others leave it alone, and their reply is
+	// the end of their output.
+	Reply io.Writer
 }
 
 // Agent edits the repository at req.Dir according to req.Prompt, streaming its
@@ -59,4 +63,11 @@ type Agent interface {
 // Check for it with a type assertion: if c, ok := a.(Continuer); ok { ... }
 type Continuer interface {
 	Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string) (string, error)
+}
+
+// Replier is an optional Agent capability, for agents whose output mixes
+// what they say with the tools they run: Run writes the agent's final
+// words to Request.Reply when it's set, as well as everything to logs.
+type Replier interface {
+	WritesReply()
 }

@@ -10,14 +10,14 @@ afterEach(() => {
 });
 
 const agents = [
-  { id: "claude-code", name: "Claude Code", default_model: "sonnet", runnable: true, credential: { name: "CLAUDE_CODE_OAUTH_TOKEN", set: false } },
-  { id: "cursor", name: "Cursor", default_model: "auto", runnable: true, credential: { name: "CURSOR_API_KEY", set: true } },
+  { id: "claude-code", name: "Claude Code", default_model: "sonnet", runnable: true, credential: { name: "CLAUDE_CODE_OAUTH_TOKEN", set: false, optional: false } },
+  { id: "cursor", name: "Cursor", default_model: "auto", runnable: true, credential: { name: "CURSOR_API_KEY", set: true, optional: false } },
 ];
 const cursorModels = {
   agent: "cursor", runnable: true, default: "auto",
   models: [
-    { id: "auto", name: "Auto", efforts: [], default_effort: "", thinking: false, fast: false, zdr: true },
-    { id: "claude-opus-5-5", name: "Claude Opus 5.5 1M", efforts: ["medium", "high"], default_effort: "medium", thinking: false, fast: true, zdr: true },
+    { id: "auto", name: "Auto", efforts: [], default_effort: "", thinking: false, fast: false, zdr: true, keyless: false },
+    { id: "claude-opus-5-5", name: "Claude Opus 5.5 1M", efforts: ["medium", "high"], default_effort: "medium", thinking: false, fast: true, zdr: true, keyless: false },
   ],
 };
 const status = { pull_requests: { enabled: true, github_user: "depak7" }, snapshots: { enabled: true, count: 1, bytes: 1, budget_bytes: 0 }, tasks: { queued: 0, running: 0 } };
@@ -37,7 +37,7 @@ function server() {
       }
       if (url.startsWith("/api/agents")) return ok(agents);
       if (url.startsWith("/api/models?agent=cursor")) return ok(cursorModels);
-      if (url.startsWith("/api/models")) return ok({ agent: "claude-code", runnable: true, default: "sonnet", models: [{ id: "sonnet", name: "Sonnet", efforts: ["low", "high"], default_effort: "", thinking: false, fast: false, zdr: false }] });
+      if (url.startsWith("/api/models")) return ok({ agent: "claude-code", runnable: true, default: "sonnet", models: [{ id: "sonnet", name: "Sonnet", efforts: ["low", "high"], default_effort: "", thinking: false, fast: false, zdr: false, keyless: false }] });
       if (url.startsWith("/api/status")) return ok(status);
       if (url.startsWith("/api/snapshots")) return ok(snapshots);
       if (url.startsWith("/api/threads")) return ok([]);

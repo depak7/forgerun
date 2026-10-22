@@ -4,9 +4,9 @@ Run coding agents in the cloud — each in its own microVM — and talk to them
 like a teammate: give a task, read the diff, ask for changes, and push a
 branch or open a pull request only when you're happy.
 
-forgerun is a single Go binary with a web UI. It runs [Cursor CLI](https://cursor.com/cli)
-and [Claude Code](https://www.anthropic.com/claude-code) today; agents are
-pluggable.
+forgerun is a single Go binary with a web UI. It runs [Cursor CLI](https://cursor.com/cli),
+[Claude Code](https://www.anthropic.com/claude-code) and [OpenCode](https://opencode.ai)
+today; agents are pluggable.
 
 - **Isolated:** every thread gets its own [microsandbox](https://github.com/superradcompany/microsandbox)
   microVM. The agent can install, build and test whatever it needs.
@@ -119,8 +119,9 @@ first start; the agent images are pulled the first time an agent runs.
 | `GITHUB_TOKEN` | Required. A fine-grained token with *Contents* and *Pull requests* read/write on the repos you'll use. |
 | `CURSOR_API_KEY` | For the `cursor` agent. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | For `claude-code`; the output of `claude setup-token` (Pro/Max subscription). |
+| `OPENCODE_API_KEY` | Optional, for `opencode`'s paid models: a key from an [OpenCode Console](https://opencode.ai/console) service account ("Inference only"). Its free models need no key. |
 
-An agent without its key is still listed; only its tasks are refused.
+An agent without its key is still listed; only its tasks are refused, except on models that need no key.
 
 **Sign-in (optional).** Without these, forgerun runs in local mode: no accounts, everything
 is yours. With them, people sign in with GitHub and see only their own threads.

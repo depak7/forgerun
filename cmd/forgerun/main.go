@@ -96,6 +96,9 @@ func runCmd(args []string) error {
 	r := &task.Runner{Agents: agents, DefaultAgent: *agentID, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: os.Stdout}
 	t := task.New(*repo, *prompt)
 	t.ModelID, t.Family, t.Effort = *model, *model, *effort
+	// No models table here to say which models need the agent's key: run
+	// without one if it's missing, and let the agent report it if needed.
+	t.Keyless = true
 	res, err := r.Run(ctx, t)
 	r.CloseAll() // one turn only: destroy its session's VM
 	if res.LogPath != "" {

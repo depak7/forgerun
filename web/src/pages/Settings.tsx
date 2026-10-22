@@ -91,6 +91,7 @@ export function SettingsPage() {
 
 function AgentRow({ agent: a }: { agent: Agent }) {
   const set = a.credential?.set ?? true; // no credential needed = nothing missing
+  const optional = !set && !!a.credential?.optional; // its free models run anyway
   return (
     <div className={styles.row}>
       <div className={styles.agentName}>
@@ -101,7 +102,9 @@ function AgentRow({ agent: a }: { agent: Agent }) {
         {a.credential ? (
           <>
             <code>{a.credential.name}</code>
-            <span className={`${styles.tag} ${set ? styles.good : styles.bad}`}>{set ? "KEY SET" : "KEY MISSING"}</span>
+            <span className={`${styles.tag} ${set ? styles.good : optional ? styles.dim : styles.bad}`}>
+              {set ? "KEY SET" : optional ? "KEY OPTIONAL" : "KEY MISSING"}
+            </span>
           </>
         ) : (
           <span className={styles.sub}>needs no key</span>
@@ -112,6 +115,10 @@ function AgentRow({ agent: a }: { agent: Agent }) {
           <span className={styles.sub}>no adapter on this server</span>
         ) : set ? (
           <span className={styles.sub}>default model {a.default_model}</span>
+        ) : optional ? (
+          <span className={styles.sub}>
+            Free models run without it. For the others, add <code>{a.credential?.name}=…</code> to <code>.env</code> and restart.
+          </span>
         ) : (
           <span className={styles.fix}>
             Add <code>{a.credential?.name}=…</code> to <code>.env</code> and restart. Other agents still work.
@@ -127,13 +134,14 @@ function AgentRow({ agent: a }: { agent: Agent }) {
 function AgentModels({ agent, requireZDR }: { agent: Agent; requireZDR: boolean }) {
   const { data, error } = useModels(agent.id);
   const zdr = data?.models.filter((m) => m.zdr).length ?? 0;
+  const keyless = data?.models.filter((m) => m.keyless).length ?? 0;
   return (
     <details className={`${styles.card} ${styles.models}`}>
       <summary className={styles.cardHead}>
         <span className="mono">{agent.id}</span>
         {data && (
           <span className={styles.sub}>
-            {data.models.length} model{data.models.length === 1 ? "" : "s"} · {zdr} with ZDR · default {data.default}
+            {data.models.length} model{data.models.length === 1 ? "" : "s"} · {zdr} with ZDR{keyless > 0 && ` · ${keyless} need no key`} · default {data.default}
           </span>
         )}
       </summary>
@@ -224,7 +232,9 @@ function Workers() {
           </div>
           <div className={styles.agentKey}>
             <span className={`${styles.tag} ${styles.good}`}>CONNECTED</span>
-            <span className={styles.sub}>{w.agents.join(", ")}</span>
+            <span className={styles.sub}>
+              {w.agents?.length ? w.agents.join(", ") : "no agent keys · models that need none"}
+            </span>
           </div>
           <div className={styles.agentState}>
             <span className={styles.sub}>

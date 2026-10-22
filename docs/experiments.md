@@ -396,6 +396,71 @@ answer reach forgerun's text output?
 forgerun discards any changes a read-only turn makes anyway. A reply with a `## Questions`
 heading and no changes marks the turn as waiting for the user.
 
+## 12. OpenCode with its own models
+
+**Question.** Can OpenCode run unattended in our VM on OpenCode's own hosted models
+(`opencode/…`), with free models needing no key and paid ones using a key that never enters
+the VM? Do follow-ups, read-only turns and summaries work like the other agents?
+
+**Test** (`out/opencode-exp-vm.sh`, phases A–E): `opencode-ai@1.19.3` installed with npm in
+the Cursor image (Node 22), a small repo with a bug. The free model `opencode/big-pickle`
+with no key at all; the paid `opencode/deepseek-v4.1-flash` with `OPENCODE_API_KEY` as a
+microsandbox secret for `opencode.ai` only (the workspace had no credit yet). The key is
+from an OpenCode Console service account with "Inference only" permission.
+
+**Result.**
+- **Free models need no key**, but only from the OpenCode CLI: direct API calls to free
+  models are refused ("free tier can only be used from within OpenCode"), keyed or not.
+  In the VM, `big-pickle` fixed the bug, wrote `test.js` and ran it with node.
+- **Paid models read `OPENCODE_API_KEY` from the environment** (`opencode auth list` shows
+  it under Environment). The VM held only the placeholder (`$MSB…`, 21 chars); the request
+  reached OpenCode and failed with `402 Insufficient account funds`, the same as a direct
+  call with the real key, so the proxy swapped it in. No key: `401 Missing API key`.
+- **Unattended:** `opencode run --auto` approves every tool call (edits, shell). Stdin closed.
+- **Follow-ups:** `-c` continues the latest session in the directory; it remembered the task.
+- **Read-only:** `--agent plan` (built in) read the repo, wrote a plan with two open
+  questions, and changed nothing. A summary with `--agent plan -c` was accurate (what was
+  asked, what was done, what wasn't) and changed nothing.
+- **Errors exit 1** and print `Error: <message>` (an API error with no credit). With
+  `--format json` they're an event `{"type":"error", …}`; a normal run streams
+  `step_start` / `text` / `tool` / `step_finish` events with token counts.
+- **Output streams** in default format: each tool call and edit is printed as it happens.
+- **Speed:** OpenCode starts in under a second; a one-word reply from the free model took
+  13–35s and the bug-fix task 164s, all of it waiting on the model. Free models are slow.
+- **Missing tool:** its grep tool needs `ripgrep` ("ripgrep execution failed"); it fell back
+  to reading files.
+- **State:** `~/.local/share/opencode` (sessions in `opencode.db`, a `snapshot/` git store,
+  logs; 3.8 MB), `~/.config/opencode` (63 MB: a `node_modules` it installs on first run),
+  `~/.cache/opencode` (5.8 MB: `models.json`, `bin/`), `~/.local/state/opencode`. It also
+  writes a 40-byte `.git/opencode` file (a project id), which is outside the diff.
+- Other options seen: `-m provider/model`, `--variant` (reasoning effort),
+  `--format json`, `--title`.
+
+- The default output has colour codes even without a terminal, and mixes tool calls with
+  what the agent says. `--format json` gives one event per line: `text` (the agent's words),
+  `tool_use` (`part.tool`, `part.state.{status,title,input,output,error}`; a failed tool has
+  status `error` and its message in `error`), `step_start`/`step_finish`, and `error`.
+- The 63 MB first-run download is the plugin package `@opencode-ai/plugin` (same version as
+  the CLI) installed into `~/.config/opencode`; installed there at build time, a run doesn't
+  fetch it again. `OPENCODE_DISABLE_AUTOUPDATE` and `OPENCODE_DISABLE_LSP_DOWNLOAD` stop
+  downloads during a task.
+- `--` before the prompt works: a prompt starting with `--` is taken as the message.
+  `--agent plan` with `--auto` still edits nothing (it only ran `read` and `ls`).
+
+**Decision.**
+- Adapter `opencode`: image with the CLI, its plugin package and ripgrep preinstalled; run
+  `opencode run --format json --auto --model opencode/<model> -- <prompt>` with `HOME=/root`,
+  stdin closed, auto-update and LSP downloads off; `--continue` for follow-ups;
+  `--agent plan` for read-only turns and the summary.
+- The adapter turns the JSON events into a plain log (`→ edit math.js`, `$ command` and its
+  output, the agent's words) and reports what the agent said after its last tool call as
+  the reply (`agent.Replier`). An `error` event fails the turn with its message.
+- Credential `OPENCODE_API_KEY` for `opencode.ai`, **optional**: free models run without it;
+  a paid model without it is refused before the VM starts.
+- StatePaths: `~/.local/share/opencode`, `~/.local/state/opencode`, `.git/opencode` in the
+  repo; the config and cache dirs hold no chat and stay (they make runs faster).
+- Models: only `opencode/…` for now.
+
 ---
 
 ## Researched, not yet tested: Claude Code authentication

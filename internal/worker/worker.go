@@ -134,7 +134,7 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 
 	log.Info("task started", "id", rec.ID, "repo", rec.Repo, "thread", rec.ThreadID)
 	t := task.Task{ID: rec.ID, ThreadID: rec.ThreadID, ParentID: rec.ParentID, Repo: rec.Repo, Prompt: rec.Prompt,
-		AgentID: rec.AgentID, ModelID: rec.Model.ID, Family: rec.Model.Family, Effort: rec.Model.Effort, Plan: rec.Plan}
+		AgentID: rec.AgentID, ModelID: rec.Model.ID, Family: rec.Model.Family, Effort: rec.Model.Effort, Keyless: rec.Model.Keyless, Plan: rec.Plan}
 	var res task.Result
 	var err error
 	if p.Fetchers != nil {

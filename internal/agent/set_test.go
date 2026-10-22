@@ -11,7 +11,7 @@ import (
 func TestSet(t *testing.T) {
 	ctx := context.Background()
 	s := NewSet(StaticCredentials{"CURSOR_API_KEY": "k"}, Builtin()...)
-	if ids := s.IDs(); !slices.Equal(ids, []string{"claude-code", "cursor"}) {
+	if ids := s.IDs(); !slices.Equal(ids, []string{"claude-code", "cursor", "opencode"}) {
 		t.Errorf("IDs = %v", ids)
 	}
 	if _, err := s.Get("nope"); !errors.Is(err, ErrUnknownAgent) {
@@ -19,7 +19,7 @@ func TestSet(t *testing.T) {
 	}
 
 	cursor, _ := s.Get("cursor")
-	secrets, err := s.Secrets(ctx, cursor)
+	secrets, err := s.Secrets(ctx, cursor, false)
 	if err != nil || len(secrets) != 1 || secrets[0].Value != "k" {
 		t.Errorf("cursor secrets = %+v, %v", secrets, err)
 	}
@@ -48,7 +48,29 @@ func TestEnvCredentialsAreReadWhenNeeded(t *testing.T) {
 	}
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "later")
 	a, _ := s.Get("claude-code")
-	if secrets, err := s.Secrets(ctx, a); err != nil || secrets[0].Value != "later" {
+	if secrets, err := s.Secrets(ctx, a, false); err != nil || secrets[0].Value != "later" {
 		t.Errorf("after setting it: %+v, %v", secrets, err)
+	}
+}
+
+// A model that runs without the agent's key (a free model) gets no error
+// when the key is missing, and still gets the key when it's set: a later
+// turn in the same VM may use a model that needs it.
+func TestSecretsForKeylessModels(t *testing.T) {
+	ctx := context.Background()
+	oc := &OpenCode{}
+	none := NewSet(StaticCredentials{}, oc)
+	if secrets, err := none.Secrets(ctx, oc, true); err != nil || len(secrets) != 0 {
+		t.Errorf("keyless, no key: %+v, %v", secrets, err)
+	}
+	if _, err := none.Secrets(ctx, oc, false); !errors.Is(err, ErrNoCredential) {
+		t.Errorf("needs a key, no key: %v", err)
+	}
+	if _, err := NewSet(nil, oc).Secrets(ctx, oc, true); err != nil {
+		t.Errorf("keyless, no credential source: %v", err)
+	}
+	keyed := NewSet(StaticCredentials{"OPENCODE_API_KEY": "k"}, oc)
+	if secrets, err := keyed.Secrets(ctx, oc, true); err != nil || len(secrets) != 1 || secrets[0].Value != "k" {
+		t.Errorf("keyless, key set: %+v, %v", secrets, err)
 	}
 }

@@ -19,7 +19,7 @@ var (
 )
 
 // Builtin returns every agent forgerun has an adapter for.
-func Builtin() []Agent { return []Agent{&Cursor{}, &ClaudeCode{}} }
+func Builtin() []Agent { return []Agent{&Cursor{}, &ClaudeCode{}, &OpenCode{}} }
 
 // Credentials gives an agent's credential when a task needs it. The value
 // isn't kept: a key added or changed later is used by the next task.
@@ -78,16 +78,25 @@ func (s Set) Get(id string) (Agent, error) {
 func (s Set) IDs() []string { return slices.Sorted(maps.Keys(s.agents)) }
 
 // Secrets returns what a VM for agent a needs: its credential, as proxy
-// secrets. An agent that needs no credential gets none.
-func (s Set) Secrets(ctx context.Context, a Agent) ([]sandbox.Secret, error) {
+// secrets. An agent that needs no credential gets none. keyless says the
+// task's model runs without the credential (e.g. a free model): a missing
+// one is then no error. A credential that is set is passed anyway, because
+// a later turn in the same VM may use a model that needs it.
+func (s Set) Secrets(ctx context.Context, a Agent, keyless bool) ([]sandbox.Secret, error) {
 	name := a.Credential()
 	if name == "" {
 		return nil, nil
 	}
 	if s.creds == nil {
+		if keyless {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("%w for %s: set %s", ErrNoCredential, a.ID(), name)
 	}
 	v, err := s.creds.Value(ctx, a.ID(), name)
+	if errors.Is(err, ErrNoCredential) && keyless {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -95,12 +104,13 @@ func (s Set) Secrets(ctx context.Context, a Agent) ([]sandbox.Secret, error) {
 }
 
 // Check reports whether a task can run on agent id now: forgerun has an
-// adapter for it and its credential is configured.
+// adapter for it and its credential is configured. Tasks on models that
+// need no credential can run either way; Check is about the credential.
 func (s Set) Check(ctx context.Context, id string) error {
 	a, err := s.Get(id)
 	if err != nil {
 		return err
 	}
-	_, err = s.Secrets(ctx, a)
+	_, err = s.Secrets(ctx, a, false)
 	return err
 }
