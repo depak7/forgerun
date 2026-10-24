@@ -28,8 +28,9 @@ export function LandingPage() {
           <span className={styles.eyebrow}>OPEN SOURCE · APACHE-2.0</span>
           <h1 className={styles.title}>Coding agents, each in its own microVM</h1>
           <p className={styles.lede}>
-            forgerun is open-source infrastructure for running coding agents in the cloud. Give an agent a repo and a task: it
-            works in a private microVM you can keep talking to, and nothing reaches your repo until you push.
+            forgerun is open-source infrastructure that runs Claude Code, Cursor CLI and OpenCode on your repo, each in its own
+            microVM, on your own machines. It works in a private VM you can keep talking to, and nothing reaches your repo until
+            you push.
           </p>
           <div className={styles.actions}>
             <a className={styles.button} href="/auth/github/login">

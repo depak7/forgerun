@@ -45,7 +45,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
 	addr := fs.String("addr", defaultAddr(os.Getenv), "address to listen on (with env PORT set: 0.0.0.0:$PORT)")
 	workers := fs.Int("workers", 2, "how many tasks may run at once")
-	timeout := fs.Duration("timeout", 15*time.Minute, "max time per turn")
+	timeout := fs.Duration("timeout", defaultTurnTimeout, "max time per turn")
 	sessionIdle := fs.Duration("session-idle", 30*time.Minute, "close a thread's session (its VM) after this long without a message (0 = never)")
 	maxSessions := fs.Int("sessions", 4, "most sessions open at once; the least recently used idle one closes to make room (0 = no limit)")
 	agentIdle := fs.Duration("agent-idle", 10*time.Minute, "stop an agent that prints nothing and changes no files for this long (0 = never)")

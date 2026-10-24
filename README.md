@@ -1,27 +1,92 @@
 # forgerun
 
-Run coding agents in the cloud — each in its own microVM — and talk to them
-like a teammate: give a task, read the diff, ask for changes, and push a
-branch or open a pull request only when you're happy.
+[![License: Apache-2.0](https://img.shields.io/github/license/depak7/forgerun)](LICENSE)
+[![Go version](https://img.shields.io/github/go-mod/go-version/depak7/forgerun)](go.mod)
+[![CI](https://github.com/depak7/forgerun/actions/workflows/ci.yml/badge.svg)](https://github.com/depak7/forgerun/actions/workflows/ci.yml)
 
-forgerun is a single Go binary with a web UI. It runs [Cursor CLI](https://cursor.com/cli),
-[Claude Code](https://www.anthropic.com/claude-code) and [OpenCode](https://opencode.ai)
-today; agents are pluggable.
+Run Claude Code, Cursor CLI and OpenCode on your repo, each in its own microVM, on your
+own box. Review the diff, then push.
 
-- **Isolated:** every thread gets its own [microsandbox](https://github.com/superradcompany/microsandbox)
-  microVM. The agent can install, build and test whatever it needs.
-- **Secrets never enter the VM:** the VM only sees placeholders; a proxy on the
-  host swaps in the real key, and only for the agent's own API hosts.
-- **A live session per thread:** the VM stays up between your messages, so the
-  agent keeps its own conversation and working tree.
-- **Review, then push:** each turn's changes are kept as a diff. Nothing reaches
-  GitHub until you press push — then it's one commit on a readable
-  `forgerun/…` branch, with a pull request if you want one.
-- **Warm starts:** when a session closes, its VM is saved as the repo's
-  snapshot; the next thread on that repo starts from it in seconds.
+<!-- Demo: a 30–60 s clip goes here (new task → the agent works → diff → one follow-up →
+push and open a PR), as a gif, with the same clip as an mp4. -->
 
-> Status: early. It runs on one machine, has no user accounts yet, and listens
-> on `127.0.0.1` by default.
+- **26.8 s → 2.8 s to start a task.** A new thread starts from a disk snapshot of the repo
+  with its dependencies installed, instead of cloning and installing again (measured on
+  `expressjs/express`: [docs/experiments.md](docs/experiments.md#4-snapshots-for-fast-task-start)).
+- **Keys never enter the VM.** The VM sees only placeholders; a proxy on the host swaps in
+  the real key, and only for the agent's own API.
+- **Workers dial out over HTTPS only.** Run the web UI on a small server and the VMs on
+  your own machine: nothing needs opening on it.
+
+## Quick start
+
+You need a Mac with Apple Silicon, or Linux with KVM (`ls /dev/kvm`). Then:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh
+```
+
+It asks what the machine is for (a **worker** for an orchestrator elsewhere, or
+**everything** on this machine) and for any keys, then does the rest by itself: installs
+what's missing (git, a C compiler, Go; Node for the web UI), builds forgerun into
+`~/forgerun`, checks the setup with `forgerun doctor`, and runs it in the background
+(systemd on Linux, launchd on macOS), now and at every boot. Run it again to update.
+
+`forgerun doctor` checks a machine's setup any time and says how to fix what's wrong:
+virtualization (KVM, `kvm` group, a VM without nested virtualization), the microsandbox
+runtime and its database, disk and memory, image downloads, the orchestrator and worker
+token, Postgres, `GITHUB_TOKEN` and the sign-in settings. It boots one microVM to time a
+cold start (`-quick` skips that).
+
+```sh
+~/forgerun/forgerun doctor -env ~/.forgerun-worker.env   # a worker's settings
+```
+
+To set it up step by step instead, see [By hand](#by-hand).
+
+## How it works
+
+forgerun is a single Go binary with a web UI. Agents are pluggable adapters
+([`internal/agent`](internal/agent)).
+
+- **Isolated:** every thread gets its own microVM. The agent can install, build and test
+  whatever it needs.
+- **A live session per thread:** the VM stays up between your messages, so the agent keeps
+  its own conversation and working tree.
+- **Review, then push:** each turn's changes are kept as a diff. Nothing reaches GitHub
+  until you press push — then it's one commit on a readable `forgerun/…` branch, with a
+  pull request if you want one.
+- **Warm starts:** when a session closes, its VM is saved as the repo's snapshot; the next
+  thread on that repo starts from it in seconds.
+
+**Built on [microsandbox](https://github.com/superradcompany/microsandbox)** (libkrun
+microVMs). forgerun isn't a sandbox provider: it's what runs around the agents (sessions,
+review, pushing, workers, sign-in).
+
+> Status: early. It works end to end (sign-in with GitHub, per-user limits, workers on
+> other machines), and things still change quickly.
+
+## How it compares
+
+| | Self-hosted | Open source | A VM per task | Keys readable inside the sandbox |
+|---|---|---|---|---|
+| **forgerun** | Yes | Yes (Apache-2.0) | Yes: a microVM per thread | No: placeholders, swapped by a proxy outside the VM |
+| Cursor cloud agents | Partly: [self-hosted machines][c2] run the tools; Cursor runs the agent loop | No | Yes on Cursor's cloud ([isolated VMs][c1]); not on self-hosted machines, where [several agents share one][c2] | Yes: [environment-variable secrets are visible][c3] to the agent |
+| OpenAI Codex cloud | No | No | Yes: [each cloud task runs in a VM][x1] | Partly: environment variables yes; [network secrets][x1] are placeholders swapped by a proxy |
+| OpenHands | Yes | Yes (MIT) | No: [Docker containers][o1] | Yes: [custom secrets are exported][o2] into the agent's environment |
+| Claude Code on your own VPS | Yes | No ([Claude Code][a3] is proprietary; its [sandbox runtime][a1] is open) | No by default: an [OS-level sandbox][a1] for shell commands; a VM is [yours to build][a2] | Yes by default; a [mask mode][a1] covers shell commands only |
+
+Checked against each vendor's own docs on 2026-10-24.
+
+[c1]: https://cursor.com/docs/cloud-agent
+[c2]: https://cursor.com/docs/cloud-agent/self-hosted
+[c3]: https://cursor.com/docs/cloud-agent/security-network
+[x1]: https://learn.chatgpt.com/docs/environments/cloud-environments
+[o1]: https://docs.openhands.dev/openhands/usage/sandboxes/overview
+[o2]: https://docs.openhands.dev/openhands/usage/settings/secrets-settings
+[a1]: https://code.claude.com/docs/en/sandboxing
+[a2]: https://code.claude.com/docs/en/sandbox-environments
+[a3]: https://github.com/anthropics/claude-code/blob/main/LICENSE.md
 
 ## Architecture
 
@@ -96,31 +161,7 @@ sequenceDiagram
   credential it needs and for which hosts, and how to run and continue its CLI
   ([`internal/agent`](internal/agent)). Models are rows in the database.
 
-## Quick start
-
-On macOS (Apple Silicon) or Linux with KVM:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh
-```
-
-It asks what the machine is for (a **worker** for an orchestrator elsewhere, or
-**everything** on this machine) and for any keys, then does the rest by itself: installs
-what's missing (git, a C compiler, Go; Node for the web UI), builds forgerun into
-`~/forgerun`, checks the setup with `forgerun doctor`, and runs it in the background
-(systemd on Linux, launchd on macOS), now and at every boot. Run it again to update.
-
-`forgerun doctor` checks a machine's setup any time and says how to fix what's wrong:
-virtualization (KVM, `kvm` group, a VM without nested virtualization), the microsandbox
-runtime and its database, disk and memory, image downloads, the orchestrator and worker
-token, Postgres, `GITHUB_TOKEN` and the sign-in settings. It boots one microVM to time a
-cold start (`-quick` skips that).
-
-```sh
-~/forgerun/forgerun doctor -env ~/.forgerun-worker.env   # a worker's settings
-```
-
-### By hand
+## By hand
 
 You need: macOS on Apple Silicon or Linux with KVM (for microVMs), Go 1.26,
 Node 22, Docker (for Postgres), and git.
@@ -164,7 +205,7 @@ is yours. With them, people sign in with GitHub and see only their own threads.
 | `-workers` | `2` | turns that may run at once |
 | `-session-idle` | `30m` | close a session after this long without a message |
 | `-sessions` | `4` | most open sessions; the least recently used idle one closes first |
-| `-timeout` | `15m` | max time per turn |
+| `-timeout` | `2h` | max time per turn (a stuck agent is stopped sooner: `-agent-idle`) |
 | `-agent-idle` | `10m` | stop an agent that prints nothing and changes nothing |
 | `-snapshot-budget` | `20GB` | disk for warm-start snapshots |
 | `-require-zdr` | off | offer only zero-data-retention models |

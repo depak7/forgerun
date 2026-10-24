@@ -32,7 +32,7 @@ func workerCmd(args []string) error {
 	host, _ := os.Hostname()
 	name := fs.String("name", host, "this worker's name in the orchestrator's settings")
 	workers := fs.Int("workers", 2, "how many turns may run at once")
-	timeout := fs.Duration("timeout", 15*time.Minute, "max time per turn")
+	timeout := fs.Duration("timeout", defaultTurnTimeout, "max time per turn")
 	sessionIdle := fs.Duration("session-idle", 30*time.Minute, "close a thread's session (its VM) after this long without a message (0 = never)")
 	maxSessions := fs.Int("sessions", 4, "most sessions open at once (0 = no limit)")
 	agentIdle := fs.Duration("agent-idle", 10*time.Minute, "stop an agent that prints nothing and changes no files for this long (0 = never)")

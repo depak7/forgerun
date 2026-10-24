@@ -463,6 +463,51 @@ from an OpenCode Console service account with "Inference only" permission.
 
 ---
 
+## 13. gVisor as a sandbox where there's no KVM
+
+**Question.** Can forgerun's agents run in gVisor (`runsc`) on a machine without KVM (a
+normal cloud VM), with the same rule as microsandbox: keys never readable inside the
+sandbox? How fast does a sandbox start?
+
+**Test** (`out/gvexp/`): Docker 29 with `runsc` (release-20261019.0) registered as a
+runtime, `--platform=systrap`, inside a privileged Docker-in-Docker container on a Mac
+(Linux 6.12 arm64, no `/dev/kvm`). Our agent images (`depak7/forgerun-agent-*:dev`) run with
+`--runtime=runsc`. A prototype proxy on the host side (`out/gvexp/main.go`) is the
+sandbox's `HTTPS_PROXY`: for a host that has a secret it terminates TLS with a certificate
+from its own CA (given to the sandbox as `NODE_EXTRA_CA_CERTS` and added to the system
+store) and replaces the placeholder in request headers with the real key; every other
+host is a plain tunnel. The sandbox's key variables hold placeholders (`FORGERUN_PH_…`).
+
+**Result.**
+- **gVisor runs without KVM** (systrap). Inside, `uname -r` is `4.19.0-gvisor`: the
+  agent talks to gVisor's kernel, not the host's. A sandbox from an agent image was up
+  and running a command in **0.34 s** (a microsandbox VM: about 5 s).
+- **The sandbox only sees placeholders**; the real keys exist only in the proxy.
+- **Every agent honours `HTTPS_PROXY` and the added CA**, and works through the swap:
+  - Claude Code: `POST api.anthropic.com/v1/messages → 200`, the answer "ok".
+  - Cursor: `POST api2.cursor.sh/auth/exchange_user_api_key → 200` (key swapped), then
+    its calls with the session token it got back, the answer "ok". The token Cursor
+    exchanges its key for lives inside the sandbox for the session (as with microsandbox).
+  - OpenCode: `opencode.ai` requests carry the swapped key (`402 Insufficient account
+    funds` on the owner's empty workspace, as with microsandbox).
+- Everything else (github.com, registry.npmjs.org, models.opencode.ai) went through as
+  plain tunnels.
+- Claude Code also reached the Claude account's connectors (Gmail, Notion, Outlook, X MCP
+  servers, listed from `api.anthropic.com/mcp-registry`): the setup token signs in as the
+  user's account. This happens on microsandbox too; forgerun's agents should turn it off.
+- OpenCode's free model, with a key set on a workspace without credit, got 402 and 429
+  answers and kept retrying (on 2026-10-22 under microsandbox it worked with the key
+  set). To recheck before relying on free models with a key present.
+- Nested in Docker, `runsc` needed `--ignore-cgroups` (it couldn't write the outer
+  cgroup); a real Linux host doesn't.
+
+**Decision.** gVisor becomes forgerun's second sandbox backend, for Linux machines
+without KVM: Docker with the `runsc` runtime, forgerun's own key-swapping proxy on the
+worker (the prototype's approach: intercept only hosts that have a secret, tunnel the
+rest), its CA given to the sandbox. microsandbox stays the default where KVM or Apple
+Silicon is available. Snapshots for warm starts: `docker commit` of the session's
+container (to design).
+
 ## Researched, not yet tested: Claude Code authentication
 
 Based on community guides and issue reports (not official docs), to be confirmed by
