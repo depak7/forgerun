@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -239,5 +240,24 @@ func TestLogPathRefusesTraversal(t *testing.T) {
 	}
 	if p, err := rs.logPath("t-1"); err != nil || filepath.Base(filepath.Dir(p)) != "t-1" {
 		t.Errorf("logPath(t-1) = %s, %v", p, err)
+	}
+}
+
+// Hello checks the token without registering a worker.
+func TestHello(t *testing.T) {
+	rs, _, url := setup(t)
+	if err := client(url, "doctor").Hello(context.Background()); err != nil {
+		t.Errorf("good token: %v", err)
+	}
+	if len(rs.Workers()) != 0 {
+		t.Errorf("hello registered a worker: %+v", rs.Workers())
+	}
+	bad := &Client{URL: url, Token: "wrong", Log: slog.New(slog.DiscardHandler)}
+	if err := bad.Hello(context.Background()); !errors.Is(err, ErrTokenRejected) {
+		t.Errorf("bad token: %v", err)
+	}
+	gone := &Client{URL: "http://127.0.0.1:1", Token: token, Log: slog.New(slog.DiscardHandler)}
+	if err := gone.Hello(context.Background()); err == nil || !strings.Contains(err.Error(), "reaching the orchestrator") {
+		t.Errorf("unreachable: %v", err)
 	}
 }

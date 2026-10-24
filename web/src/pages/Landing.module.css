@@ -231,6 +231,44 @@
   line-height: 1.6;
   color: var(--text-log);
 }
+/* The install command, with its copy button on the right. */
+.install {
+  position: relative;
+}
+.install .code {
+  padding-right: 110px;
+  white-space: pre;
+}
+.copy {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  cursor: pointer;
+}
+.copy:hover {
+  border-color: var(--accent-line);
+}
+.choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  max-width: 720px;
+}
+.inline {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--text);
+}
+
 .link {
   align-self: flex-start;
   font-family: var(--font-mono);
@@ -283,8 +321,24 @@
     font-size: 16px;
   }
   .steps,
-  .points {
+  .points,
+  .choices {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* The command scrolls in its box; the copy button goes under it. */
+  .install {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .install .code {
+    width: 100%;
+    padding-right: 20px;
+  }
+  .copy {
+    position: static;
+    transform: none;
   }
   .agent {
     grid-template-columns: minmax(0, 1fr);

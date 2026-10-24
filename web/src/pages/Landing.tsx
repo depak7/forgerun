@@ -1,6 +1,8 @@
+import { useState } from "react";
 import styles from "./Landing.module.css";
 
 const repoURL = "https://github.com/depak7/forgerun";
+const installCmd = "curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh";
 
 // LandingPage is what someone sees before signing in: what forgerun is, how
 // it keeps their code and keys safe, what signing in grants, and the button.
@@ -130,15 +132,27 @@ export function LandingPage() {
           <h2 id="self-host" className={styles.heading}>
             Run it yourself
           </h2>
+          <p className={styles.text}>One command sets it up, on a Mac with Apple Silicon or a Linux machine with KVM:</p>
+          <InstallCommand />
           <p className={styles.text}>
-            One Go binary and Postgres. Run everything on one machine, or the web UI on a small server and the VMs on your own Mac
-            or Linux box.
+            It checks your machine, installs what's missing (Go, git and the rest), builds forgerun, runs it in the background, and
+            asks what this machine is for:
           </p>
-          <pre className={styles.code}>
-            <code>{`git clone ${repoURL}\ncd forgerun && make build\n./forgerun serve`}</code>
-          </pre>
-          <a className={styles.link} href={`${repoURL}#readme`}>
-            Read the README →
+          <div className={styles.choices}>
+            <div className={styles.card}>
+              <h3>Everything here</h3>
+              <p>The web UI, the database and the VMs, on one Mac or Linux box.</p>
+            </div>
+            <div className={styles.card}>
+              <h3>A worker</h3>
+              <p>The VMs run on your machine, connected to a forgerun server somewhere else. It dials out, so nothing needs opening.</p>
+            </div>
+          </div>
+          <p className={styles.text}>
+            Something not working? Run <code className={styles.inline}>forgerun doctor</code>: it says what's wrong and how to fix it.
+          </p>
+          <a className={styles.link} href={`${repoURL}#by-hand`}>
+            Set it up by hand →
           </a>
         </section>
       </main>
@@ -147,6 +161,33 @@ export function LandingPage() {
         <span>forgerun · Apache-2.0</span>
         <a href={repoURL}>github.com/depak7/forgerun</a>
       </footer>
+    </div>
+  );
+}
+
+// InstallCommand is the one-line install, with a button that copies it.
+function InstallCommand() {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className={styles.install}>
+      <pre className={styles.code}>
+        <code>{installCmd}</code>
+      </pre>
+      <button
+        type="button"
+        className={styles.copy}
+        onClick={() => {
+          navigator.clipboard?.writeText(installCmd).then(
+            () => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            },
+            () => {},
+          );
+        }}
+      >
+        {copied ? "[ copied ]" : "[ copy ]"}
+      </button>
     </div>
   );
 }

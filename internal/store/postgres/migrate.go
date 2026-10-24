@@ -8,6 +8,7 @@ import (
 	"path"
 	"sort"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -65,4 +66,28 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// MigrationStatus connects to dbURL and reports how many migrations the
+// database has applied and how many this forgerun has, applying none.
+func MigrationStatus(ctx context.Context, dbURL string) (applied, total int, err error) {
+	files, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		return 0, 0, err
+	}
+	conn, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		return 0, len(files), err
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
+	var exists bool
+	if err := conn.QueryRow(ctx, `SELECT to_regclass('schema_migrations') IS NOT NULL`).Scan(&exists); err != nil {
+		return 0, len(files), err
+	}
+	if exists {
+		if err := conn.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
+			return 0, len(files), err
+		}
+	}
+	return applied, len(files), nil
 }

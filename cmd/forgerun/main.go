@@ -33,8 +33,13 @@ func main() {
 		err = serveCmd(os.Args[2:], true)
 	case "worker":
 		err = workerCmd(os.Args[2:])
+	case "doctor":
+		err = doctorCmd(os.Args[2:])
 	default:
 		usage()
+	}
+	if errors.Is(err, errNotReady) {
+		os.Exit(1) // the report said what's wrong
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -55,6 +60,8 @@ func usage() {
   forgerun server [the same flags as serve]   the orchestrator alone: API, web UI, database; no VMs here
   forgerun worker -server https://… [-name n] [-workers 2] [-sessions 4] [-snapshots=false]
                                             runs turns for a forgerun server; dials out, nothing to open
+  forgerun doctor [-role worker|serve|server] [-env file] [-quick] [-json]
+                                            checks this machine's setup and says how to fix what's wrong
   forgerun run   -repo <git-url> -prompt <task> [-agent cursor] [-model m] [-effort e] [-timeout 15m] [-out out]
 
 The database URL defaults to $FORGERUN_DATABASE_URL, then $DATABASE_URL, then the docker-compose dev database.

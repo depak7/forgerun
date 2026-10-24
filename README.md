@@ -98,6 +98,30 @@ sequenceDiagram
 
 ## Quick start
 
+On macOS (Apple Silicon) or Linux with KVM:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh
+```
+
+It asks what the machine is for (a **worker** for an orchestrator elsewhere, or
+**everything** on this machine) and for any keys, then does the rest by itself: installs
+what's missing (git, a C compiler, Go; Node for the web UI), builds forgerun into
+`~/forgerun`, checks the setup with `forgerun doctor`, and runs it in the background
+(systemd on Linux, launchd on macOS), now and at every boot. Run it again to update.
+
+`forgerun doctor` checks a machine's setup any time and says how to fix what's wrong:
+virtualization (KVM, `kvm` group, a VM without nested virtualization), the microsandbox
+runtime and its database, disk and memory, image downloads, the orchestrator and worker
+token, Postgres, `GITHUB_TOKEN` and the sign-in settings. It boots one microVM to time a
+cold start (`-quick` skips that).
+
+```sh
+~/forgerun/forgerun doctor -env ~/.forgerun-worker.env   # a worker's settings
+```
+
+### By hand
+
 You need: macOS on Apple Silicon or Linux with KVM (for microVMs), Go 1.26,
 Node 22, Docker (for Postgres), and git.
 
@@ -217,7 +241,9 @@ make dev-web                                     # UI with live reload on :5173
 ```
 
 ```
-cmd/forgerun/       serve (everything), server (orchestrator only), worker, run (one task, no database)
+cmd/forgerun/       serve (everything), server (orchestrator only), worker, doctor, run (one task, no database)
+install.sh          the one-step installer (worker or everything on one machine)
+internal/doctor/    forgerun doctor's checks
 internal/agent/     agent adapters: Cursor, Claude Code
 internal/task/      the runner: sessions, turns, replay
 internal/sandbox/   the only package that talks to microsandbox

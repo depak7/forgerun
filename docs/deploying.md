@@ -37,9 +37,21 @@ Caddy gets the HTTPS certificate by itself. Open `https://forgerun.example.com`,
 with GitHub, and you're the admin (your username is in `FORGERUN_ADMINS`). Settings shows
 "No worker is connected" until step 2.
 
-## 2. A worker on your Mac
+## 2. A worker on your Mac or a Linux machine
 
-The worker needs macOS on Apple Silicon or Linux with KVM, git, and the agent keys:
+The worker needs macOS on Apple Silicon or Linux with KVM. On it, run the installer and
+choose **worker**; it asks for the orchestrator's address, the worker token (the server's
+`FORGERUN_WORKER_TOKEN`) and your agent keys, checks the setup with `forgerun doctor`, and
+runs the worker in the background, now and at every boot:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh
+```
+
+Without a terminal, answer ahead: `FORGERUN_ROLE=worker FORGERUN_SERVER=https://…
+FORGERUN_WORKER_TOKEN=… sh install.sh`. Its settings are in `~/.forgerun-worker.env`.
+
+Or by hand:
 
 ```sh
 make build                                  # builds ./forgerun

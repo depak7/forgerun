@@ -988,3 +988,14 @@ func TestUserUsage(t *testing.T) {
 		t.Errorf("since the future: %d", created)
 	}
 }
+
+func TestMigrationStatus(t *testing.T) {
+	openTest(t) // applies every migration
+	applied, total, err := MigrationStatus(context.Background(), os.Getenv("FORGERUN_TEST_DATABASE_URL"))
+	if err != nil || total < 13 || applied != total {
+		t.Errorf("applied %d of %d, %v", applied, total, err)
+	}
+	if _, _, err := MigrationStatus(context.Background(), "postgres://nobody@127.0.0.1:1/x?connect_timeout=2"); err == nil {
+		t.Error("no database: no error")
+	}
+}

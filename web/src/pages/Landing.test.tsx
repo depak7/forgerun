@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LandingPage } from "./Landing";
 
 afterEach(() => {
@@ -18,6 +18,20 @@ describe("LandingPage", () => {
       expect(screen.getByRole("heading", { name: section })).toBeTruthy();
     }
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the one-line install and copies it", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<LandingPage />);
+    const cmd = "curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh";
+    expect(screen.getByText(cmd)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Everything here" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "A worker" })).toBeTruthy();
+    expect(screen.getByText("forgerun doctor")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "[ copy ]" }));
+    expect(writeText).toHaveBeenCalledWith(cmd);
+    expect(await screen.findByRole("button", { name: "[ copied ]" })).toBeTruthy();
   });
 
   it("explains a failed sign-in", () => {

@@ -78,6 +78,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	p := r.URL.Path
 	switch {
+	case r.Method == http.MethodGet && p == pathHello:
+		w.WriteHeader(http.StatusNoContent) // the token was accepted above
 	case r.Method == http.MethodPost && p == pathHeartbeat:
 		s.heartbeat(w, r)
 	case r.Method == http.MethodPost && p == pathClaim:

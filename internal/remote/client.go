@@ -80,6 +80,38 @@ func (c *Client) postJSON(ctx context.Context, path string, in, out any) (int, e
 	return resp.StatusCode, nil
 }
 
+var (
+	// ErrTokenRejected means the orchestrator refused the worker token.
+	ErrTokenRejected = errors.New("the orchestrator rejected the worker token")
+	// ErrOutdated means the orchestrator predates something this worker uses.
+	ErrOutdated = errors.New("the orchestrator is older than this worker")
+)
+
+// Hello checks that the orchestrator is reachable and accepts the worker
+// token, without registering this worker or taking any work.
+func (c *Client) Hello(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.URL, "/")+pathHello, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	resp, err := c.client().Do(req)
+	if err != nil {
+		return fmt.Errorf("reaching the orchestrator: %w", err)
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+	case http.StatusUnauthorized:
+		return ErrTokenRejected
+	case http.StatusNotFound:
+		return ErrOutdated
+	default:
+		return fmt.Errorf("the orchestrator answered %s", resp.Status)
+	}
+}
+
 // Claim waits for a turn from the orchestrator.
 func (c *Client) Claim(ctx context.Context) (store.Record, bool, error) {
 	var a Assignment

@@ -17,6 +17,7 @@ import (
 
 // Paths, under the orchestrator's address.
 const (
+	pathHello     = "/api/worker/hello" // checks the token, changes nothing (forgerun doctor)
 	pathHeartbeat = "/api/worker/heartbeat"
 	pathClaim     = "/api/worker/claim"
 	pathThread    = "/api/worker/threads/"  // {id}

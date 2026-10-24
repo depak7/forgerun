@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -67,6 +68,26 @@ type Sandbox struct {
 func EnsureRuntime(ctx context.Context) error {
 	_, err := microsandbox.EnsureRuntime(ctx, microsandbox.RuntimeConfig{}, microsandbox.InstallOptions{})
 	return err
+}
+
+// RuntimeInstalled reports where the microsandbox runtime is, or why it
+// can't be found, without installing it.
+func RuntimeInstalled() (string, error) {
+	rt, err := microsandbox.ResolveRuntime(microsandbox.RuntimeConfig{})
+	return rt.MSBPath, err
+}
+
+// Home is where microsandbox keeps its runtime, images and database:
+// $MSB_HOME, or ~/.microsandbox.
+func Home() (string, error) {
+	if h := os.Getenv("MSB_HOME"); h != "" {
+		return h, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".microsandbox"), nil
 }
 
 // New boots a VM. The caller must call Destroy when done.
