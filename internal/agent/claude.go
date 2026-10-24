@@ -36,13 +36,13 @@ func (c *ClaudeCode) Secrets(token string) []sandbox.Secret {
 // the next.
 func (c *ClaudeCode) StatePaths() []string { return []string{"/root/.claude", "/root/.claude.json"} }
 
-func (c *ClaudeCode) Run(ctx context.Context, sb *sandbox.Sandbox, req Request, logs io.Writer) error {
+func (c *ClaudeCode) Run(ctx context.Context, sb sandbox.Sandbox, req Request, logs io.Writer) error {
 	return sb.Stream(ctx, claudeCmd(req.Dir, claudeArgs(req)), logs)
 }
 
 // Continue sends prompt to the latest conversation in dir, in read-only
 // plan mode, and returns the reply.
-func (c *ClaudeCode) Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string) (string, error) {
+func (c *ClaudeCode) Continue(ctx context.Context, sb sandbox.Sandbox, dir, prompt string) (string, error) {
 	args := []string{"-p", prompt, "--continue", "--permission-mode", "plan", "--output-format", "text"}
 	out, err := sb.Run(ctx, claudeCmd(dir, args))
 	if err != nil {
@@ -53,13 +53,15 @@ func (c *ClaudeCode) Continue(ctx context.Context, sb *sandbox.Sandbox, dir, pro
 
 // claudeCmd runs the CLI with stdin closed: with a pipe it waits 3s for
 // input first. IS_SANDBOX=1 lets it skip permission prompts as root, which
-// it otherwise refuses; the VM is the sandbox.
+// it otherwise refuses; the VM is the sandbox. ENABLE_CLAUDEAI_MCP_SERVERS=
+// false keeps the connectors on the user's claude.ai account (Gmail,
+// Notion, …) out of the sandbox: an agent working on a repo needs none.
 func claudeCmd(dir string, args []string) sandbox.Cmd {
 	return sandbox.Cmd{
 		Name: "sh",
 		Args: append([]string{"-c", `exec claude "$@" < /dev/null`, "claude"}, args...),
 		Dir:  dir,
-		Env:  map[string]string{"HOME": "/root", "IS_SANDBOX": "1"},
+		Env:  map[string]string{"HOME": "/root", "IS_SANDBOX": "1", "ENABLE_CLAUDEAI_MCP_SERVERS": "false"},
 	}
 }
 

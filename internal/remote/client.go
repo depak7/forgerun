@@ -24,10 +24,11 @@ import (
 // its runner streams logs to, and the heartbeat that reports to the
 // orchestrator and carries out its commands.
 type Client struct {
-	URL   string // the orchestrator, e.g. https://forgerun.example.com
-	Token string
-	Name  string // this worker's name in the orchestrator's settings
-	Log   *slog.Logger
+	URL     string // the orchestrator, e.g. https://forgerun.example.com
+	Token   string
+	Name    string // this worker's name in the orchestrator's settings
+	Sandbox string // its sandbox backend, reported in heartbeats
+	Log     *slog.Logger
 
 	http *http.Client
 
@@ -253,7 +254,7 @@ func (u *logUpload) Close() error {
 func (c *Client) Heartbeats(ctx context.Context, pool *worker.Pool, runner *task.Runner, agents, adapters []string, maxSessions int) {
 	connected := false
 	for {
-		hb := Heartbeat{Worker: c.Name, Agents: agents, Adapters: adapters, MaxSessions: maxSessions, Sessions: runner.Sessions(), Running: pool.Running()}
+		hb := Heartbeat{Worker: c.Name, Agents: agents, Adapters: adapters, Sandbox: c.Sandbox, MaxSessions: maxSessions, Sessions: runner.Sessions(), Running: pool.Running()}
 		var reply HeartbeatReply
 		hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		_, err := c.postJSON(hctx, pathHeartbeat, hb, &reply)

@@ -73,7 +73,12 @@ type Env struct {
 	Reach   func(ctx context.Context, url string) error // any HTTP answer = reachable
 	Runtime func() (string, error)                      // where the microsandbox runtime is
 	MSBHome func() (string, error)                      // microsandbox's data directory
-	BootVM  func(ctx context.Context) error             // boots a small VM, runs a command, removes it
+	BootVM  func(ctx context.Context) error             // boots a small sandbox, runs a command, removes it
+	// Sandbox is the backend sessions use here: "microsandbox" (microVMs)
+	// or "gvisor" ("" = microsandbox). GVisor checks Docker and its runsc
+	// runtime, for the gvisor backend.
+	Sandbox string
+	GVisor  func(ctx context.Context) error
 
 	Hello      func(ctx context.Context, server, token string) error // the worker token check; ErrTokenRejected if refused
 	Migrations func(ctx context.Context, dbURL string) (applied, total int, err error)
@@ -91,11 +96,17 @@ func Run(ctx context.Context, role Role, e Env) []Result {
 	var out []Result
 	add := func(r Result) { out = append(out, r) }
 	vms := role == RoleWorker || role == RoleServe
+	gvisor := e.Sandbox == "gvisor"
 	if vms {
 		add(platform(e))
-		add(virtualization(e))
-		add(runtime(e))
-		add(msbDatabase(e))
+		if gvisor {
+			add(withoutKVM(virtualization(e)))
+			add(gvisorReady(ctx, e))
+		} else {
+			add(virtualization(e))
+			add(runtime(e))
+			add(msbDatabase(e))
+		}
 		add(disk(e))
 		add(memory(e))
 	}
@@ -116,7 +127,7 @@ func Run(ctx context.Context, role Role, e Env) []Result {
 	}
 	if vms {
 		add(keys(e))
-		if failed(out, "virtualization") || failed(out, "platform") {
+		if failed(out, "virtualization") || failed(out, "platform") || failed(out, "gVisor") {
 			add(Result{Name: "cold start", Status: Warn, Detail: "skipped: this machine can't run microVMs yet"})
 		} else {
 			add(coldStart(ctx, e))
@@ -223,6 +234,32 @@ func cpuFlags(e Env) map[string]bool {
 		break // every core lists the same flags
 	}
 	return flags
+}
+
+// withoutKVM turns a missing KVM into a note: with the gvisor backend,
+// sessions don't need it.
+func withoutKVM(r Result) Result {
+	if r.Status == Fail {
+		r.Status = Warn
+		r.Detail = "no microVMs here (" + r.Detail + "): sessions use gVisor instead"
+		r.Fix = "optional: " + r.Fix + ", for microVMs"
+	}
+	return r
+}
+
+// gvisorReady checks Docker and its runsc runtime.
+func gvisorReady(ctx context.Context, e Env) Result {
+	r := Result{Name: "gVisor"}
+	if e.GVisor == nil {
+		return skipped(r)
+	}
+	if err := e.GVisor(ctx); err != nil {
+		r.Status, r.Detail = Fail, err.Error()
+		r.Fix = "install Docker and gVisor (the installer does both), then: sudo runsc install --runtime=forgerun-runsc -- --overlay2=none && sudo systemctl restart docker; your user needs to be in the docker group"
+		return r
+	}
+	r.Status, r.Detail = Pass, "Docker with the forgerun-runsc runtime"
+	return r
 }
 
 func runtime(e Env) Result {
@@ -497,7 +534,7 @@ func coldStart(ctx context.Context, e Env) Result {
 	}
 	start := e.Now()
 	if err := e.BootVM(ctx); err != nil {
-		r.Status, r.Detail = Fail, "couldn't boot a microVM: "+err.Error()
+		r.Status, r.Detail = Fail, "couldn't start a sandbox: "+err.Error()
 		r.Fix = "see the virtualization and microsandbox checks above"
 		if strings.Contains(err.Error(), "socket path is too long") {
 			r.Fix = "the home folder's path is too long for the VM's sockets: set MSB_HOME to a short folder, e.g. MSB_HOME=/opt/msb"
@@ -505,7 +542,11 @@ func coldStart(ctx context.Context, e Env) Result {
 		return r
 	}
 	took := e.Now().Sub(start)
-	r.Status, r.Detail = Pass, fmt.Sprintf("booted a microVM and ran a command in %.1fs", took.Seconds())
+	what := "a microVM"
+	if e.Sandbox == "gvisor" {
+		what = "a gVisor sandbox"
+	}
+	r.Status, r.Detail = Pass, fmt.Sprintf("started %s and ran a command in %.1fs", what, took.Seconds())
 	if took > time.Minute {
 		r.Detail += " (the first run also downloads the runtime and a small image)"
 	}

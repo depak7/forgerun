@@ -47,7 +47,7 @@ func (o *OpenCode) StatePaths() []string {
 	return []string{"/root/.local/share/opencode", "/root/.local/state/opencode"}
 }
 
-func (o *OpenCode) Run(ctx context.Context, sb *sandbox.Sandbox, req Request, logs io.Writer) error {
+func (o *OpenCode) Run(ctx context.Context, sb sandbox.Sandbox, req Request, logs io.Writer) error {
 	ev := &opencodeEvents{logs: logs}
 	err := sb.Stream(ctx, opencodeCmd(req.Dir, opencodeArgs(req)), ev)
 	ev.flush()
@@ -59,7 +59,7 @@ func (o *OpenCode) Run(ctx context.Context, sb *sandbox.Sandbox, req Request, lo
 
 // Continue sends prompt to the latest session in dir with the read-only
 // plan agent, and returns the reply.
-func (o *OpenCode) Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string) (string, error) {
+func (o *OpenCode) Continue(ctx context.Context, sb sandbox.Sandbox, dir, prompt string) (string, error) {
 	out, err := sb.Run(ctx, opencodeCmd(dir, opencodeArgs(Request{Prompt: prompt, Continue: true, ReadOnly: true})))
 	ev := &opencodeEvents{logs: io.Discard}
 	ev.Write([]byte(out))

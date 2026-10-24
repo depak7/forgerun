@@ -79,16 +79,19 @@ export function LandingPage() {
           </h2>
           <ul className={styles.points}>
             <li>
-              <h3>One VM per thread</h3>
-              <p>Each thread runs in its own microVM, not a shared container. What an agent runs stays there.</p>
+              <h3>One sandbox per thread</h3>
+              <p>
+                Each thread runs in its own microVM, or on Linux without KVM in a gVisor sandbox with its own kernel. What an agent
+                runs stays there.
+              </p>
             </li>
             <li>
-              <h3>Keys never enter the VM</h3>
-              <p>The VM sees only placeholders. A proxy outside it adds the real API key, and only for the agent's own API.</p>
+              <h3>Keys never enter the sandbox</h3>
+              <p>It sees only placeholders. A proxy outside it adds the real API key, and only for the agent's own API.</p>
             </li>
             <li>
               <h3>Nothing reaches GitHub until you push</h3>
-              <p>Agents can't push. Changes leave the VM as a diff, and only your push turns them into a commit.</p>
+              <p>Agents can't push. Changes leave the sandbox as a diff, and only your push turns them into a commit.</p>
             </li>
           </ul>
         </section>
@@ -133,7 +136,10 @@ export function LandingPage() {
           <h2 id="self-host" className={styles.heading}>
             Run it yourself
           </h2>
-          <p className={styles.text}>One command sets it up, on a Mac with Apple Silicon or a Linux machine with KVM:</p>
+          <p className={styles.text}>
+            One command sets it up, on a Mac with Apple Silicon or a Linux machine (with KVM for microVMs; without it, it sets up
+            gVisor):
+          </p>
           <InstallCommand />
           <p className={styles.text}>
             It checks your machine, installs what's missing (Go, git and the rest), builds forgerun, runs it in the background, and

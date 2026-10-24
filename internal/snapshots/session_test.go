@@ -21,7 +21,7 @@ import (
 // the files already in the checkout. It's a Continuer.
 type turnAgent struct{ messyAgent }
 
-func (turnAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
+func (turnAgent) Run(ctx context.Context, sb sandbox.Sandbox, req agent.Request, logs io.Writer) error {
 	first, _, _ := strings.Cut(req.Prompt, "\n")
 	script := fmt.Sprintf(`set -e
 echo "continue=%v"
@@ -34,7 +34,7 @@ echo made > turn-$((n+1)).txt`, req.Continue, strings.ReplaceAll(first, `"`, "")
 	return sb.Stream(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c", script}, Dir: req.Dir}, logs)
 }
 
-func (turnAgent) Continue(context.Context, *sandbox.Sandbox, string, string) (string, error) {
+func (turnAgent) Continue(context.Context, sandbox.Sandbox, string, string) (string, error) {
 	return "summary", nil
 }
 

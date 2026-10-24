@@ -36,7 +36,7 @@ func (c *Cursor) Secrets(apiKey string) []sandbox.Secret {
 // by every Run), chats and project data.
 func (c *Cursor) StatePaths() []string { return []string{"/root/.cursor"} }
 
-func (c *Cursor) Run(ctx context.Context, sb *sandbox.Sandbox, req Request, logs io.Writer) error {
+func (c *Cursor) Run(ctx context.Context, sb sandbox.Sandbox, req Request, logs io.Writer) error {
 	if err := sb.WriteFile(ctx, "/root/.cursor/cli-config.json", []byte(cliConfig)); err != nil {
 		return fmt.Errorf("writing cursor config: %w", err)
 	}
@@ -53,7 +53,7 @@ var _ Continuer = (*Cursor)(nil)
 // Continue sends prompt to the chat the last Run created and returns the
 // reply. The VM holds only that chat (snapshots wipe ~/.cursor), so
 // --continue picks the right one. Ask mode is read-only.
-func (c *Cursor) Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string) (string, error) {
+func (c *Cursor) Continue(ctx context.Context, sb sandbox.Sandbox, dir, prompt string) (string, error) {
 	out, err := sb.Run(ctx, sandbox.Cmd{
 		Name: "agent",
 		Args: []string{"-p", prompt, "--continue", "--mode", "ask", "--trust", "--output-format", "text", "--disable-auto-update"},

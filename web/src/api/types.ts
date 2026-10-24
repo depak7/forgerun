@@ -141,6 +141,7 @@ export interface WorkerInfo {
   last_seen: string;
   agents: string[]; // agents it has keys for
   adapters: string[]; // every agent it can run; models that need no key run on these
+  sandbox: string; // "microsandbox" (microVMs) or "gvisor"; "" from an older worker
   sessions: number;
   max_sessions: number;
   running: number;

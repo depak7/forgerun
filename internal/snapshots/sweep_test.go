@@ -74,7 +74,7 @@ func TestSweep(t *testing.T) {
 	s := memory.New(models.Variant{ID: "auto", AgentID: "fake", Family: "auto", AgentDefault: true})
 	m := &Manager{Store: s, Prefix: testPrefix}
 
-	vm, err := sandbox.New(ctx, "sweep-"+time.Now().Format("150405"), sandbox.Config{
+	vm, err := msb.New(ctx, "sweep-"+time.Now().Format("150405"), sandbox.Config{
 		Image: "depak7/forgerun-agent-cursor:dev", CPUs: 1, MemoryMiB: 512, MaxLifetime: 3 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestSweep(t *testing.T) {
 	var refs []string
 	t.Cleanup(func() {
 		for _, ref := range refs {
-			sandbox.DeleteSnapshot(context.Background(), ref)
+			msb.DeleteSnapshot(context.Background(), ref)
 		}
 	})
 	// take snapshots vm into repo's group; record saves it in the store.
@@ -165,7 +165,7 @@ func TestSweep(t *testing.T) {
 
 func assertGone(t *testing.T, ref string, want bool) {
 	t.Helper()
-	if got := sandbox.SnapshotGone(ref); got != want {
+	if got := msb.SnapshotGone(ref); got != want {
 		t.Errorf("%s: gone = %v, want %v", ref, got, want)
 	}
 }

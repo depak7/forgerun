@@ -13,9 +13,9 @@ import (
 	microsandbox "github.com/superradcompany/microsandbox/sdk/go"
 )
 
-// Snapshot is a saved VM disk that new VMs can be restored from. It never
-// contains secrets: microsandbox keeps them outside the VM and doesn't
-// carry them into snapshots.
+// Snapshot is a saved sandbox disk that new sandboxes can be restored from.
+// It never contains secrets: they're kept outside the sandbox and aren't
+// carried into snapshots.
 type Snapshot struct {
 	Ref       string // what Restore and DeleteSnapshot take
 	SizeBytes int64  // real disk space used; 0 if it couldn't be measured
@@ -29,7 +29,7 @@ type Snapshot struct {
 // A microsandbox group is one lineage of snapshots, and its head can't be
 // deleted while other members exist. Making each new snapshot the head lets
 // the one it replaces be deleted.
-func (s *Sandbox) TakeSnapshot(ctx context.Context, group, name string) (Snapshot, error) {
+func (s *msbSandbox) TakeSnapshot(ctx context.Context, group, name string) (Snapshot, error) {
 	a, err := microsandbox.Snapshot.Create(ctx, microsandbox.SnapshotCreateOptions{
 		FromSandbox: s.Name(),
 		Name:        name,
@@ -40,7 +40,7 @@ func (s *Sandbox) TakeSnapshot(ctx context.Context, group, name string) (Snapsho
 		return Snapshot{}, fmt.Errorf("taking snapshot %s of %s: %w", name, s.Name(), err)
 	}
 	if _, err := microsandbox.Snapshot.GroupHead(ctx, group+":"+name); err != nil {
-		DeleteSnapshot(ctx, a.Reference())
+		Microsandbox{}.DeleteSnapshot(ctx, a.Reference())
 		return Snapshot{}, fmt.Errorf("making snapshot %s the head of %s: %w", name, group, err)
 	}
 	// a.SizeBytes() is the virtual disk size (e.g. 4 GiB), not space used,
@@ -83,7 +83,7 @@ func diskUsage(dir string) (int64, error) {
 // a layer, so compacting before snapshotting keeps rolling snapshots from
 // stacking layers without limit. The VM keeps running (paused for a few
 // milliseconds). It returns the layer counts before and after.
-func (s *Sandbox) Compact(ctx context.Context) (before, after int, err error) {
+func (s *msbSandbox) Compact(ctx context.Context) (before, after int, err error) {
 	res, err := s.vm.Compact(ctx, microsandbox.DiskCompactionOptions{RootDiskOnly: true})
 	if err != nil {
 		return 0, 0, fmt.Errorf("compacting %s: %w", s.Name(), err)
@@ -94,7 +94,7 @@ func (s *Sandbox) Compact(ctx context.Context) (before, after int, err error) {
 // Restore boots a new VM called name from a snapshot. cfg.CPUs, MemoryMiB,
 // MaxLifetime and Secrets apply; cfg.Image is ignored (the snapshot's disk is
 // used). The caller must call Destroy when done, as with New.
-func Restore(ctx context.Context, ref, name string, cfg Config) (*Sandbox, error) {
+func (Microsandbox) Restore(ctx context.Context, ref, name string, cfg Config) (Sandbox, error) {
 	vm, err := microsandbox.RestoreSandbox(ctx, ref, name,
 		microsandbox.WithRestoreCPUs(cfg.CPUs),
 		microsandbox.WithRestoreMemory(cfg.MemoryMiB),
@@ -103,7 +103,7 @@ func Restore(ctx context.Context, ref, name string, cfg Config) (*Sandbox, error
 	if err != nil {
 		return nil, fmt.Errorf("restoring %s from snapshot %s: %w", name, ref, err)
 	}
-	sb := &Sandbox{vm: vm}
+	sb := &msbSandbox{vm: vm}
 	if len(cfg.Secrets) > 0 {
 		if err := sb.attachSecrets(ctx, cfg.Secrets); err != nil {
 			sb.Destroy()
@@ -116,7 +116,7 @@ func Restore(ctx context.Context, ref, name string, cfg Config) (*Sandbox, error
 // attachSecrets adds secrets to a restored VM. Restores never carry secrets
 // over, and a running VM only picks up new secrets on restart, so this
 // restarts it; the restored disk is kept.
-func (s *Sandbox) attachSecrets(ctx context.Context, secrets []Secret) error {
+func (s *msbSandbox) attachSecrets(ctx context.Context, secrets []Secret) error {
 	specs := make(map[string]microsandbox.SecretModifySpec, len(secrets))
 	for _, sec := range secrets {
 		specs[sec.EnvVar] = microsandbox.SecretModifySpec{Value: sec.Value, AllowedHosts: sec.AllowHosts}
@@ -138,9 +138,9 @@ func (s *Sandbox) attachSecrets(ctx context.Context, secrets []Secret) error {
 // were taken from, but each snapshot is self-contained and running VMs don't
 // need their source (verified by experiment), and forgerun only deletes
 // snapshots it has replaced or evicted.
-func DeleteSnapshot(ctx context.Context, ref string) error {
+func (m Microsandbox) DeleteSnapshot(ctx context.Context, ref string) error {
 	err := microsandbox.Snapshot.Remove(ctx, ref, true)
-	if err == nil || microsandbox.IsKind(err, microsandbox.ErrSnapshotNotFound) || SnapshotGone(ref) {
+	if err == nil || microsandbox.IsKind(err, microsandbox.ErrSnapshotNotFound) || m.SnapshotGone(ref) {
 		return nil
 	}
 	return fmt.Errorf("deleting snapshot %s: %w", ref, err)
@@ -149,7 +149,7 @@ func DeleteSnapshot(ctx context.Context, ref string) error {
 // SnapshotGone reports whether a local snapshot's folder no longer exists.
 // Removing such a snapshot fails with a plain I/O error rather than "not
 // found", but it's already deleted as far as forgerun is concerned.
-func SnapshotGone(ref string) bool {
+func (Microsandbox) SnapshotGone(ref string) bool {
 	_, err := os.Stat(ref)
 	return errors.Is(err, fs.ErrNotExist)
 }
@@ -163,7 +163,7 @@ type SnapshotInfo struct {
 
 // ListSnapshots returns every snapshot microsandbox has on this host, in any
 // group, including ones forgerun didn't make.
-func ListSnapshots(ctx context.Context) ([]SnapshotInfo, error) {
+func (Microsandbox) ListSnapshots(ctx context.Context) ([]SnapshotInfo, error) {
 	handles, err := microsandbox.Snapshot.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing snapshots: %w", err)

@@ -41,6 +41,9 @@ type Manager struct {
 	// so tests use their own and can't delete a server's snapshots.
 	Prefix string
 	Limits Limits
+	// Backend makes, restores and deletes the snapshots: the same one the
+	// runner's sessions use. nil = sandbox.Default (microsandbox).
+	Backend sandbox.Backend
 }
 
 var _ task.Snapshotter = (*Manager)(nil)
@@ -48,7 +51,7 @@ var _ task.Snapshotter = (*Manager)(nil)
 // Restore boots a VM from the current snapshot for req's repo and agent,
 // attaches req.Config's secrets, updates the code to the latest commit and
 // records that the task started from it.
-func (m *Manager) Restore(ctx context.Context, req task.RestoreRequest, logf func(string, ...any)) (*sandbox.Sandbox, error) {
+func (m *Manager) Restore(ctx context.Context, req task.RestoreRequest, logf func(string, ...any)) (sandbox.Sandbox, error) {
 	snap, err := m.Store.CurrentSnapshot(ctx, req.Repo, req.AgentID)
 	if errors.Is(err, store.ErrSnapshotNotFound) {
 		return nil, task.ErrNoSnapshot
@@ -57,7 +60,7 @@ func (m *Manager) Restore(ctx context.Context, req task.RestoreRequest, logf fun
 		return nil, err
 	}
 
-	sb, err := sandbox.Restore(ctx, snap.Ref, cmp.Or(req.VMName, req.TaskID), req.Config)
+	sb, err := m.backend().Restore(ctx, snap.Ref, cmp.Or(req.VMName, req.TaskID), req.Config)
 	if err != nil {
 		// The snapshot itself is unusable (e.g. missing or corrupt). Remove
 		// it so later tasks don't trip over it too; the next successful
@@ -87,7 +90,7 @@ func (m *Manager) Restore(ctx context.Context, req task.RestoreRequest, logf fun
 
 // Save cleans the task's VM, snapshots it as the current snapshot for its
 // repo and agent, and deletes the snapshot it replaces.
-func (m *Manager) Save(ctx context.Context, sb *sandbox.Sandbox, req task.SnapshotRequest, logf func(string, ...any)) error {
+func (m *Manager) Save(ctx context.Context, sb sandbox.Sandbox, req task.SnapshotRequest, logf func(string, ...any)) error {
 	logf("cleaning VM for snapshot")
 	commit, err := clean(ctx, sb, req)
 	if err != nil {
@@ -112,7 +115,7 @@ func (m *Manager) Save(ctx context.Context, sb *sandbox.Sandbox, req task.Snapsh
 	})
 	if err != nil {
 		// Not recorded, so nothing would ever clean it up: remove it now.
-		if delErr := sandbox.DeleteSnapshot(ctx, snap.Ref); delErr != nil {
+		if delErr := m.backend().DeleteSnapshot(ctx, snap.Ref); delErr != nil {
 			logf("warning: removing unrecorded snapshot %s: %v", snap.Ref, delErr)
 		}
 		return err
@@ -144,7 +147,7 @@ func (m *Manager) Save(ctx context.Context, sb *sandbox.Sandbox, req task.Snapsh
 // order: a crash in between leaves a row pointing at nothing, which is
 // harmless, rather than files no row knows about.
 func (m *Manager) remove(ctx context.Context, snap store.Snapshot) error {
-	if err := sandbox.DeleteSnapshot(ctx, snap.Ref); err != nil {
+	if err := m.backend().DeleteSnapshot(ctx, snap.Ref); err != nil {
 		return err
 	}
 	return m.Store.MarkSnapshotDeleted(ctx, snap.ID)
@@ -156,7 +159,7 @@ func (m *Manager) remove(ctx context.Context, snap store.Snapshot) error {
 //
 // Kept: git-ignored files (node_modules, build caches). Removed: the agent's
 // edits, commits and branches, untracked files, and the agent's state paths.
-func clean(ctx context.Context, sb *sandbox.Sandbox, req task.SnapshotRequest) (string, error) {
+func clean(ctx context.Context, sb sandbox.Sandbox, req task.SnapshotRequest) (string, error) {
 	commit, err := resetToDefault(ctx, sb, req.RepoDir)
 	if err != nil {
 		return "", err
@@ -172,7 +175,7 @@ func clean(ctx context.Context, sb *sandbox.Sandbox, req task.SnapshotRequest) (
 
 // update brings a restored checkout to the latest commit of the remote's
 // default branch, like a git pull that can't conflict. It returns the commit.
-func update(ctx context.Context, sb *sandbox.Sandbox, req task.RestoreRequest) (string, error) {
+func update(ctx context.Context, sb sandbox.Sandbox, req task.RestoreRequest) (string, error) {
 	dir := req.RepoDir
 	if req.Fetch != nil { // a private repo: the host fetches, the VM has no credentials
 		if _, err := task.HostFetch(ctx, sb, req.Fetch, req.Repo, "", dir); err != nil {
@@ -199,7 +202,7 @@ func update(ctx context.Context, sb *sandbox.Sandbox, req task.RestoreRequest) (
 // resetToDefault checks out origin's default branch at origin's commit,
 // discarding local changes, commits, other branches, stashes and untracked
 // files (ignored files are kept). It returns the commit.
-func resetToDefault(ctx context.Context, sb *sandbox.Sandbox, dir string) (string, error) {
+func resetToDefault(ctx context.Context, sb sandbox.Sandbox, dir string) (string, error) {
 	// origin/HEAD is the remote's default branch, e.g. "origin/main".
 	remote, err := git(ctx, sb, dir, "rev-parse", "--abbrev-ref", "origin/HEAD")
 	if err != nil {
@@ -236,7 +239,7 @@ func resetToDefault(ctx context.Context, sb *sandbox.Sandbox, dir string) (strin
 }
 
 // git runs git in dir inside the VM and returns its trimmed output.
-func git(ctx context.Context, sb *sandbox.Sandbox, dir string, args ...string) (string, error) {
+func git(ctx context.Context, sb sandbox.Sandbox, dir string, args ...string) (string, error) {
 	out, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: append([]string{"-C", dir}, args...)})
 	return strings.TrimSpace(out), err
 }
@@ -253,6 +256,13 @@ func (m *Manager) Group(repo, agentID string) string {
 }
 
 func (m *Manager) prefix() string { return cmp.Or(m.Prefix, "forgerun") }
+
+func (m *Manager) backend() sandbox.Backend {
+	if m.Backend == nil {
+		return sandbox.Default
+	}
+	return m.Backend
+}
 
 // slug keeps lower-case letters and digits, turning anything else into
 // single dashes: "Hello_World.js" -> "hello-world-js".
@@ -284,7 +294,7 @@ func bloated(sizeBytes, usedBytes int64) bool {
 
 // usedBytes is the space the VM's files really use, as df reports for its
 // root filesystem.
-func usedBytes(ctx context.Context, sb *sandbox.Sandbox) (int64, error) {
+func usedBytes(ctx context.Context, sb sandbox.Sandbox) (int64, error) {
 	out, err := sb.Run(ctx, sandbox.Cmd{Name: "df", Args: []string{"-B1", "--output=used", "/"}})
 	if err != nil {
 		return 0, err

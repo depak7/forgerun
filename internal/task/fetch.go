@@ -25,7 +25,7 @@ const (
 
 // unpack puts a fetched copy of the repo at srcDir in the VM, owned by the
 // VM's user (git refuses repositories owned by someone else).
-func unpack(ctx context.Context, sb *sandbox.Sandbox, f Fetcher, repo, ref string) (defaultBranch string, err error) {
+func unpack(ctx context.Context, sb sandbox.Sandbox, f Fetcher, repo, ref string) (defaultBranch string, err error) {
 	tarball, branch, err := f.Fetch(ctx, repo, ref)
 	if err != nil {
 		return "", err
@@ -43,7 +43,7 @@ func unpack(ctx context.Context, sb *sandbox.Sandbox, f Fetcher, repo, ref strin
 // HostClone is the first checkout of a repo fetched on the host: it
 // becomes dir, with origin pointing at the repo (without credentials) and
 // origin/HEAD at its default branch, as a clone would leave it.
-func HostClone(ctx context.Context, sb *sandbox.Sandbox, f Fetcher, repo, dir string) error {
+func HostClone(ctx context.Context, sb sandbox.Sandbox, f Fetcher, repo, dir string) error {
 	branch, err := unpack(ctx, sb, f, repo, "")
 	if err != nil {
 		return err
@@ -64,7 +64,7 @@ git checkout -q -B "$3" HEAD`
 // origin/<branch> and origin/HEAD (what a git fetch from origin would do);
 // otherwise the commit ref, which can then be checked out. It returns the
 // fetched commit.
-func HostFetch(ctx context.Context, sb *sandbox.Sandbox, f Fetcher, repo, ref, dir string) (string, error) {
+func HostFetch(ctx context.Context, sb sandbox.Sandbox, f Fetcher, repo, ref, dir string) (string, error) {
 	branch, err := unpack(ctx, sb, f, repo, ref)
 	if err != nil {
 		return "", err

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/store"
 )
 
@@ -97,7 +96,7 @@ func (m *Manager) Sweep(ctx context.Context, now time.Time) (SweepReport, error)
 	// Rows whose files are gone (e.g. removed by hand) just get marked.
 	var live []store.Snapshot
 	for _, s := range snaps {
-		if !sandbox.SnapshotGone(s.Ref) {
+		if !m.backend().SnapshotGone(s.Ref) {
 			live = append(live, s)
 			continue
 		}
@@ -113,7 +112,7 @@ func (m *Manager) Sweep(ctx context.Context, now time.Time) (SweepReport, error)
 	for _, s := range live {
 		known[s.Ref] = true
 	}
-	onDisk, err := sandbox.ListSnapshots(ctx)
+	onDisk, err := m.backend().ListSnapshots(ctx)
 	if err != nil {
 		errs = append(errs, err)
 	}
@@ -121,7 +120,7 @@ func (m *Manager) Sweep(ctx context.Context, now time.Time) (SweepReport, error)
 		if known[info.Ref] || !strings.HasPrefix(info.Group, m.prefix()+"-") || now.Sub(info.CreatedAt) < orphanAge {
 			continue
 		}
-		if err := sandbox.DeleteSnapshot(ctx, info.Ref); err != nil {
+		if err := m.backend().DeleteSnapshot(ctx, info.Ref); err != nil {
 			errs = append(errs, err)
 			continue
 		}

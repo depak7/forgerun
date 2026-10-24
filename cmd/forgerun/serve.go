@@ -53,6 +53,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	defaultAgent := fs.String("agent", "cursor", "agent for requests that name none")
 	defaultModel := fs.String("model", "", "default model family of the default agent (default: the agent's own)")
 	requireZDR := fs.Bool("require-zdr", false, "offer only models with zero data retention")
+	sandboxKind := sandboxFlag(fs)
 	useSnapshots := fs.Bool("snapshots", true, "open sessions from their repo's snapshot, and save one when a session closes")
 	snapshotMaxAge := fs.Duration("snapshot-max-age", 7*24*time.Hour, "delete a repo's snapshot when no task has used it for this long (0 = never)")
 	snapshotBudget := byteSize(20e9)
@@ -104,12 +105,23 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	if err != nil {
 		return err
 	}
+	var backend sandbox.Backend = sandbox.Microsandbox{}
+	if !orchestratorOnly { // the orchestrator alone runs no sandboxes
+		kind, err := sandboxName(*sandboxKind)
+		if err != nil {
+			return err
+		}
+		if backend, err = chooseBackend(kind, defaultStateDir("serve")); err != nil {
+			return err
+		}
+		log.Info("sandboxes", "backend", backend.Name())
+	}
 	workerToken := os.Getenv("FORGERUN_WORKER_TOKEN")
 	if orchestratorOnly {
 		if len(workerToken) < 16 {
 			return errors.New("forgerun server needs FORGERUN_WORKER_TOKEN (at least 16 characters, e.g. openssl rand -hex 32): workers connect with it")
 		}
-	} else if err := sandbox.EnsureRuntime(ctx); err != nil {
+	} else if err := backend.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
 
@@ -139,9 +151,9 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 		log.Warn("-sessions is below -workers; raising it", "sessions", *maxSessions, "workers", *workers)
 		*maxSessions = *workers
 	}
-	runner := &task.Runner{Agents: agents, DefaultAgent: *defaultAgent, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout,
+	runner := &task.Runner{Agents: agents, Sandboxes: backend, DefaultAgent: *defaultAgent, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout,
 		AgentIdle: *agentIdle, Stdout: io.Discard, Log: log, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, VMPrefix: serveVMPrefix}
-	removeLeftoverVMs(ctx, serveVMPrefix, log)
+	removeLeftoverVMs(ctx, backend, serveVMPrefix, log)
 	var prs api.PRs // stays a nil interface when PRs are off (a nil *Publisher in it wouldn't be)
 	var publisher *publish.Publisher
 	if prTokens != nil {
@@ -164,7 +176,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	var snapshotSettings *api.SnapshotSettings // nil = snapshots off
 	if *useSnapshots {
 		snapshotSettings = &api.SnapshotSettings{BudgetBytes: int64(snapshotBudget), MaxAge: *snapshotMaxAge, SweepEvery: *snapshotSweep}
-		mgr := &snapshots.Manager{Store: db, Limits: snapshots.Limits{MaxAge: *snapshotMaxAge, Budget: int64(snapshotBudget)}}
+		mgr := &snapshots.Manager{Store: db, Backend: backend, Limits: snapshots.Limits{MaxAge: *snapshotMaxAge, Budget: int64(snapshotBudget)}}
 		runner.Snapshots = mgr
 		// Before any task runs: finish deletes a crash interrupted, remove
 		// orphans, apply the limits.

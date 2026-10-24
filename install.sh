@@ -13,6 +13,7 @@
 #   FORGERUN_SERVER, FORGERUN_WORKER_TOKEN     the orchestrator, for a worker
 #   CURSOR_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENCODE_API_KEY, GITHUB_TOKEN
 #   FORGERUN_SERVICE=yes|no           run it in the background, now and at boot (default yes)
+#   FORGERUN_SANDBOX=gvisor           on Linux without KVM: gVisor sandboxes (installs Docker + gVisor)
 #   FORGERUN_DIR (~/forgerun), FORGERUN_REPO, FORGERUN_BRANCH (main)
 #   FORGERUN_DOCTOR_FLAGS             extra flags for forgerun doctor, e.g. -quick
 # shellcheck disable=SC2034,SC2154 # variables set and read through eval in ask()
@@ -120,12 +121,57 @@ packages() {
 
 # kvm_access lets this user run microVMs: /dev/kvm belongs to the kvm group.
 kvm_access() {
-	[ "$GOOS" = linux ] && [ -e /dev/kvm ] || return 0
+	[ "$GOOS" = linux ] && [ -e /dev/kvm ] && [ "${FORGERUN_SANDBOX:-}" != gvisor ] || return 0
 	[ -r /dev/kvm ] && [ -w /dev/kvm ] && return 0
 	[ -n "$SUDO" ] || die "your user can't use /dev/kvm: add it to the kvm group, then log out and back in"
 	say "adding $(id -un) to the kvm group (to use /dev/kvm)"
 	$SUDO usermod -aG kvm "$(id -un)"
 	die "added you to the kvm group: log out and back in (or reboot), then run this again"
+}
+
+# gvisor_setup installs Docker and gVisor (runsc), registers runsc with
+# Docker, and lets this user run docker: for machines without KVM.
+gvisor_setup() {
+	[ "${FORGERUN_SANDBOX:-}" = gvisor ] || return 0
+	[ "$GOOS" = linux ] || die "gVisor sandboxes need Linux"
+	if [ "$(id -u)" != 0 ] && [ -z "$SUDO" ]; then die "installing Docker and gVisor needs root or sudo"; fi
+	if ! have docker; then
+		say "installing Docker"
+		if have apt-get; then
+			$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null
+		elif have dnf; then
+			$SUDO dnf install -y -q moby-engine || $SUDO dnf install -y -q docker
+		elif have pacman; then
+			$SUDO pacman -S --noconfirm --needed docker
+		elif have zypper; then
+			$SUDO zypper -q install -y docker
+		else
+			die "install Docker (https://docs.docker.com/engine/install/), then run this again"
+		fi
+	fi
+	have systemctl && $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
+	if ! have runsc; then
+		say "installing gVisor (runsc)"
+		have bzip2 || { have apt-get && $SUDO apt-get install -y -qq bzip2 >/dev/null; } || true
+		tmp=$(mktemp -d)
+		url=https://storage.googleapis.com/gvisor/releases/release/latest/$(uname -m)
+		(cd "$tmp" && curl -fsSLO "$url/gvisor.tar.bz2" && curl -fsSLO "$url/gvisor.tar.bz2.sha512" &&
+			sha512sum -c gvisor.tar.bz2.sha512 >/dev/null) || die "couldn't download gVisor, or its checksum didn't match"
+		$SUDO tar -xjf "$tmp/gvisor.tar.bz2" -C /usr/local/bin
+		rm -rf "$tmp"
+	fi
+	# forgerun's own runtime entry: --overlay2=none keeps file changes where
+	# docker commit (warm-start snapshots) sees them.
+	if ! $SUDO docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"forgerun-runsc"'; then
+		say "registering gVisor with Docker (runtime forgerun-runsc)"
+		$SUDO runsc install --runtime=forgerun-runsc -- --overlay2=none >/dev/null
+		$SUDO systemctl restart docker
+	fi
+	if ! docker info >/dev/null 2>&1; then
+		say "adding $(id -un) to the docker group (to start sandboxes)"
+		$SUDO usermod -aG docker "$(id -un)"
+		die "added you to the docker group: log out and back in (or reboot), then run this again"
+	fi
 }
 
 # source fetches forgerun, or updates the copy that's there.
@@ -224,6 +270,13 @@ questions() {
 		fi
 		agent_keys
 	fi
+	if [ "$GOOS" = linux ] && [ ! -e /dev/kvm ] && [ -z "${FORGERUN_SANDBOX:-}" ]; then
+		note "This machine has no KVM, so microVMs can't run here. forgerun can use gVisor"
+		note "sandboxes instead (Docker with gVisor's own kernel between the agent and the host)."
+		yes_no use_gvisor "Install Docker and gVisor (needs sudo) and use them?" yes
+		[ "$use_gvisor" = yes ] || die "no sandbox to run agents in: use a machine with KVM, or answer yes"
+		FORGERUN_SANDBOX=gvisor
+	fi
 	yes_no FORGERUN_SERVICE "Run it in the background, now and at every boot?" yes
 	say "thanks: the rest runs by itself"
 }
@@ -231,10 +284,11 @@ questions() {
 configure_worker() {
 	if [ "$NEW_SETTINGS" = no ]; then
 		say "keeping the settings in $ENV_FILE (edit it to change them)"
+		set_env "$ENV_FILE" FORGERUN_SANDBOX
 		return
 	fi
 	(umask 077 && : >"$ENV_FILE")
-	for k in FORGERUN_SERVER FORGERUN_WORKER_TOKEN CURSOR_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENCODE_API_KEY; do
+	for k in FORGERUN_SERVER FORGERUN_WORKER_TOKEN FORGERUN_SANDBOX CURSOR_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENCODE_API_KEY; do
 		set_env "$ENV_FILE" "$k"
 	done
 	say "saved the settings to $ENV_FILE (only you can read it)"
@@ -243,9 +297,10 @@ configure_worker() {
 configure_serve() {
 	if [ "$NEW_SETTINGS" = no ]; then
 		say "keeping the settings in $ENV_FILE (edit it to change them)"
+		set_env "$ENV_FILE" FORGERUN_SANDBOX
 	else
 		(umask 077 && cp "$DIR/.env.example" "$ENV_FILE")
-		for k in GITHUB_TOKEN CURSOR_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENCODE_API_KEY; do
+		for k in GITHUB_TOKEN FORGERUN_SANDBOX CURSOR_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENCODE_API_KEY; do
 			set_env "$ENV_FILE" "$k"
 		done
 		say "saved the settings to $ENV_FILE (only you can read it)"
@@ -361,6 +416,7 @@ main() {
 	questions
 	packages
 	kvm_access
+	gvisor_setup
 	source_code
 	go_tool
 	if [ "$ROLE" = serve ]; then node_tool; fi

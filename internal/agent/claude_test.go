@@ -85,3 +85,10 @@ for a in "$@"; do printf 'arg[%s]\n' "$a"; done
 		t.Errorf("claude received:\n%s\nwant:\n%s", out, want)
 	}
 }
+
+// The user's claude.ai connectors (Gmail, Notion, …) stay off in sandboxes.
+func TestClaudeCodeConnectorsOff(t *testing.T) {
+	if env := claudeCmd("/work/repo", nil).Env; env["ENABLE_CLAUDEAI_MCP_SERVERS"] != "false" {
+		t.Errorf("env = %v", env)
+	}
+}

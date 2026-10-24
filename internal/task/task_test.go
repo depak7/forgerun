@@ -31,7 +31,7 @@ func (fakeAgent) Image() string                   { return "depak7/forgerun-agen
 func (fakeAgent) Credential() string              { return "" }
 func (fakeAgent) Secrets(string) []sandbox.Secret { return nil }
 func (fakeAgent) StatePaths() []string            { return []string{"/root/.fake-agent"} }
-func (fakeAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
+func (fakeAgent) Run(ctx context.Context, sb sandbox.Sandbox, req agent.Request, logs io.Writer) error {
 	return sb.Stream(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c", "echo hello from forgerun >> README"}, Dir: req.Dir}, logs)
 }
 
@@ -61,7 +61,7 @@ func (shellAgent) Image() string                   { return "depak7/forgerun-age
 func (shellAgent) Credential() string              { return "" }
 func (shellAgent) Secrets(string) []sandbox.Secret { return nil }
 func (shellAgent) StatePaths() []string            { return []string{"/root/.fake-agent"} }
-func (a shellAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
+func (a shellAgent) Run(ctx context.Context, sb sandbox.Sandbox, req agent.Request, logs io.Writer) error {
 	return sb.Stream(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c", a.script}, Dir: req.Dir}, logs)
 }
 
@@ -112,7 +112,7 @@ func (keyAgent) Secrets(v string) []sandbox.Secret {
 	return []sandbox.Secret{{EnvVar: "FAKE_KEY", Value: v, AllowHosts: []string{"example.invalid"}}}
 }
 func (keyAgent) StatePaths() []string { return nil }
-func (a keyAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
+func (a keyAgent) Run(ctx context.Context, sb sandbox.Sandbox, req agent.Request, logs io.Writer) error {
 	return sb.Stream(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c",
 		`echo "` + a.id + ` sees FAKE_KEY=$FAKE_KEY"; echo x >> README`}, Dir: req.Dir}, logs)
 }

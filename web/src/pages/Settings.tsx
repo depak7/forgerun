@@ -240,6 +240,7 @@ function Workers() {
             <span className={styles.sub}>
               {w.running} running · {w.sessions} session{w.sessions === 1 ? "" : "s"} open
               {w.max_sessions > 0 ? ` of ${w.max_sessions}` : ""}
+              {w.sandbox ? ` · sandboxes: ${w.sandbox === "gvisor" ? "gVisor" : "microVMs"}` : ""}
             </span>
           </div>
         </div>

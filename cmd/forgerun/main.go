@@ -80,6 +80,7 @@ func runCmd(args []string) error {
 	agentID := fs.String("agent", "cursor", "agent to run: "+strings.Join(agent.NewSet(nil, agent.Builtin()...).IDs(), ", "))
 	model := fs.String("model", "", "model: an exact id for cursor (e.g. claude-opus-5-5-high), an alias for claude-code (e.g. opus); default: the agent's own")
 	effort := fs.String("effort", "", "effort, for agents that take it separately (claude-code: low … max)")
+	sandboxKind := sandboxFlag(fs)
 	timeout := fs.Duration("timeout", defaultTurnTimeout, "max time for the whole task")
 	out := fs.String("out", "out", "directory for task results")
 	fs.Parse(args)
@@ -95,13 +96,21 @@ func runCmd(args []string) error {
 		stop() // a second Ctrl-C now force-quits
 	}()
 
-	if err := sandbox.EnsureRuntime(ctx); err != nil {
+	kind, err := sandboxName(*sandboxKind)
+	if err != nil {
+		return err
+	}
+	backend, err := chooseBackend(kind, defaultStateDir("run"))
+	if err != nil {
+		return err
+	}
+	if err := backend.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
 
 	// The agent's credential is read from its environment variable when the task starts.
 	agents := agent.NewSet(agent.EnvCredentials{}, agent.Builtin()...)
-	r := &task.Runner{Agents: agents, DefaultAgent: *agentID, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: os.Stdout}
+	r := &task.Runner{Agents: agents, Sandboxes: backend, DefaultAgent: *agentID, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout, Stdout: os.Stdout}
 	t := task.New(*repo, *prompt)
 	t.ModelID, t.Family, t.Effort = *model, *model, *effort
 	// No models table here to say which models need the agent's key: run

@@ -122,16 +122,16 @@ describe("SettingsPage", () => {
   });
 
   it("lists connected workers when they run apart", async () => {
-    const routes = { "/api/workers": [{ name: "deepak-mac", last_seen: new Date().toISOString(), agents: ["claude-code", "cursor"], adapters: ["claude-code", "cursor", "opencode"], sessions: 1, max_sessions: 4, running: 1 }] };
+    const routes = { "/api/workers": [{ name: "deepak-mac", last_seen: new Date().toISOString(), agents: ["claude-code", "cursor"], adapters: ["claude-code", "cursor", "opencode"], sandbox: "gvisor", sessions: 1, max_sessions: 4, running: 1 }] };
     serve(status({ remote_workers: true }), routes);
     renderPage(<SettingsPage />);
     expect(await screen.findByText("deepak-mac")).toBeTruthy();
     expect(screen.getByText("CONNECTED")).toBeTruthy();
-    expect(screen.getByText(/1 running · 1 session open of 4/)).toBeTruthy();
+    expect(screen.getByText(/1 running · 1 session open of 4 · sandboxes: gVisor/)).toBeTruthy();
   });
 
   it("says when a worker has no agent keys", async () => {
-    const routes = { "/api/workers": [{ name: "bare", last_seen: new Date().toISOString(), agents: [], adapters: ["opencode"], sessions: 0, max_sessions: 4, running: 0 }] };
+    const routes = { "/api/workers": [{ name: "bare", last_seen: new Date().toISOString(), agents: [], adapters: ["opencode"], sandbox: "microsandbox", sessions: 0, max_sessions: 4, running: 0 }] };
     serve(status({ remote_workers: true }), routes);
     renderPage(<SettingsPage />);
     expect(await screen.findByText("no agent keys · models that need none")).toBeTruthy();

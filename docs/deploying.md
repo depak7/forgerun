@@ -39,7 +39,9 @@ with GitHub, and you're the admin (your username is in `FORGERUN_ADMINS`). Setti
 
 ## 2. A worker on your Mac or a Linux machine
 
-The worker needs macOS on Apple Silicon or Linux with KVM. On it, run the installer and
+The worker needs a Mac with Apple Silicon or a Linux machine. Linux with KVM (`/dev/kvm`)
+runs microVMs; any other Linux machine, such as an ordinary cloud VM, runs gVisor
+sandboxes, which the installer sets up (Docker and gVisor, with sudo). On it, run the installer and
 choose **worker**; it asks for the orchestrator's address, the worker token (the server's
 `FORGERUN_WORKER_TOKEN`) and your agent keys, checks the setup with `forgerun doctor`, and
 runs the worker in the background, now and at every boot:

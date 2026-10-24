@@ -50,7 +50,7 @@ func clip(s string, n int) string {
 
 // rebuild puts a new session's checkout where the thread left off: the
 // thread's start commit, then each earlier turn's changes as a commit.
-func rebuild(ctx context.Context, sb *sandbox.Sandbox, t Task, history []Turn) error {
+func rebuild(ctx context.Context, sb sandbox.Sandbox, t Task, history []Turn) error {
 	git := func(args ...string) error {
 		_, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: append([]string{"-C", repoDir}, args...)})
 		return err

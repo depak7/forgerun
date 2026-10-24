@@ -2,6 +2,9 @@ package sandbox
 
 import "testing"
 
+// msb is the backend the VM tests boot real microVMs with.
+var msb Microsandbox
+
 func TestExitErrorMessage(t *testing.T) {
 	err := &ExitError{Cmd: Cmd{Name: "git", Args: []string{"clone", "x"}}, Code: 128, Stderr: "repo not found"}
 	want := "git [clone x]: exit code 128: repo not found"

@@ -39,7 +39,8 @@ func doctorCmd(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	role := fs.String("role", "", "what this machine is for: worker, serve or server (default: worker if FORGERUN_SERVER is set, else serve)")
 	envFile := fs.String("env", "", "load settings from this env file first, e.g. ~/.forgerun-worker.env")
-	quick := fs.Bool("quick", false, "don't boot a microVM to time a cold start")
+	quick := fs.Bool("quick", false, "don't start a sandbox to time a cold start")
+	sandboxKind := sandboxFlag(fs)
 	asJSON := fs.Bool("json", false, "print the report as JSON")
 	fs.Parse(args)
 
@@ -61,7 +62,11 @@ func doctorCmd(args []string) error {
 
 	ctx, stop := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer stop()
-	env := realEnv()
+	kind, err := sandboxName(*sandboxKind)
+	if err != nil {
+		return err
+	}
+	env := realEnv(kind)
 	if *quick {
 		env.BootVM = nil
 	}
@@ -79,8 +84,8 @@ func doctorCmd(args []string) error {
 	return nil
 }
 
-// realEnv is doctor's view of this machine.
-func realEnv() doctor.Env {
+// realEnv is doctor's view of this machine; kind is its sandbox backend.
+func realEnv(kind string) doctor.Env {
 	home, _ := os.UserHomeDir()
 	var agents []doctor.Agent
 	for _, a := range agent.Builtin() {
@@ -126,7 +131,15 @@ func realEnv() doctor.Env {
 		},
 		Runtime: sandbox.RuntimeInstalled,
 		MSBHome: sandbox.Home,
-		BootVM:  bootVM,
+		BootVM:  func(ctx context.Context) error { return bootVM(ctx, kind) },
+		Sandbox: kind,
+		GVisor: func(ctx context.Context) error {
+			g, err := sandbox.NewGVisor(defaultStateDir("doctor"))
+			if err != nil {
+				return err
+			}
+			return g.EnsureRuntime(ctx)
+		},
 		Hello: func(ctx context.Context, server, token string) error {
 			err := (&remote.Client{URL: server, Token: token}).Hello(ctx)
 			switch {
@@ -155,16 +168,21 @@ func realEnv() doctor.Env {
 	}
 }
 
-// bootVM boots a small VM, runs one command in it and removes it: the time
-// it takes is a cold start. It removes any VM an interrupted run left.
-func bootVM(ctx context.Context) error {
-	if err := sandbox.EnsureRuntime(ctx); err != nil {
-		return fmt.Errorf("installing the microsandbox runtime: %w", err)
+// bootVM starts a small sandbox with the backend called kind, runs one
+// command in it and removes it: the time it takes is a cold start. It
+// removes any sandbox an interrupted run left.
+func bootVM(ctx context.Context, kind string) error {
+	backend, err := chooseBackend(kind, defaultStateDir("doctor"))
+	if err != nil {
+		return err
 	}
-	sandbox.RemoveLeftovers(ctx, doctorVMPrefix)
+	if err := backend.EnsureRuntime(ctx); err != nil {
+		return fmt.Errorf("the %s runtime: %w", backend.Name(), err)
+	}
+	backend.RemoveLeftovers(ctx, doctorVMPrefix)
 	suffix := make([]byte, 3)
 	rand.Read(suffix)
-	sb, err := sandbox.New(ctx, doctorVMPrefix+"doctor-"+hex.EncodeToString(suffix),
+	sb, err := backend.New(ctx, doctorVMPrefix+"doctor-"+hex.EncodeToString(suffix),
 		sandbox.Config{Image: "alpine", CPUs: 1, MemoryMiB: 512, MaxLifetime: 5 * time.Minute})
 	if err != nil {
 		return err

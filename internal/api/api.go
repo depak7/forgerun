@@ -70,6 +70,7 @@ type WorkerInfo struct {
 	LastSeen    time.Time `json:"last_seen"`
 	Agents      []string  `json:"agents"`   // agents it has keys for
 	Adapters    []string  `json:"adapters"` // every agent it can run; models that need no key run on these
+	Sandbox     string    `json:"sandbox"`  // its sandbox backend: "microsandbox" or "gvisor"
 	Sessions    int       `json:"sessions"`
 	MaxSessions int       `json:"max_sessions"`
 	Running     int       `json:"running"`

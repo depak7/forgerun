@@ -19,8 +19,8 @@ type Snapshotter interface {
 	// updated to the latest commit of the default branch. It returns
 	// ErrNoSnapshot if there is none; any other error means the snapshot
 	// couldn't be used. On error, no VM is left running.
-	Restore(ctx context.Context, req RestoreRequest, logf func(format string, a ...any)) (*sandbox.Sandbox, error)
-	Save(ctx context.Context, sb *sandbox.Sandbox, req SnapshotRequest, logf func(format string, a ...any)) error
+	Restore(ctx context.Context, req RestoreRequest, logf func(format string, a ...any)) (sandbox.Sandbox, error)
+	Save(ctx context.Context, sb sandbox.Sandbox, req SnapshotRequest, logf func(format string, a ...any)) error
 }
 
 // RestoreRequest says which repo's snapshot to start a task from.

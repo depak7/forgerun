@@ -50,7 +50,7 @@ type Agent interface {
 	// (chat history, sessions, config written by Run). They're deleted
 	// before a VM is snapshotted, so the next task starts clean.
 	StatePaths() []string
-	Run(ctx context.Context, sb *sandbox.Sandbox, req Request, logs io.Writer) error
+	Run(ctx context.Context, sb sandbox.Sandbox, req Request, logs io.Writer) error
 }
 
 // Continuer is an optional Agent capability: carrying on the conversation
@@ -62,7 +62,7 @@ type Agent interface {
 //
 // Check for it with a type assertion: if c, ok := a.(Continuer); ok { ... }
 type Continuer interface {
-	Continue(ctx context.Context, sb *sandbox.Sandbox, dir, prompt string) (string, error)
+	Continue(ctx context.Context, sb sandbox.Sandbox, dir, prompt string) (string, error)
 }
 
 // Replier is an optional Agent capability, for agents whose output mixes

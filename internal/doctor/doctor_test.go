@@ -302,3 +302,33 @@ func TestOrchestratorOutdated(t *testing.T) {
 		t.Errorf("%+v", r)
 	}
 }
+
+// With the gvisor backend, no KVM is only a note, and Docker with runsc is
+// what's checked; the microsandbox checks are skipped.
+func TestGVisorWorker(t *testing.T) {
+	e := healthy()
+	e.Sandbox = "gvisor"
+	e.Stat = func(string) (fs.FileInfo, error) { return nil, fs.ErrNotExist } // no /dev/kvm
+	e.GVisor = func(context.Context) error { return nil }
+	rs := Run(context.Background(), RoleWorker, e)
+	if Failed(rs) {
+		t.Fatalf("failed: %+v", rs)
+	}
+	if r := find(t, rs, "virtualization"); r.Status != Warn || !strings.Contains(r.Detail, "gVisor instead") {
+		t.Errorf("virtualization: %+v", r)
+	}
+	if got := names(rs); strings.Contains(got, "microsandbox") || !strings.Contains(got, "gVisor") {
+		t.Errorf("checks: %s", got)
+	}
+	if r := find(t, rs, "cold start"); !strings.Contains(r.Detail, "gVisor sandbox") {
+		t.Errorf("cold start: %+v", r)
+	}
+	e.GVisor = func(context.Context) error { return errors.New(`Docker has no "forgerun-runsc" runtime`) }
+	rs = Run(context.Background(), RoleWorker, e)
+	if r := find(t, rs, "gVisor"); r.Status != Fail || !strings.Contains(r.Fix, "runsc install") {
+		t.Errorf("gVisor missing: %+v", r)
+	}
+	if r := find(t, rs, "cold start"); !strings.Contains(r.Detail, "skipped") {
+		t.Errorf("cold start with gVisor missing: %+v", r)
+	}
+}

@@ -26,12 +26,15 @@ const testRepo = "https://github.com/octocat/Hello-World" // tiny; default branc
 // and state in its own home folder. If fail is set, it then fails.
 type messyAgent struct{ fail bool }
 
+// msb is the backend the VM tests boot real microVMs with.
+var msb sandbox.Microsandbox
+
 func (messyAgent) ID() string                      { return "fake" }
 func (messyAgent) Image() string                   { return "depak7/forgerun-agent-cursor:dev" }
 func (messyAgent) Credential() string              { return "" }
 func (messyAgent) Secrets(string) []sandbox.Secret { return nil }
 func (messyAgent) StatePaths() []string            { return []string{"/root/.fake-agent"} }
-func (a messyAgent) Run(ctx context.Context, sb *sandbox.Sandbox, req agent.Request, logs io.Writer) error {
+func (a messyAgent) Run(ctx context.Context, sb sandbox.Sandbox, req agent.Request, logs io.Writer) error {
 	// The first two lines report what the task started with, for the tests.
 	script := `set -e
 echo "agent sees commit $(git rev-parse HEAD)"
@@ -61,7 +64,7 @@ func setup(t *testing.T, a agent.Agent) (*task.Runner, *memory.Store) {
 	t.Cleanup(func() { // whatever the test left behind
 		snaps, _ := s.ListSnapshots(context.Background())
 		for _, snap := range snaps {
-			sandbox.DeleteSnapshot(context.Background(), snap.Ref)
+			msb.DeleteSnapshot(context.Background(), snap.Ref)
 		}
 	})
 	r := &task.Runner{Agents: agent.NewSet(nil, a), DefaultAgent: a.ID(), OutDir: t.TempDir(), CPUs: 1, MemMiB: 1024, Timeout: 5 * time.Minute,
@@ -90,7 +93,7 @@ func TestSaveCleansAndReplaces(t *testing.T) {
 	}
 
 	// The snapshot looks like a fresh clone of master, plus the ignored cache.
-	sb, err := sandbox.Restore(ctx, first.Ref, "snapcheck-"+time.Now().Format("150405"),
+	sb, err := msb.Restore(ctx, first.Ref, "snapcheck-"+time.Now().Format("150405"),
 		sandbox.Config{CPUs: 1, MemoryMiB: 512, MaxLifetime: 2 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
@@ -268,7 +271,7 @@ func TestWarmStartUpdatesCode(t *testing.T) {
 
 	// Build an outdated snapshot by hand: a checkout one commit behind, with
 	// origin/master also pointing there, as if the snapshot were old.
-	vm, err := sandbox.New(ctx, "outdated-"+time.Now().Format("150405"), sandbox.Config{
+	vm, err := msb.New(ctx, "outdated-"+time.Now().Format("150405"), sandbox.Config{
 		Image: "depak7/forgerun-agent-cursor:dev", CPUs: 1, MemoryMiB: 512, MaxLifetime: 2 * time.Minute})
 	if err != nil {
 		t.Fatal(err)

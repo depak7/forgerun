@@ -15,7 +15,7 @@ func TestSecretNeverEntersVM(t *testing.T) {
 	ctx := context.Background()
 	const secret = "real-secret-value-123"
 
-	sb, err := New(ctx, "secret-test", Config{
+	sb, err := msb.New(ctx, "secret-test", Config{
 		Image: "depak7/forgerun-agent-cursor:dev", CPUs: 1, MemoryMiB: 512, MaxLifetime: 5 * time.Minute,
 		Secrets: []Secret{{EnvVar: "FAKE_KEY", Value: secret, AllowHosts: []string{"example.invalid"}}},
 	})

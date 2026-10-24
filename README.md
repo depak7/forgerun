@@ -13,14 +13,15 @@ push and open a PR), as a gif, with the same clip as an mp4. -->
 - **26.8 s → 2.8 s to start a task.** A new thread starts from a disk snapshot of the repo
   with its dependencies installed, instead of cloning and installing again (measured on
   `expressjs/express`: [docs/experiments.md](docs/experiments.md#4-snapshots-for-fast-task-start)).
-- **Keys never enter the VM.** The VM sees only placeholders; a proxy on the host swaps in
+- **Keys never enter the sandbox.** It sees only placeholders; a proxy on the host swaps in
   the real key, and only for the agent's own API.
 - **Workers dial out over HTTPS only.** Run the web UI on a small server and the VMs on
   your own machine: nothing needs opening on it.
 
 ## Quick start
 
-You need a Mac with Apple Silicon, or Linux with KVM (`ls /dev/kvm`). Then:
+You need a Mac with Apple Silicon, or Linux: with KVM (`ls /dev/kvm`) for microVMs, or any
+Linux machine with [gVisor](https://gvisor.dev), which the installer sets up. Then:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh
@@ -33,8 +34,8 @@ what's missing (git, a C compiler, Go; Node for the web UI), builds forgerun int
 (systemd on Linux, launchd on macOS), now and at every boot. Run it again to update.
 
 `forgerun doctor` checks a machine's setup any time and says how to fix what's wrong:
-virtualization (KVM, `kvm` group, a VM without nested virtualization), the microsandbox
-runtime and its database, disk and memory, image downloads, the orchestrator and worker
+virtualization (KVM, `kvm` group, a VM without nested virtualization) or Docker with gVisor,
+the microsandbox runtime and its database, disk and memory, image downloads, the orchestrator and worker
 token, Postgres, `GITHUB_TOKEN` and the sign-in settings. It boots one microVM to time a
 cold start (`-quick` skips that).
 
@@ -49,8 +50,11 @@ To set it up step by step instead, see [By hand](#by-hand).
 forgerun is a single Go binary with a web UI. Agents are pluggable adapters
 ([`internal/agent`](internal/agent)).
 
-- **Isolated:** every thread gets its own microVM. The agent can install, build and test
-  whatever it needs.
+- **Isolated:** every thread gets its own sandbox: a microVM where there's KVM or Apple
+  Silicon, otherwise a gVisor sandbox (a container run by gVisor's own user-space kernel,
+  so the agent never talks to the host's). The agent can install, build and test whatever
+  it needs. Pick one with `-sandbox microsandbox|gvisor`; the default (`auto`) uses
+  microVMs where they can run.
 - **A live session per thread:** the VM stays up between your messages, so the agent keeps
   its own conversation and working tree.
 - **Review, then push:** each turn's changes are kept as a diff. Nothing reaches GitHub
@@ -60,8 +64,9 @@ forgerun is a single Go binary with a web UI. Agents are pluggable adapters
   thread on that repo starts from it in seconds.
 
 **Built on [microsandbox](https://github.com/superradcompany/microsandbox)** (libkrun
-microVMs). forgerun isn't a sandbox provider: it's what runs around the agents (sessions,
-review, pushing, workers, sign-in).
+microVMs) and [gVisor](https://gvisor.dev). forgerun isn't a sandbox provider: it's what
+runs around the agents (sessions, review, pushing, workers, sign-in). With gVisor, which
+has no key proxy of its own, forgerun's (`internal/secretproxy`) keeps keys out.
 
 > Status: early. It works end to end (sign-in with GitHub, per-user limits, workers on
 > other machines), and things still change quickly.
@@ -70,7 +75,7 @@ review, pushing, workers, sign-in).
 
 | | Self-hosted | Open source | A VM per task | Keys readable inside the sandbox |
 |---|---|---|---|---|
-| **forgerun** | Yes | Yes (Apache-2.0) | Yes: a microVM per thread | No: placeholders, swapped by a proxy outside the VM |
+| **forgerun** | Yes | Yes (Apache-2.0) | Yes: a microVM per thread (a gVisor sandbox on Linux without KVM) | No: placeholders, swapped by a proxy outside the sandbox |
 | Cursor cloud agents | Partly: [self-hosted machines][c2] run the tools; Cursor runs the agent loop | No | Yes on Cursor's cloud ([isolated VMs][c1]); not on self-hosted machines, where [several agents share one][c2] | Yes: [environment-variable secrets are visible][c3] to the agent |
 | OpenAI Codex cloud | No | No | Yes: [each cloud task runs in a VM][x1] | Partly: environment variables yes; [network secrets][x1] are placeholders swapped by a proxy |
 | OpenHands | Yes | Yes (MIT) | No: [Docker containers][o1] | Yes: [custom secrets are exported][o2] into the agent's environment |
@@ -103,10 +108,10 @@ flowchart LR
         Sessions["Session registry<br/>open VMs · idle timeout · cap"]
         Snap["Snapshot manager<br/>warm starts · cleanup"]
         Pub["Publisher<br/>git push · pull requests"]
-        Proxy["Secrets proxy<br/>(microsandbox)"]
+        Proxy["Secrets proxy<br/>(microsandbox's, or forgerun's for gVisor)"]
     end
 
-    subgraph VM["microVM per thread"]
+    subgraph VM["microVM (or gVisor sandbox) per thread"]
         Agent["Agent CLI<br/>Cursor · Claude Code"]
         Repo["/work/repo<br/>one commit per turn"]
     end
@@ -209,6 +214,7 @@ is yours. With them, people sign in with GitHub and see only their own threads.
 | `-agent-idle` | `10m` | stop an agent that prints nothing and changes nothing |
 | `-snapshot-budget` | `20GB` | disk for warm-start snapshots |
 | `-require-zdr` | off | offer only zero-data-retention models |
+| `-sandbox` | `auto` | `microsandbox` (microVMs), `gvisor` (Docker + gVisor), or `auto`: microVMs where they can run |
 
 Run `./forgerun serve -h` for all of them.
 
@@ -222,7 +228,7 @@ machine at home), use two roles of the same binary:
 # the orchestrator: web UI, API, Postgres, sign-in, pushing. No virtualization needed.
 FORGERUN_WORKER_TOKEN=… ./forgerun server
 
-# a worker, on any macOS (Apple Silicon) or Linux (KVM) machine. It dials out over
+# a worker, on a Mac (Apple Silicon) or any Linux machine (KVM, or gVisor). It dials out over
 # HTTPS, so nothing needs opening on its side. Agent keys live here, not on the server.
 FORGERUN_WORKER_TOKEN=… CURSOR_API_KEY=… ./forgerun worker -server https://forgerun.example.com
 ```
@@ -287,7 +293,8 @@ install.sh          the one-step installer (worker or everything on one machine)
 internal/doctor/    forgerun doctor's checks
 internal/agent/     agent adapters: Cursor, Claude Code
 internal/task/      the runner: sessions, turns, replay
-internal/sandbox/   the only package that talks to microsandbox
+internal/sandbox/   the sandbox backends: microsandbox (microVMs) and gVisor (Docker + runsc)
+internal/secretproxy/ forgerun's key-swapping proxy, for gVisor sandboxes
 internal/snapshots/ warm-start snapshots and their cleanup
 internal/publish/   pushing branches and pull requests (host-side git)
 internal/store/     Postgres (migrations) and an in-memory store for tests

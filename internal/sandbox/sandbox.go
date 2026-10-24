@@ -1,5 +1,6 @@
-// Package sandbox runs commands inside an isolated microVM.
-// It is the only package that talks to the microsandbox SDK.
+// Package sandbox runs commands inside an isolated sandbox: a microVM
+// (microsandbox, where there's KVM or Apple Silicon) or a gVisor container.
+// It is the only package that talks to a sandbox runtime.
 package sandbox
 
 import (
@@ -59,13 +60,23 @@ func (e *ExitError) Error() string {
 	return fmt.Sprintf("%s: exit code %d", e.Cmd, e.Code)
 }
 
-// Sandbox is a running VM.
-type Sandbox struct {
+// Microsandbox is the microVM backend: libkrun VMs through the microsandbox
+// SDK, on macOS (Apple Silicon) or Linux with KVM.
+type Microsandbox struct{}
+
+var _ Backend = Microsandbox{}
+
+func (Microsandbox) Name() string { return "microsandbox" }
+
+// msbSandbox is a running microsandbox VM.
+type msbSandbox struct {
 	vm *microsandbox.Sandbox
 }
 
+var _ Sandbox = (*msbSandbox)(nil)
+
 // EnsureRuntime installs the microsandbox runtime if missing. Call once at startup.
-func EnsureRuntime(ctx context.Context) error {
+func (Microsandbox) EnsureRuntime(ctx context.Context) error {
 	_, err := microsandbox.EnsureRuntime(ctx, microsandbox.RuntimeConfig{}, microsandbox.InstallOptions{})
 	return err
 }
@@ -91,7 +102,7 @@ func Home() (string, error) {
 }
 
 // New boots a VM. The caller must call Destroy when done.
-func New(ctx context.Context, name string, cfg Config) (*Sandbox, error) {
+func (Microsandbox) New(ctx context.Context, name string, cfg Config) (Sandbox, error) {
 	opts := []microsandbox.SandboxOption{
 		microsandbox.WithImage(cfg.Image),
 		microsandbox.WithCPUs(cfg.CPUs),
@@ -111,15 +122,15 @@ func New(ctx context.Context, name string, cfg Config) (*Sandbox, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating sandbox %s: %w", name, err)
 	}
-	return &Sandbox{vm: vm}, nil
+	return &msbSandbox{vm: vm}, nil
 }
 
 // Name returns the sandbox name.
-func (s *Sandbox) Name() string { return s.vm.Name() }
+func (s *msbSandbox) Name() string { return s.vm.Name() }
 
 // Run executes c, waits for it, and returns its stdout.
 // A non-zero exit becomes an *ExitError.
-func (s *Sandbox) Run(ctx context.Context, c Cmd) (string, error) {
+func (s *msbSandbox) Run(ctx context.Context, c Cmd) (string, error) {
 	out, err := s.vm.Exec(ctx, c.Name, c.Args, c.execOptions()...)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", c, err) // transport failure: couldn't run it at all
@@ -132,7 +143,7 @@ func (s *Sandbox) Run(ctx context.Context, c Cmd) (string, error) {
 
 // Stream executes c, copying stdout and stderr to w as they arrive.
 // A non-zero exit becomes an *ExitError.
-func (s *Sandbox) Stream(ctx context.Context, c Cmd, w io.Writer) error {
+func (s *msbSandbox) Stream(ctx context.Context, c Cmd, w io.Writer) error {
 	h, err := s.vm.ExecStream(ctx, c.Name, c.Args, c.execOptions()...)
 	if err != nil {
 		return fmt.Errorf("%s: %w", c, err)
@@ -171,7 +182,7 @@ func (s *Sandbox) Stream(ctx context.Context, c Cmd, w io.Writer) error {
 }
 
 // WriteFile writes data to path inside the VM, creating parent directories.
-func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte) error {
+func (s *msbSandbox) WriteFile(ctx context.Context, path string, data []byte) error {
 	if _, err := s.Run(ctx, Cmd{Name: "mkdir", Args: []string{"-p", filepath.Dir(path)}}); err != nil {
 		return err
 	}
@@ -183,7 +194,7 @@ func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte) error
 
 // Destroy stops and removes the VM. It deliberately ignores the caller's
 // context: cleanup must still happen after a timeout or Ctrl-C.
-func (s *Sandbox) Destroy() error {
+func (s *msbSandbox) Destroy() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	err := s.vm.Destroy(ctx)
@@ -218,7 +229,7 @@ func tail(s string, n int) string {
 // prefix: VMs a previous run of this process left behind (it crashed or
 // was killed). Processes sharing a machine use different prefixes, so
 // none removes another's VMs. It returns how many it removed.
-func RemoveLeftovers(ctx context.Context, prefix string) (int, error) {
+func (Microsandbox) RemoveLeftovers(ctx context.Context, prefix string) (int, error) {
 	if prefix == "" {
 		return 0, errors.New("RemoveLeftovers needs a prefix")
 	}

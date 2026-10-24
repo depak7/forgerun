@@ -18,7 +18,7 @@ func TestSnapshotRestore(t *testing.T) {
 	}
 	ctx := context.Background()
 	cfg := Config{Image: "depak7/forgerun-agent-cursor:dev", CPUs: 1, MemoryMiB: 512, MaxLifetime: 5 * time.Minute}
-	run := func(sb *Sandbox, script string) string {
+	run := func(sb Sandbox, script string) string {
 		t.Helper()
 		out, err := sb.Run(ctx, Cmd{Name: "sh", Args: []string{"-c", script}})
 		if err != nil {
@@ -28,7 +28,7 @@ func TestSnapshotRestore(t *testing.T) {
 	}
 
 	// 1. A builder with no secrets prepares files (stand-ins for clone + install).
-	builder, err := New(ctx, "snaptest-builder", cfg)
+	builder, err := msb.New(ctx, "snaptest-builder", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,15 +40,15 @@ func TestSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { DeleteSnapshot(context.Background(), snap.Ref) })
+	t.Cleanup(func() { msb.DeleteSnapshot(context.Background(), snap.Ref) })
 	t.Logf("snapshot %s", snap.Ref)
 
 	// 3. Two restores, each with its own secret.
-	restore := func(name, secret string) *Sandbox {
+	restore := func(name, secret string) Sandbox {
 		t.Helper()
 		c := cfg
 		c.Secrets = []Secret{{EnvVar: "FAKE_KEY", Value: secret, AllowHosts: []string{"example.invalid"}}}
-		sb, err := Restore(ctx, snap.Ref, name, c)
+		sb, err := msb.Restore(ctx, snap.Ref, name, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,7 +59,7 @@ func TestSnapshotRestore(t *testing.T) {
 	r2 := restore("snaptest-r2", "real-secret-two")
 
 	// 4. Files survived, VMs are isolated, secrets are placeholders only.
-	for _, sb := range []*Sandbox{r1, r2} {
+	for _, sb := range []Sandbox{r1, r2} {
 		if got := run(sb, "cat /work/repo/node_modules/dep/version"); got != "v1" {
 			t.Errorf("%s: prepared file = %q, want v1", sb.Name(), got)
 		}
@@ -77,13 +77,13 @@ func TestSnapshotRestore(t *testing.T) {
 	}
 
 	// 5. After deletion, the snapshot can't be restored; deleting twice is fine.
-	if err := DeleteSnapshot(ctx, snap.Ref); err != nil {
+	if err := msb.DeleteSnapshot(ctx, snap.Ref); err != nil {
 		t.Fatal(err)
 	}
-	if err := DeleteSnapshot(ctx, snap.Ref); err != nil {
+	if err := msb.DeleteSnapshot(ctx, snap.Ref); err != nil {
 		t.Errorf("second delete: %v", err)
 	}
-	if sb, err := Restore(ctx, snap.Ref, "snaptest-r3", cfg); err == nil {
+	if sb, err := msb.Restore(ctx, snap.Ref, "snaptest-r3", cfg); err == nil {
 		sb.Destroy()
 		t.Error("restored from a deleted snapshot")
 	}
@@ -99,7 +99,7 @@ func TestRollingSnapshot(t *testing.T) {
 	ctx := context.Background()
 	cfg := Config{Image: "depak7/forgerun-agent-cursor:dev", CPUs: 1, MemoryMiB: 512, MaxLifetime: 5 * time.Minute}
 	stamp := time.Now().Format("150405")
-	run := func(sb *Sandbox, script string) string {
+	run := func(sb Sandbox, script string) string {
 		t.Helper()
 		out, err := sb.Run(ctx, Cmd{Name: "sh", Args: []string{"-c", script}})
 		if err != nil {
@@ -107,22 +107,22 @@ func TestRollingSnapshot(t *testing.T) {
 		}
 		return strings.TrimSpace(out)
 	}
-	snapshot := func(sb *Sandbox, name string) Snapshot {
+	snapshot := func(sb Sandbox, name string) Snapshot {
 		t.Helper()
 		snap, err := sb.TakeSnapshot(ctx, "forgerun-test", name+"-"+stamp)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { DeleteSnapshot(context.Background(), snap.Ref) })
+		t.Cleanup(func() { msb.DeleteSnapshot(context.Background(), snap.Ref) })
 		if snap.SizeBytes <= 0 || snap.SizeBytes >= 1<<30 {
 			t.Errorf("%s: size %d bytes, want real usage (>0, well under the 4 GiB virtual size)", name, snap.SizeBytes)
 		}
 		t.Logf("%s: %d KiB", name, snap.SizeBytes/1024)
 		return snap
 	}
-	restore := func(ref, name string) *Sandbox {
+	restore := func(ref, name string) Sandbox {
 		t.Helper()
-		sb, err := Restore(ctx, ref, name+"-"+stamp, cfg)
+		sb, err := msb.Restore(ctx, ref, name+"-"+stamp, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -131,7 +131,7 @@ func TestRollingSnapshot(t *testing.T) {
 	}
 
 	// Generation 1 from a fresh VM, then two more, each from a restore of the last.
-	vm, err := New(ctx, "rolltest-0-"+stamp, cfg)
+	vm, err := msb.New(ctx, "rolltest-0-"+stamp, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestRollingSnapshot(t *testing.T) {
 		}
 		next := snapshot(vm, fmt.Sprintf("rolltest-%d", gen))
 		// The parent has a child now; deleting it must still work.
-		if err := DeleteSnapshot(ctx, prev.Ref); err != nil {
+		if err := msb.DeleteSnapshot(ctx, prev.Ref); err != nil {
 			t.Fatalf("deleting generation %d: %v", gen-1, err)
 		}
 		prev = next

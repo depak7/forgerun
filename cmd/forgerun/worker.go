@@ -39,6 +39,7 @@ func workerCmd(args []string) error {
 	out := fs.String("out", "out", "directory for this machine's copy of turns' logs")
 	home, _ := os.UserHomeDir()
 	state := fs.String("state", filepath.Join(home, ".forgerun", "worker"), "where this worker keeps its record of snapshots")
+	sandboxKind := sandboxFlag(fs)
 	useSnapshots := fs.Bool("snapshots", true, "open sessions from their repo's snapshot, and save one when a session closes")
 	snapshotMaxAge := fs.Duration("snapshot-max-age", 7*24*time.Hour, "delete a repo's snapshot when unused for this long (0 = never)")
 	snapshotBudget := byteSize(20e9)
@@ -85,15 +86,24 @@ func workerCmd(args []string) error {
 	if len(ids) == 0 {
 		log.Warn("this worker has no agent keys: it runs only models that need none")
 	}
-	if err := sandbox.EnsureRuntime(ctx); err != nil {
+	kind, err := sandboxName(*sandboxKind)
+	if err != nil {
+		return err
+	}
+	backend, err := chooseBackend(kind, *state)
+	if err != nil {
+		return err
+	}
+	log.Info("sandboxes", "backend", backend.Name())
+	if err := backend.EnsureRuntime(ctx); err != nil {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
 
-	client := &remote.Client{URL: *server, Token: token, Name: *name, Log: log}
-	runner := &task.Runner{Agents: agents, DefaultAgent: cmp.Or(firstOf(ids), "cursor"), OutDir: *out, CPUs: 2, MemMiB: 2048,
+	client := &remote.Client{URL: *server, Token: token, Name: *name, Sandbox: backend.Name(), Log: log}
+	runner := &task.Runner{Agents: agents, Sandboxes: backend, DefaultAgent: cmp.Or(firstOf(ids), "cursor"), OutDir: *out, CPUs: 2, MemMiB: 2048,
 		Timeout: *timeout, AgentIdle: *agentIdle, Stdout: io.Discard, Log: log, SessionIdle: *sessionIdle, MaxSessions: *maxSessions,
 		LogSink: client.LogSink, VMPrefix: workerVMPrefix}
-	removeLeftoverVMs(ctx, workerVMPrefix, log)
+	removeLeftoverVMs(ctx, backend, workerVMPrefix, log)
 	sweepsDone := make(chan struct{})
 	if *useSnapshots {
 		fstore, err := snapshots.OpenFileStore(filepath.Join(*state, "snapshots.json"))
@@ -102,7 +112,7 @@ func workerCmd(args []string) error {
 		}
 		// Its own prefix: a worker and an all-in-one server on one machine
 		// never sweep each other's snapshots.
-		mgr := &snapshots.Manager{Store: fstore, Prefix: "forgerunw", Limits: snapshots.Limits{MaxAge: *snapshotMaxAge, Budget: int64(snapshotBudget)}}
+		mgr := &snapshots.Manager{Store: fstore, Backend: backend, Prefix: "forgerunw", Limits: snapshots.Limits{MaxAge: *snapshotMaxAge, Budget: int64(snapshotBudget)}}
 		runner.Snapshots = mgr
 		mgr.SweepAndLog(ctx, log)
 		go func() {
@@ -148,8 +158,8 @@ const (
 
 // removeLeftoverVMs removes VMs a previous run left behind (it crashed or
 // was killed); their sessions' work is in the database.
-func removeLeftoverVMs(ctx context.Context, prefix string, log *slog.Logger) {
-	n, err := sandbox.RemoveLeftovers(ctx, prefix)
+func removeLeftoverVMs(ctx context.Context, backend sandbox.Backend, prefix string, log *slog.Logger) {
+	n, err := backend.RemoveLeftovers(ctx, prefix)
 	if err != nil {
 		log.Warn("removing leftover VMs", "err", err)
 	}

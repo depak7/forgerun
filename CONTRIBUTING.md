@@ -26,6 +26,7 @@ go vet ./... && go test ./...                                   # DB and VM test
 FORGERUN_TEST_DATABASE_URL='postgres://forgerun:forgerun@localhost:5433/forgerun_test?sslmode=disable' \
   go test ./internal/store/...                                  # against Postgres
 FORGERUN_INTEGRATION=1 go test ./internal/snapshots/ ./internal/sandbox/   # boots real microVMs
+FORGERUN_GVISOR=1 go test ./internal/sandbox/ -run GVisorReal                # Linux with Docker + runsc
 cd web && npx tsc --noEmit && npm test                          # the web UI
 ```
 
@@ -39,7 +40,8 @@ CI runs all of these except the VM tests. Run those yourself when you touch
 | `cmd/forgerun/` | the commands: `serve`, `server`, `worker`, `doctor`, `run` |
 | `internal/agent/` | agent adapters (Cursor, Claude Code, OpenCode) |
 | `internal/task/` | the runner: sessions, turns, replay |
-| `internal/sandbox/` | the only package that talks to microsandbox |
+| `internal/sandbox/` | the sandbox backends: microsandbox (microVMs) and gVisor |
+| `internal/secretproxy/` | the key-swapping proxy gVisor sandboxes use |
 | `internal/api/`, `web/` | the HTTP API and the React UI |
 | `internal/remote/` | workers on other machines |
 | `internal/doctor/` | `forgerun doctor`'s checks |

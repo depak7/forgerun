@@ -13,11 +13,11 @@ import (
 
 func main() {
 	ctx := context.Background()
-	if err := sandbox.EnsureRuntime(ctx); err != nil {
+	if err := sandbox.Default.EnsureRuntime(ctx); err != nil {
 		log.Fatal(err)
 	}
 
-	sb, err := sandbox.New(ctx, "hello", sandbox.Config{Image: "python", CPUs: 1, MemoryMiB: 512, MaxLifetime: 5 * time.Minute})
+	sb, err := sandbox.Default.New(ctx, "hello", sandbox.Config{Image: "python", CPUs: 1, MemoryMiB: 512, MaxLifetime: 5 * time.Minute})
 	if err != nil {
 		log.Fatal(err)
 	}

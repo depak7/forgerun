@@ -36,6 +36,7 @@ type Heartbeat struct {
 	Worker      string             `json:"worker"`   // its name, e.g. the host name
 	Agents      []string           `json:"agents"`   // agents it has keys for
 	Adapters    []string           `json:"adapters"` // every agent it can run, key or not
+	Sandbox     string             `json:"sandbox"`  // its sandbox backend: "microsandbox" or "gvisor"
 	MaxSessions int                `json:"max_sessions"`
 	Sessions    []task.OpenSession `json:"sessions"`
 	Running     []string           `json:"running"` // task IDs

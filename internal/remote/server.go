@@ -427,7 +427,7 @@ func (s *Server) Workers() []api.WorkerInfo {
 	var out []api.WorkerInfo
 	for n, wk := range s.live() {
 		// Lists, never null: a worker without keys reports none.
-		out = append(out, api.WorkerInfo{Name: n, LastSeen: wk.lastSeen, Agents: orEmpty(wk.hb.Agents), Adapters: orEmpty(wk.hb.Adapters),
+		out = append(out, api.WorkerInfo{Name: n, LastSeen: wk.lastSeen, Agents: orEmpty(wk.hb.Agents), Adapters: orEmpty(wk.hb.Adapters), Sandbox: wk.hb.Sandbox,
 			Sessions: len(wk.hb.Sessions), MaxSessions: wk.hb.MaxSessions, Running: len(wk.hb.Running)})
 	}
 	slices.SortFunc(out, func(a, b api.WorkerInfo) int { return strings.Compare(a.Name, b.Name) })

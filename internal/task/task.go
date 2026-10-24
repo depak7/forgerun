@@ -105,6 +105,9 @@ type Runner struct {
 	// AgentIdle stops an agent that produces no output and changes no
 	// files for this long, failing the turn early. 0 = never.
 	AgentIdle time.Duration
+	// Sandboxes makes the sessions' sandboxes; nil = sandbox.Default
+	// (microsandbox). The Snapshotter must use the same backend.
+	Sandboxes sandbox.Backend
 	// Snapshots, if set, saves a session's VM when it closes so later
 	// sessions for the same repo can start from it. nil = no snapshots.
 	Snapshots Snapshotter
@@ -126,6 +129,13 @@ func (r *Runner) open() *sessions {
 		r.sessions = newSessions(r.SessionIdle, r.MaxSessions)
 	}
 	return r.sessions
+}
+
+func (r *Runner) sandboxes() sandbox.Backend {
+	if r.Sandboxes == nil {
+		return sandbox.Default
+	}
+	return r.Sandboxes
 }
 
 func (r *Runner) log() *slog.Logger {
@@ -315,7 +325,7 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 	warm := ss.sb != nil
 	if !warm {
 		step("creating sandbox %s (%s)", r.VMPrefix+t.ID, ag.Image())
-		if ss.sb, err = sandbox.New(ctx, r.VMPrefix+t.ID, cfg); err != nil {
+		if ss.sb, err = r.sandboxes().New(ctx, r.VMPrefix+t.ID, cfg); err != nil {
 			return nil, err
 		}
 		if t.Fetch != nil {
@@ -445,7 +455,7 @@ func (r *Runner) closeSession(ss *session, reason string) {
 	log.Info("session closed", "vm", ss.sb.Name())
 }
 
-func (r *Runner) destroy(sb *sandbox.Sandbox) {
+func (r *Runner) destroy(sb sandbox.Sandbox) {
 	if err := sb.Destroy(); err != nil {
 		r.log().Warn("destroying VM", "vm", sb.Name(), "err", err)
 	}
@@ -460,7 +470,7 @@ func (r *Runner) broken(ss *session, err error) {
 }
 
 // alive reports whether a session's VM still runs commands.
-func alive(ctx context.Context, sb *sandbox.Sandbox) bool {
+func alive(ctx context.Context, sb sandbox.Sandbox) bool {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	_, err := sb.Run(ctx, sandbox.Cmd{Name: "true"})
@@ -468,7 +478,7 @@ func alive(ctx context.Context, sb *sandbox.Sandbox) bool {
 }
 
 // runAgent runs the agent, under a watchdog when AgentIdle is set.
-func (r *Runner) runAgent(ctx context.Context, ag agent.Agent, sb *sandbox.Sandbox, req agent.Request, logs io.Writer, step func(string, ...any)) error {
+func (r *Runner) runAgent(ctx context.Context, ag agent.Agent, sb sandbox.Sandbox, req agent.Request, logs io.Writer, step func(string, ...any)) error {
 	if r.AgentIdle <= 0 {
 		return ag.Run(ctx, sb, req, logs)
 	}
@@ -488,7 +498,7 @@ func (r *Runner) runAgent(ctx context.Context, ag agent.Agent, sb *sandbox.Sandb
 // fileProbe reports whether any file under paths changed since the last
 // call, by comparing modification times against a marker file in the VM.
 // Errors count as "no change"; the watchdog keeps going.
-func fileProbe(sb *sandbox.Sandbox, paths []string) func(context.Context) bool {
+func fileProbe(sb sandbox.Sandbox, paths []string) func(context.Context) bool {
 	const marker = "/tmp/.forgerun-activity"
 	// -newer compares against the marker; -print -quit stops at the first hit.
 	script := `find "$@" -newer ` + marker + ` -print -quit 2>/dev/null; touch ` + marker
@@ -502,7 +512,7 @@ func fileProbe(sb *sandbox.Sandbox, paths []string) func(context.Context) bool {
 // restore returns a VM started from the repo's snapshot, or nil if the
 // session must start cold: snapshots are off, the repo has none yet, or it
 // couldn't be used. A snapshot never fails a turn.
-func (r *Runner) restore(ctx context.Context, ag agent.Agent, t Task, cfg sandbox.Config, step func(string, ...any)) *sandbox.Sandbox {
+func (r *Runner) restore(ctx context.Context, ag agent.Agent, t Task, cfg sandbox.Config, step func(string, ...any)) sandbox.Sandbox {
 	if r.Snapshots == nil {
 		return nil
 	}

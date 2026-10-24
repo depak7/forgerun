@@ -727,7 +727,7 @@ func (otherAgent) Secrets(v string) []sandbox.Secret {
 	return []sandbox.Secret{{EnvVar: "OTHER_KEY", Value: v}}
 }
 func (otherAgent) StatePaths() []string { return nil }
-func (otherAgent) Run(context.Context, *sandbox.Sandbox, agent.Request, io.Writer) error {
+func (otherAgent) Run(context.Context, sandbox.Sandbox, agent.Request, io.Writer) error {
 	return nil
 }
 
