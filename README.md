@@ -7,8 +7,7 @@
 Run Claude Code, Cursor CLI and OpenCode on your repo, each in its own microVM, on your
 own box. Review the diff, then push.
 
-<!-- Demo: a 30–60 s clip goes here (new task → the agent works → diff → one follow-up →
-push and open a PR), as a gif, with the same clip as an mp4. -->
+[![forgerun demo](web/public/demo/poster.jpg)](web/public/demo/forgerun-demo.mp4)
 
 - **26.8 s → 2.8 s to start a task.** A new thread starts from a disk snapshot of the repo
   with its dependencies installed, instead of cloning and installing again (measured on

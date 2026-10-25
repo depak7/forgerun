@@ -120,6 +120,64 @@
   color: var(--failed);
 }
 
+/* Try it yourself: the install command, in the hero. */
+.try {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+.tryLabel {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+.tryNote {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* The demo video, full width under the hero. */
+.demo {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: -24px;
+}
+.video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg-deep);
+}
+.demoBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--faint);
+}
+.sound {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  cursor: pointer;
+}
+.sound:hover {
+  border-color: var(--accent-line);
+}
+
 .section {
   display: flex;
   flex-direction: column;

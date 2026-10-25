@@ -25,13 +25,19 @@ export function LandingPage() {
 
       <main className={styles.main}>
         <section className={styles.hero}>
-          <span className={styles.eyebrow}>OPEN SOURCE · APACHE-2.0</span>
-          <h1 className={styles.title}>Coding agents, each in its own microVM</h1>
+          <span className={styles.eyebrow}>OPEN SOURCE · APACHE-2.0 · SELF-HOSTED</span>
+          <h1 className={styles.title}>Stop paying for sandboxes. Run coding agents on your own VM.</h1>
           <p className={styles.lede}>
-            forgerun is open-source infrastructure that runs Claude Code, Cursor CLI and OpenCode on your repo, each in its own
-            microVM, on your own machines. It works in a private VM you can keep talking to, and nothing reaches your repo until
-            you push.
+            forgerun runs Claude Code, Cursor CLI and OpenCode on your repo, every turn in its own sandbox: a microVM, or gVisor on
+            VMs without KVM. Bring any Linux server or a Mac, and nothing reaches your repo until you push.
           </p>
+          <div className={styles.try} role="group" aria-labelledby="try">
+            <span id="try" className={styles.tryLabel}>
+              TRY IT YOURSELF · ONE COMMAND
+            </span>
+            <InstallCommand />
+            <span className={styles.tryNote}>On any Linux VM or an Apple Silicon Mac. Then open the web UI it prints.</span>
+          </div>
           <div className={styles.actions}>
             <a className={styles.button} href="/auth/github/login">
               [ sign in with GitHub ]
@@ -46,6 +52,8 @@ export function LandingPage() {
             </p>
           )}
         </section>
+
+        <DemoVideo />
 
         <section className={styles.section} aria-labelledby="how">
           <h2 id="how" className={styles.heading}>
@@ -137,13 +145,9 @@ export function LandingPage() {
             Run it yourself
           </h2>
           <p className={styles.text}>
-            One command sets it up, on a Mac with Apple Silicon or a Linux machine (with KVM for microVMs; without it, it sets up
-            gVisor):
-          </p>
-          <InstallCommand />
-          <p className={styles.text}>
-            It checks your machine, installs what's missing (Go, git and the rest), builds forgerun, runs it in the background, and
-            asks what this machine is for:
+            The command at the top works on a Mac with Apple Silicon or a Linux machine (with KVM for microVMs; without it, it sets
+            up gVisor). It checks your machine, installs what's missing (Go, git and the rest), builds forgerun, runs it in the
+            background, and asks what this machine is for:
           </p>
           <div className={styles.choices}>
             <div className={styles.card}>
@@ -169,6 +173,37 @@ export function LandingPage() {
         <a href={repoURL}>github.com/depak7/forgerun</a>
       </footer>
     </div>
+  );
+}
+
+// DemoVideo is the 30-second demo, right under the hero. It plays muted and
+// loops, like a moving screenshot; the button turns the music on. With reduced
+// motion asked for, it waits for a click instead.
+function DemoVideo() {
+  const [muted, setMuted] = useState(true);
+  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  return (
+    <section className={styles.demo} aria-label="Demo video">
+      <video
+        className={styles.video}
+        src="/demo/forgerun-demo.mp4"
+        poster="/demo/poster.jpg"
+        autoPlay={!still}
+        controls={still}
+        muted={muted}
+        loop
+        playsInline
+        preload={still ? "none" : "auto"}
+        width={1920}
+        height={1080}
+      />
+      <div className={styles.demoBar}>
+        <span>30 seconds · a real run on forgerun</span>
+        <button type="button" className={styles.sound} aria-pressed={!muted} onClick={() => setMuted(!muted)}>
+          {muted ? "[ sound on ]" : "[ sound off ]"}
+        </button>
+      </div>
+    </section>
   );
 }
 
