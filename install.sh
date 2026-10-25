@@ -100,20 +100,38 @@ packages() {
 		return
 	fi
 	missing=
-	for t in git curl tar gcc make; do have "$t" || missing="$missing $t"; done
+	for t in git tar gcc make; do have "$t" || missing="$missing $t"; done
+	# shellcheck disable=SC2086 # the names are words
+	install_missing $missing
+}
+
+# install_missing installs the tools named that aren't there yet, and only
+# those: installing one that's already provided can conflict (Amazon Linux
+# ships curl-minimal, and asking for curl fails).
+install_missing() {
+	missing=
+	for t in "$@"; do have "$t" || missing="$missing $t"; done
 	[ -z "$missing" ] && return
 	say "installing:$missing"
 	if [ "$(id -u)" != 0 ] && [ -z "$SUDO" ]; then die "need root or sudo to install:$missing"; fi
 	if have apt-get; then
-		$SUDO apt-get update -qq && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar build-essential >/dev/null
+		# gcc and make come with build-essential (and the C library's headers).
+		# shellcheck disable=SC2086
+		pkgs=$(printf '%s\n' $missing | sed 's/^gcc$/build-essential/; s/^make$/build-essential/' | sort -u | tr '\n' ' ')
+		# shellcheck disable=SC2086 # the package names are words
+		$SUDO apt-get update -qq && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates $pkgs >/dev/null
 	elif have dnf; then
-		$SUDO dnf install -y -q git curl ca-certificates tar gcc make
+		# shellcheck disable=SC2086
+		$SUDO dnf install -y -q $missing
 	elif have yum; then
-		$SUDO yum install -y -q git curl ca-certificates tar gcc make
+		# shellcheck disable=SC2086
+		$SUDO yum install -y -q $missing
 	elif have pacman; then
-		$SUDO pacman -Sy --noconfirm --needed git curl ca-certificates tar gcc make
+		# shellcheck disable=SC2086
+		$SUDO pacman -Sy --noconfirm --needed $missing
 	elif have zypper; then
-		$SUDO zypper -q install -y git curl ca-certificates tar gcc make
+		# shellcheck disable=SC2086
+		$SUDO zypper -q install -y $missing
 	else
 		die "install these with your package manager, then run this again:$missing"
 	fi
@@ -152,7 +170,7 @@ gvisor_setup() {
 	have systemctl && $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
 	if ! have runsc; then
 		say "installing gVisor (runsc)"
-		have bzip2 || { have apt-get && $SUDO apt-get install -y -qq bzip2 >/dev/null; } || true
+		install_missing bzip2
 		tmp=$(mktemp -d)
 		url=https://storage.googleapis.com/gvisor/releases/release/latest/$(uname -m)
 		(cd "$tmp" && curl -fsSLO "$url/gvisor.tar.bz2" && curl -fsSLO "$url/gvisor.tar.bz2.sha512" &&
