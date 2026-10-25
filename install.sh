@@ -158,7 +158,8 @@ gvisor_setup() {
 		if have apt-get; then
 			$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io >/dev/null
 		elif have dnf; then
-			$SUDO dnf install -y -q moby-engine || $SUDO dnf install -y -q docker
+			# "docker" on Amazon Linux and RHEL-likes, "moby-engine" on Fedora.
+			$SUDO dnf install -y -q docker 2>/dev/null || $SUDO dnf install -y -q moby-engine
 		elif have pacman; then
 			$SUDO pacman -S --noconfirm --needed docker
 		elif have zypper; then
