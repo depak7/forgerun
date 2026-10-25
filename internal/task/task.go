@@ -484,7 +484,7 @@ func (r *Runner) runAgent(ctx context.Context, ag agent.Agent, sb sandbox.Sandbo
 	}
 	agentCtx, stop := context.WithCancelCause(ctx)
 	defer stop(nil)
-	dog := newWatchdog(r.AgentIdle, fileProbe(sb, append([]string{repoDir}, ag.StatePaths()...)))
+	dog := newWatchdog(r.AgentIdle, fileProbe(sb, append([]string{repoDir}, agent.ActivityPaths(ag)...)))
 	go dog.Watch(agentCtx, stop)
 
 	err := ag.Run(agentCtx, sb, req, dog.Writer(logs))

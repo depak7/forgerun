@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -21,7 +22,7 @@ func TestOpenCodeKeyGoesThroughSecrets(t *testing.T) {
 }
 
 func TestOpenCodeArgs(t *testing.T) {
-	base := []string{"run", "--format", "json", "--auto"}
+	base := []string{"run", "--format", "json", "--auto", "--print-logs", "--log-level", "ERROR"}
 	tests := []struct {
 		name string
 		req  Request
@@ -118,5 +119,74 @@ func TestOpenCodeLongShellOutputIsCut(t *testing.T) {
 		strings.Repeat("y", 5000) + `"}}}` + "\n"))
 	if n := len(logs.String()); n > maxToolOutput+100 || !strings.HasSuffix(logs.String(), "… (output cut)\n") {
 		t.Errorf("logged %d bytes: %q", n, logs.String()[n-40:])
+	}
+}
+
+// The watchdog watches an agent's state paths, except OpenCode's: it keeps
+// writing its own logs while stuck retrying.
+func TestActivityPaths(t *testing.T) {
+	if got := ActivityPaths(&ClaudeCode{}); !slices.Equal(got, (&ClaudeCode{}).StatePaths()) {
+		t.Errorf("claude-code watches %v", got)
+	}
+	if got := ActivityPaths(&OpenCode{}); len(got) != 0 {
+		t.Errorf("opencode watches %v", got)
+	}
+}
+
+// logSandbox answers every command with out: OpenCode's log, as grep finds it.
+type logSandbox struct {
+	sandbox.Sandbox
+	out string
+}
+
+func (s logSandbox) Run(context.Context, sandbox.Cmd) (string, error) { return s.out, nil }
+
+func TestLastLoggedError(t *testing.T) {
+	sb := logSandbox{out: `error.error="AI_APICallError: Free usage exceeded, please try again later"` + "\n"}
+	if got := lastLoggedError(sb); got != "Free usage exceeded, please try again later" {
+		t.Errorf("got %q", got)
+	}
+	if got := lastLoggedError(logSandbox{}); got != "" {
+		t.Errorf("no log: %q", got)
+	}
+}
+
+// A logged line as OpenCode prints it with --print-logs --log-level ERROR.
+func errLine(why string) string {
+	return `timestamp=2026-10-24T18:23:21.878Z level=ERROR run=961b9ee2 message="stream error" providerID=opencode modelID=big-pickle error.error="` + why + `"` + "\n"
+}
+
+// A failure retrying can't fix stops OpenCode at once, with the reason.
+func TestOpenCodeStopsOnHopelessFailures(t *testing.T) {
+	var logs strings.Builder
+	stops := 0
+	ev := &opencodeEvents{logs: &logs, stop: func(string) { stops++ }}
+	ev.Write([]byte(errLine("AI_APICallError: Free usage exceeded, please try again later")))
+	ev.Write([]byte(errLine("AI_APICallError: Free usage exceeded, please try again later")))
+	if stops != 1 {
+		t.Errorf("stopped %d times, want 1", stops)
+	}
+	if err := ev.result(nil); err == nil || err.Error() != "opencode: Free usage exceeded, please try again later" {
+		t.Errorf("result = %v", err)
+	}
+	if !strings.Contains(logs.String(), "! model call failed (1): Free usage exceeded") || strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("log:\n%s", logs.String())
+	}
+}
+
+// Other failures get a few retries first.
+func TestOpenCodeStopsAfterRepeatedFailures(t *testing.T) {
+	var logs strings.Builder
+	stopped := ""
+	ev := &opencodeEvents{logs: &logs, stop: func(r string) { stopped = r }}
+	for i := 1; i < maxFailedCalls; i++ {
+		ev.Write([]byte(errLine(`AI_APICallError: Bad gateway`)))
+	}
+	if stopped != "" {
+		t.Fatalf("stopped after %d failures: %q", maxFailedCalls-1, stopped)
+	}
+	ev.Write([]byte(errLine(`AI_APICallError: Bad gateway`)))
+	if want := "5 model calls failed; the last: Bad gateway"; stopped != want {
+		t.Errorf("stopped = %q, want %q", stopped, want)
 	}
 }

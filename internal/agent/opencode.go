@@ -10,6 +10,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/depak7/forgerun/internal/sandbox"
 )
@@ -23,6 +24,7 @@ var (
 	_ Agent     = (*OpenCode)(nil)
 	_ Continuer = (*OpenCode)(nil)
 	_ Replier   = (*OpenCode)(nil)
+	_ Watched   = (*OpenCode)(nil)
 )
 
 func (o *OpenCode) ID() string         { return "opencode" }
@@ -47,14 +49,52 @@ func (o *OpenCode) StatePaths() []string {
 	return []string{"/root/.local/share/opencode", "/root/.local/state/opencode"}
 }
 
+// ActivityPaths: none beyond the repo and its output. OpenCode streams an
+// event for everything it does; while it retries a failing model call
+// (a free tier's limit, say) it prints nothing but keeps writing its own
+// logs, which must not count as work.
+func (o *OpenCode) ActivityPaths() []string { return nil }
+
 func (o *OpenCode) Run(ctx context.Context, sb sandbox.Sandbox, req Request, logs io.Writer) error {
-	ev := &opencodeEvents{logs: logs}
-	err := sb.Stream(ctx, opencodeCmd(req.Dir, opencodeArgs(req)), ev)
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	ev := &opencodeEvents{logs: logs, stop: func(string) { stop() }}
+	err := sb.Stream(runCtx, opencodeCmd(req.Dir, opencodeArgs(req)), ev)
 	ev.flush()
+	if ev.err != "" && ctx.Err() == nil {
+		// Stopped by us, not by the caller: the reason is the error.
+		err = nil
+	}
 	if req.Reply != nil {
 		io.WriteString(req.Reply, ev.reply())
 	}
+	if err != nil && ev.err == "" {
+		// Stopped without saying why (the watchdog, a timeout): its own log
+		// usually has the reason, e.g. a free tier's usage limit.
+		if why := lastLoggedError(sb); why != "" {
+			fmt.Fprintf(logs, "Error: %s\n", why)
+			return fmt.Errorf("%w (opencode: %s)", err, why)
+		}
+	}
 	return ev.result(err)
+}
+
+// lastLoggedError is the last model-call error in OpenCode's log, or "".
+// It runs with its own short deadline: the run's context is usually over.
+func lastLoggedError(sb sandbox.Sandbox) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := sb.Run(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c",
+		`grep -h 'level=ERROR' /root/.local/share/opencode/log/*.log 2>/dev/null | grep -o 'error.error="[^"]*"' | tail -1`}})
+	if err != nil {
+		return ""
+	}
+	why := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), `error.error="`), `"`)
+	why = strings.TrimPrefix(why, "AI_APICallError: ")
+	if len(why) > 300 {
+		why = why[:300] + "…"
+	}
+	return why
 }
 
 // Continue sends prompt to the latest session in dir with the read-only
@@ -90,7 +130,9 @@ func opencodeCmd(dir string, args []string) sandbox.Cmd {
 // plan agent, which reads and proposes. Model IDs are OpenCode's own
 // ("big-pickle"), so the provider is always "opencode".
 func opencodeArgs(req Request) []string {
-	args := []string{"run", "--format", "json", "--auto"}
+	// Its own errors on stderr: each failed model call shows up, so a call
+	// it would retry forever can be stopped (see opencodeEvents.failed).
+	args := []string{"run", "--format", "json", "--auto", "--print-logs", "--log-level", "ERROR"}
 	if req.ReadOnly {
 		args = append(args, "--agent", "plan")
 	}
@@ -141,6 +183,56 @@ type opencodeEvents struct {
 	buf  []byte
 	last []string // text since the last tool call
 	err  string   // the first error event's message
+	// stop ends the run early, when OpenCode keeps retrying a model call
+	// that won't succeed; nil = never.
+	stop     func(reason string)
+	failures int // failed model calls so far
+}
+
+// maxFailedCalls is how many failed model calls OpenCode may retry before
+// it's stopped. Failures that retrying can't fix stop it at once.
+const maxFailedCalls = 5
+
+// loggedError is the reason in one of OpenCode's error log lines.
+var loggedError = regexp.MustCompile(`error\.error="((?:[^"\\]|\\.)*)"`)
+
+// hopeless are failures retrying won't fix: usage limits, credit, keys,
+// unknown models (lower case).
+var hopeless = []string{"free usage", "usage limit", "insufficient", "credit", "credential", "unauthorized", "invalid api key",
+	"missing api key", "api key", "forbidden", "model not found", "status code 401", "status code 403"}
+
+// failed handles an error log line: a failed model call is logged once,
+// readably, and OpenCode is stopped when retrying is pointless.
+func (e *opencodeEvents) failed(line string) bool {
+	m := loggedError.FindStringSubmatch(line)
+	if m == nil || !strings.Contains(line, "level=ERROR") {
+		return false
+	}
+	why := strings.TrimPrefix(strings.ReplaceAll(m[1], `\"`, `"`), "AI_APICallError: ")
+	why = strings.TrimPrefix(why, "AI_RetryError: ")
+	e.failures++
+	fmt.Fprintf(e.logs, "! model call failed (%d): %s\n", e.failures, why)
+	low := strings.ToLower(why)
+	for _, h := range hopeless {
+		if strings.Contains(low, h) {
+			e.giveUp(why)
+			return true
+		}
+	}
+	if e.failures >= maxFailedCalls {
+		e.giveUp(fmt.Sprintf("%d model calls failed; the last: %s", e.failures, why))
+	}
+	return true
+}
+
+func (e *opencodeEvents) giveUp(reason string) {
+	if e.err == "" {
+		e.err = reason
+	}
+	if e.stop != nil {
+		e.stop(reason)
+		e.stop = nil
+	}
 }
 
 func (e *opencodeEvents) Write(p []byte) (int, error) {
@@ -170,7 +262,11 @@ func (e *opencodeEvents) line(b []byte) {
 	}
 	var ev opencodeEvent
 	if b[0] != '{' || json.Unmarshal(b, &ev) != nil || ev.Type == "" {
-		fmt.Fprintf(e.logs, "%s\n", ansi.ReplaceAll(b, nil)) // not an event: pass it on
+		line := ansi.ReplaceAll(b, nil)
+		if e.failed(string(line)) {
+			return
+		}
+		fmt.Fprintf(e.logs, "%s\n", line) // not an event: pass it on
 		return
 	}
 	switch ev.Type {

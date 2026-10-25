@@ -65,6 +65,23 @@ type Continuer interface {
 	Continue(ctx context.Context, sb sandbox.Sandbox, dir, prompt string) (string, error)
 }
 
+// Watched is an optional Agent capability: the paths in the VM whose changes
+// show the agent is still working, for the stuck-agent watchdog (besides
+// the repo and its output). Without it, they're its StatePaths: right for
+// an agent that writes little output but keeps a transcript (Claude Code),
+// wrong for one that keeps writing its own logs while stuck retrying.
+type Watched interface {
+	ActivityPaths() []string
+}
+
+// ActivityPaths are the paths that show a's work, for the watchdog.
+func ActivityPaths(a Agent) []string {
+	if w, ok := a.(Watched); ok {
+		return w.ActivityPaths()
+	}
+	return a.StatePaths()
+}
+
 // Replier is an optional Agent capability, for agents whose output mixes
 // what they say with the tools they run: Run writes the agent's final
 // words to Request.Reply when it's set, as well as everything to logs.
