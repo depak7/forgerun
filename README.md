@@ -192,6 +192,24 @@ first start; the agent images are pulled the first time an agent runs.
 
 An agent without its key is still listed; only its tasks are refused, except on models that need no key.
 
+### Claude Code on your own subscription
+
+`claude-code` runs on your Claude Pro or Max plan, so its turns count against your
+subscription's limits instead of API billing.
+
+1. On any machine with [Claude Code](https://code.claude.com/docs) installed, run
+   `claude setup-token`. It opens your browser to sign in to your Claude account, then prints a token.
+2. Paste it where the agents run:
+   - **Installing:** the installer asks for `CLAUDE_CODE_OAUTH_TOKEN`; paste it there (it isn't shown as you type).
+   - **Already installed:** add `CLAUDE_CODE_OAUTH_TOKEN=<the token>` to the env file (`~/.forgerun-worker.env`
+     on a worker, `~/forgerun/.env` for everything on one machine), then run the install command again: it keeps
+     your settings and restarts forgerun.
+3. Settings in the web UI now shows `claude-code` as `SET`.
+
+The token never enters the sandbox: the agent sees a placeholder, and the proxy on the host adds the real token
+only for Anthropic's API. It's your personal subscription, so use it for your own tasks, not as a shared key for
+other people. If it leaks, revoke it from your Claude account and make a new one.
+
 **Sign-in (optional).** Without these, forgerun runs in local mode: no accounts, everything
 is yours. With them, people sign in with GitHub and see only their own threads.
 
