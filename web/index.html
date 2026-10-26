@@ -3,10 +3,49 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>forgerun</title>
+    <title>forgerun: run coding agents on your own VM</title>
+    <meta
+      name="description"
+      content="Open-source and self-hosted. forgerun runs Claude Code, Cursor CLI and OpenCode on your repo, every turn in its own sandbox, on any Linux VM or Mac. Stop paying for sandboxes."
+    />
+    <meta name="theme-color" content="#0F1110" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- %SITE% is the server's FORGERUN_PUBLIC_URL (empty when unset), filled in as it serves this page. -->
+    <link rel="canonical" href="%SITE%/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="forgerun" />
+    <meta property="og:url" content="%SITE%/" />
+    <meta property="og:title" content="forgerun: run coding agents on your own VM" />
+    <meta
+      property="og:description"
+      content="Open source, self-hosted. Claude Code, Cursor CLI and OpenCode, every turn in its own sandbox. Stop paying for sandboxes."
+    />
+    <meta property="og:image" content="%SITE%/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="forgerun: stop paying for sandboxes. Run coding agents on your own VM." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="forgerun: run coding agents on your own VM" />
+    <meta name="twitter:description" content="Open source, self-hosted. Every turn in its own sandbox. Stop paying for sandboxes." />
+    <meta name="twitter:image" content="%SITE%/og.png" />
   </head>
-  <body>
-    <div id="root"></div>
+  <body style="margin: 0; background: #0f1110">
+    <div id="root">
+      <!-- What forgerun is, readable without JavaScript (search engines, link previews).
+           The app replaces it as soon as it starts. -->
+      <main style="max-width: 720px; margin: 0 auto; padding: 96px 24px; font-family: system-ui, sans-serif; color: #eceeec">
+        <h1 style="font-weight: 500">Stop paying for sandboxes. Run coding agents on your own VM.</h1>
+        <p style="color: #9da39e; line-height: 1.55">
+          forgerun runs Claude Code, Cursor CLI and OpenCode on your repo, every turn in its own sandbox: a microVM, or gVisor
+          on VMs without KVM. Bring any Linux server or a Mac, and nothing reaches your repo until you push. Open source,
+          Apache-2.0.
+        </p>
+        <p style="color: #9da39e">
+          Try it yourself: <code>curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh</code>
+        </p>
+        <p><a style="color: #4ade9b" href="https://github.com/depak7/forgerun">github.com/depak7/forgerun</a></p>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

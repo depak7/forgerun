@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/depak7/forgerun/internal/api"
@@ -33,7 +34,7 @@ func orchestrate(ctx context.Context, stop context.CancelFunc, ln net.Listener, 
 	ac := cfg.api
 	ac.Pool, ac.Sessions, ac.Workers = rs, rs, rs
 	srv := &http.Server{
-		Handler:           routes(rs, api.LogRequests(log, api.New(ac))),
+		Handler:           routes(os.Getenv("FORGERUN_PUBLIC_URL"), rs, api.LogRequests(log, api.New(ac))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go rs.Reap(ctx) // fails turns whose worker went away

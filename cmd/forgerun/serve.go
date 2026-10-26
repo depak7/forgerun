@@ -194,7 +194,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 		pool.Fetchers = repoFetchers(db, auth, publisher, log)
 	}
 	srv := &http.Server{
-		Handler: routes(nil, api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
+		Handler: routes(os.Getenv("FORGERUN_PUBLIC_URL"), nil, api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
 			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, OutDir: *out, GitHubUser: githubUser,
 			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, Log: log}))),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -234,8 +234,9 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 
 // routes sends /api/ and /healthz to the API, /api/worker/ to remote
 // workers' endpoints (if there are any), and everything else to the web
-// app (a placeholder page unless built with -tags webui).
-func routes(workers, apiHandler http.Handler) http.Handler {
+// app (a placeholder page unless built with -tags webui). site is the
+// server's public address for the app's link previews and sitemap.
+func routes(site string, workers, apiHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	if workers != nil {
 		mux.Handle("/api/worker/", workers) // not request-logged: heartbeats every few seconds
@@ -243,7 +244,7 @@ func routes(workers, apiHandler http.Handler) http.Handler {
 	mux.Handle("/api/", apiHandler)
 	mux.Handle("/auth/", apiHandler)
 	mux.Handle("/healthz", apiHandler)
-	mux.Handle("/", webui.Handler(webui.Files()))
+	mux.Handle("/", webui.Handler(webui.Files(), site))
 	return mux
 }
 
