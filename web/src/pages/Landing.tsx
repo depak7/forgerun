@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from "./Landing.module.css";
 
 const repoURL = "https://github.com/depak7/forgerun";
@@ -176,22 +176,31 @@ export function LandingPage() {
   );
 }
 
-// DemoVideo is the 30-second demo, right under the hero. It plays muted and
-// loops, like a moving screenshot; the button turns the music on. With reduced
-// motion asked for, it waits for a click instead.
+// DemoVideo is the 30-second demo, right under the hero, with the browser's
+// own controls to pause, replay and turn the sound up. It starts by itself
+// with sound where the browser allows that, and muted where it doesn't (most
+// do until the visitor has clicked on the page). With reduced motion asked
+// for, it waits for a click instead.
 function DemoVideo() {
-  const [muted, setMuted] = useState(true);
+  const ref = useRef<HTMLVideoElement>(null);
   const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  useEffect(() => {
+    const video = ref.current;
+    if (!video || still) return;
+    video.muted = false;
+    video.play()?.catch(() => {
+      video.muted = true;
+      video.play()?.catch(() => {});
+    });
+  }, [still]);
   return (
     <section className={styles.demo} aria-label="Demo video">
       <video
+        ref={ref}
         className={styles.video}
         src="/demo/forgerun-demo.mp4"
         poster="/demo/poster.jpg"
-        autoPlay={!still}
-        controls={still}
-        muted={muted}
-        loop
+        controls
         playsInline
         preload={still ? "none" : "auto"}
         width={1920}
@@ -199,9 +208,6 @@ function DemoVideo() {
       />
       <div className={styles.demoBar}>
         <span>30 seconds · a real run on forgerun</span>
-        <button type="button" className={styles.sound} aria-pressed={!muted} onClick={() => setMuted(!muted)}>
-          {muted ? "[ sound on ]" : "[ sound off ]"}
-        </button>
       </div>
     </section>
   );

@@ -40,11 +40,21 @@ describe("LandingPage", () => {
     expect(tryIt.textContent).toContain("install.sh | sh");
     const video = screen.getByRole("region", { name: "Demo video" }).querySelector("video");
     expect(video?.getAttribute("src")).toBe("/demo/forgerun-demo.mp4");
-    // The video starts muted (so it may autoplay); the button turns the sound on.
-    expect(video?.muted).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "[ sound on ]" }));
-    expect(video?.muted).toBe(false);
-    expect(screen.getByRole("button", { name: "[ sound off ]" })).toBeTruthy();
+    // The browser's own controls pause and replay it; it plays once, not on a loop.
+    expect(video?.controls).toBe(true);
+    expect(video?.loop).toBe(false);
+  });
+
+  it("starts the demo with sound, or muted when the browser won't allow sound", async () => {
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockRejectedValueOnce(new DOMException("needs a click first", "NotAllowedError"))
+      .mockResolvedValue(undefined);
+    render(<LandingPage />);
+    const video = screen.getByRole("region", { name: "Demo video" }).querySelector("video")!;
+    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(video.muted).toBe(true);
+    play.mockRestore();
   });
 
   it("explains a failed sign-in", () => {
