@@ -26,6 +26,8 @@ Linux machine with [gVisor](https://gvisor.dev), which the installer sets up. Th
 curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh
 ```
 
+![Installing a worker on an EC2 VM without KVM: the installer sets up gVisor, builds forgerun, checks it with forgerun doctor and runs it under systemd](docs/quick-start.gif)
+
 It asks what the machine is for (a **worker** for an orchestrator elsewhere, or
 **everything** on this machine) and for any keys, then does the rest by itself: installs
 what's missing (git, a C compiler, Go; Node for the web UI), builds forgerun into
