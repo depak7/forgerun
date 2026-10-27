@@ -388,9 +388,10 @@ func signIn(getenv func(string) string, log *slog.Logger) (*api.Auth, error) {
 	if len(admins) == 0 {
 		log.Warn("FORGERUN_ADMINS is empty: nobody can see settings or other people's threads")
 	}
-	log.Info("sign-in with GitHub on", "public_url", public, "admins", strings.Join(admins, ","))
+	hide := getenv("FORGERUN_HIDE_SIGN_IN") == "true"
+	log.Info("sign-in with GitHub on", "public_url", public, "admins", strings.Join(admins, ","), "buttons_hidden", hide)
 	return &api.Auth{OAuth: &forge.OAuth{ClientID: id, ClientSecret: secret}, GitHub: &forge.GitHub{},
-		PublicURL: public, Admins: admins, Key: key}, nil
+		PublicURL: public, Admins: admins, Key: key, HideSignIn: hide}, nil
 }
 
 // repoFetchers fetches private repos on this host, with the task owner's

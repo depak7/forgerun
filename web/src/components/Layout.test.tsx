@@ -40,6 +40,13 @@ describe("Layout", () => {
     expect(screen.queryByText("the page")).toBeNull();
   });
 
+  it("leaves the sign-in buttons off when the server hides them", async () => {
+    fakeServer({ "/api/me": me({ signed_in: false, login: "", sign_in_hidden: true }), "/api/status": status, "/api/threads": [], "/api/agents": [] });
+    renderLayout();
+    expect(await screen.findByRole("link", { name: /view on GitHub/ })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /sign in/ })).toBeNull();
+  });
+
   it("shows the signed-in user, without settings unless they're an admin", async () => {
     fakeServer({ "/api/me": me({}), "/api/status": status, "/api/threads": [], "/api/agents": [] });
     renderLayout();

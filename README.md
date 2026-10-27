@@ -221,6 +221,7 @@ is yours. With them, people sign in with GitHub and see only their own threads.
 | `FORGERUN_PUBLIC_URL` | where browsers reach forgerun, e.g. `https://forgerun.example.com` |
 | `FORGERUN_SECRET_KEY` | encrypts users' GitHub tokens at rest: `openssl rand -hex 32` |
 | `FORGERUN_ADMINS` | GitHub usernames that see everything and the settings |
+| `FORGERUN_HIDE_SIGN_IN` | `true` keeps the sign-in buttons off the landing page; signing in still works at `/auth/github/login` |
 
 ### Useful `serve` flags
 

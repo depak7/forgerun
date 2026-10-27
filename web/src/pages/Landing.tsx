@@ -6,8 +6,9 @@ const installCmd = "curl -fsSL https://raw.githubusercontent.com/depak7/forgerun
 
 // LandingPage is what someone sees before signing in: what forgerun is, how
 // it keeps their code and keys safe, what signing in grants, and the button.
-// GitHub sends them back to /auth/github/callback.
-export function LandingPage() {
+// GitHub sends them back to /auth/github/callback. With signInHidden (the
+// server's FORGERUN_HIDE_SIGN_IN) it leaves the sign-in buttons off.
+export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }) {
   const error = new URLSearchParams(window.location.search).get("signin_error");
   return (
     <div className={styles.page}>
@@ -17,9 +18,11 @@ export function LandingPage() {
         </div>
         <nav className={styles.topLinks}>
           <a href={repoURL}>GitHub</a>
-          <a className={styles.topSignIn} href="/auth/github/login">
-            [ sign in ]
-          </a>
+          {!signInHidden && (
+            <a className={styles.topSignIn} href="/auth/github/login">
+              [ sign in ]
+            </a>
+          )}
         </nav>
       </header>
 
@@ -39,9 +42,11 @@ export function LandingPage() {
             <span className={styles.tryNote}>On any Linux VM or an Apple Silicon Mac. Then open the web UI it prints.</span>
           </div>
           <div className={styles.actions}>
-            <a className={styles.button} href="/auth/github/login">
-              [ sign in with GitHub ]
-            </a>
+            {!signInHidden && (
+              <a className={styles.button} href="/auth/github/login">
+                [ sign in with GitHub ]
+              </a>
+            )}
             <a className={styles.buttonGhost} href={repoURL}>
               [ view on GitHub ]
             </a>

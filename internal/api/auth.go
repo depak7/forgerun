@@ -27,6 +27,10 @@ type Auth struct {
 	PublicURL string        // where browsers reach forgerun, e.g. https://forgerun.example.com
 	Admins    []string      // GitHub logins that may see everything and change settings
 	Key       seal.Key      // encrypts users' GitHub tokens at rest
+	// HideSignIn keeps the sign-in buttons off the landing page, for a
+	// server whose page is only there to show what forgerun is. Signing
+	// in still works at /auth/github/login.
+	HideSignIn bool
 }
 
 const (
@@ -221,12 +225,13 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 
 // meJSON is who's signed in.
 type meJSON struct {
-	SignedIn  bool   `json:"signed_in"`
-	SignIn    bool   `json:"sign_in"` // the server uses GitHub sign-in (false = local mode)
-	Login     string `json:"login"`
-	Name      string `json:"name"`
-	AvatarURL string `json:"avatar_url"`
-	Admin     bool   `json:"admin"`
+	SignedIn     bool   `json:"signed_in"`
+	SignIn       bool   `json:"sign_in"`        // the server uses GitHub sign-in (false = local mode)
+	SignInHidden bool   `json:"sign_in_hidden"` // the landing page shows no sign-in buttons
+	Login        string `json:"login"`
+	Name         string `json:"name"`
+	AvatarURL    string `json:"avatar_url"`
+	Admin        bool   `json:"admin"`
 }
 
 // me serves GET /api/me. It answers 200 when signed out too, so the UI can
@@ -238,7 +243,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if v.ID == 0 {
-		writeData(w, http.StatusOK, meJSON{SignIn: true})
+		writeData(w, http.StatusOK, meJSON{SignIn: true, SignInHidden: s.auth.HideSignIn})
 		return
 	}
 	u, err := s.store.GetUser(r.Context(), v.ID)

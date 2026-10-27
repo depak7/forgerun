@@ -107,13 +107,25 @@ func as(h http.Handler, c *http.Cookie, method, path, body string) *httptest.Res
 	return rec
 }
 
+// With HideSignIn the UI learns to leave the buttons off; signing in
+// still works.
+func TestSignInHidden(t *testing.T) {
+	h, _, _ := authSetup(t, func(c *Config) { c.Auth.HideSignIn = true })
+	var me meJSON
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/me", ""), http.StatusOK), &me)
+	if me.SignedIn || !me.SignInHidden {
+		t.Errorf("signed out, buttons hidden: %+v", me)
+	}
+	signIn(t, h, "alice")
+}
+
 func TestSignInAndScoping(t *testing.T) {
 	h, s, key := authSetup(t)
 
 	// Signed out: the UI learns sign-in is needed; the API refuses.
 	var me meJSON
 	json.Unmarshal(mustData(t, do(h, "GET", "/api/me", ""), http.StatusOK), &me)
-	if me.SignedIn || !me.SignIn {
+	if me.SignedIn || !me.SignIn || me.SignInHidden {
 		t.Errorf("signed out: %+v", me)
 	}
 	if _, apiErr := decode(t, do(h, "GET", "/api/threads", ""), http.StatusUnauthorized); apiErr.Code != "unauthorized" {

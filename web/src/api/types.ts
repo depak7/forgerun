@@ -122,6 +122,7 @@ export interface Session {
 export interface Me {
   signed_in: boolean;
   sign_in: boolean; // the server uses GitHub sign-in (false = local mode, no accounts)
+  sign_in_hidden?: boolean; // the landing page shows no sign-in buttons
   login: string;
   name: string;
   avatar_url: string;

@@ -13,7 +13,7 @@ import styles from "./Layout.module.css";
 export function Layout() {
   const { data: me } = useMe();
   if (!me) return null; // a moment, while we learn who's signed in
-  if (!me.signed_in) return <LandingPage />;
+  if (!me.signed_in) return <LandingPage signInHidden={me.sign_in_hidden} />;
   return (
     <div className={styles.app}>
       <StatusStrip />

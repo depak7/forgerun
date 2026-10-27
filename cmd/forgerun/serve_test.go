@@ -144,8 +144,13 @@ func TestSignInSettings(t *testing.T) {
 	full := map[string]string{"GITHUB_OAUTH_CLIENT_ID": "id", "GITHUB_OAUTH_CLIENT_SECRET": "s",
 		"FORGERUN_SECRET_KEY": strings.Repeat("ab", 32), "FORGERUN_ADMINS": " depak7 , other ", "FORGERUN_PUBLIC_URL": "https://f.example/"}
 	a, err := signIn(env(full), log)
-	if err != nil || a.PublicURL != "https://f.example" || len(a.Admins) != 2 || a.Admins[0] != "depak7" {
+	if err != nil || a.PublicURL != "https://f.example" || len(a.Admins) != 2 || a.Admins[0] != "depak7" || a.HideSignIn {
 		t.Errorf("full settings: %+v, %v", a, err)
+	}
+	hidden := maps.Clone(full)
+	hidden["FORGERUN_HIDE_SIGN_IN"] = "true"
+	if a, err := signIn(env(hidden), log); err != nil || !a.HideSignIn {
+		t.Errorf("FORGERUN_HIDE_SIGN_IN=true: %+v, %v", a, err)
 	}
 	for _, missing := range []string{"GITHUB_OAUTH_CLIENT_SECRET", "FORGERUN_SECRET_KEY"} {
 		kv := maps.Clone(full)
