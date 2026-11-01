@@ -122,12 +122,13 @@ describe("SettingsPage", () => {
   });
 
   it("lists connected workers when they run apart", async () => {
-    const routes = { "/api/workers": [{ name: "deepak-mac", last_seen: new Date().toISOString(), agents: ["claude-code", "cursor"], adapters: ["claude-code", "cursor", "opencode"], sandbox: "gvisor", sessions: 1, max_sessions: 4, running: 1 }] };
+    const routes = { "/api/workers": [{ name: "deepak-mac", last_seen: new Date().toISOString(), agents: ["claude-code", "cursor"], adapters: ["claude-code", "cursor", "opencode"], sandbox: "gvisor", sessions: 1, max_sessions: 4, running: 1, capacity: { total: { cpus: 8, mem_mib: 16384 }, reserved: { cpus: 1, mem_mib: 1024 }, promised: { cpus: 2, mem_mib: 2048 } } }] };
     serve(status({ remote_workers: true }), routes);
     renderPage(<SettingsPage />);
     expect(await screen.findByText("deepak-mac")).toBeTruthy();
     expect(screen.getByText("CONNECTED")).toBeTruthy();
     expect(screen.getByText(/1 running · 1 session open of 4 · sandboxes: gVisor/)).toBeTruthy();
+    expect(screen.getByText("free 5 CPUs · 13 GiB of 7 CPUs · 15 GiB")).toBeTruthy();
   });
 
   it("says when a worker has no agent keys", async () => {

@@ -20,8 +20,10 @@ import (
 	"time"
 
 	"github.com/depak7/forgerun/internal/agent"
+	"github.com/depak7/forgerun/internal/capacity"
 	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/models"
+	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/task"
 )
@@ -49,6 +51,7 @@ type Config struct {
 	MaxSessions  int               // most sessions open at once; 0 = no limit
 	Auth         *Auth             // GitHub sign-in; nil = local mode (no sign-in, everyone is the admin)
 	Workers      Workers           // remote workers; nil = they run in this process
+	Capacity     Capacity          // this machine's, when workers run in this process; nil = unknown
 	Limits       Limits            // per-user limits (signed-in users who aren't admins)
 	Log          *slog.Logger
 }
@@ -74,6 +77,15 @@ type WorkerInfo struct {
 	Sessions    int       `json:"sessions"`
 	MaxSessions int       `json:"max_sessions"`
 	Running     int       `json:"running"`
+	// Capacity is what the worker can give sandboxes; omitted when it
+	// doesn't report one (an older worker).
+	Capacity *capacity.Report `json:"capacity,omitempty"`
+}
+
+// Capacity is what the machine running sandboxes in this process can
+// still give them. task.Runner implements it.
+type Capacity interface {
+	Capacity() (capacity.Report, bool)
 }
 
 // Workers lists connected workers; set only when workers run apart from
@@ -105,6 +117,7 @@ type Server struct {
 	maxSessions  int
 	auth         *Auth
 	workers      Workers
+	capacity     Capacity
 	limits       Limits
 	paused       atomic.Bool // an admin paused new tasks
 	outDir       string
@@ -116,7 +129,7 @@ type Server struct {
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, workers: cfg.Workers, limits: cfg.Limits, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, workers: cfg.Workers, capacity: cfg.Capacity, limits: cfg.Limits, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
@@ -136,6 +149,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/me", srv.me)
 	mux.HandleFunc("GET /api/repos", srv.listRepos)
 	mux.HandleFunc("GET /api/workers", adminOnly(srv.listWorkers))
+	mux.HandleFunc("GET /api/capacity", srv.capacityNow)
 	mux.HandleFunc("POST /api/admin/pause", adminOnly(srv.pause))
 	mux.HandleFunc("GET /auth/github/login", srv.githubLogin)
 	mux.HandleFunc("GET /auth/github/callback", srv.githubCallback)
@@ -970,6 +984,58 @@ func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
 	out := []WorkerInfo{}
 	if s.workers != nil {
 		out = append(out, s.workers.Workers()...)
+	}
+	writeData(w, http.StatusOK, out)
+}
+
+// capacityJSON is what a new sandbox can be given right now.
+type capacityJSON struct {
+	Workers int `json:"workers"` // connected workers; 1 when they run in this process
+	// Free is what each worker that reports its capacity has free, largest
+	// first. Workers aren't named: that's for admins (GET /api/workers).
+	Free   []capacity.Resources `json:"free"`
+	Images []imageJSON          `json:"images"` // what a sandbox can start from
+}
+
+type imageJSON struct {
+	Name  string `json:"name"`  // "general", or the agent whose CLI it has
+	Image string `json:"image"` // e.g. "depak7/forgerun-sandbox:dev"
+}
+
+// capacityNow serves GET /api/capacity.
+func (s *Server) capacityNow(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	out := capacityJSON{Free: []capacity.Resources{}, Images: []imageJSON{{Name: "general", Image: sandbox.GeneralImage}}}
+	var live []WorkerInfo
+	if s.workers != nil {
+		live = s.workers.Workers()
+		out.Workers = len(live)
+		for _, wk := range live {
+			if wk.Capacity != nil {
+				out.Free = append(out.Free, wk.Capacity.Free())
+			}
+		}
+	} else {
+		out.Workers = 1
+		if s.capacity != nil {
+			if c, ok := s.capacity.Capacity(); ok {
+				out.Free = append(out.Free, c.Free())
+			}
+		}
+	}
+	slices.SortFunc(out.Free, func(a, b capacity.Resources) int {
+		return cmp.Or(cmp.Compare(b.MemMiB, a.MemMiB), cmp.Compare(b.CPUs, a.CPUs))
+	})
+	for _, a := range agents { // enabled agents some machine here can start
+		ag, err := s.agents.Get(a.ID)
+		if err != nil || (s.workers != nil && !workersHave(live, a.ID)) {
+			continue
+		}
+		out.Images = append(out.Images, imageJSON{Name: a.ID, Image: ag.Image()})
 	}
 	writeData(w, http.StatusOK, out)
 }

@@ -54,6 +54,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	defaultModel := fs.String("model", "", "default model family of the default agent (default: the agent's own)")
 	requireZDR := fs.Bool("require-zdr", false, "offer only models with zero data retention")
 	sandboxKind := sandboxFlag(fs)
+	reserve := reserveFlags(fs)
 	useSnapshots := fs.Bool("snapshots", true, "open sessions from their repo's snapshot, and save one when a session closes")
 	snapshotMaxAge := fs.Duration("snapshot-max-age", 7*24*time.Hour, "delete a repo's snapshot when no task has used it for this long (0 = never)")
 	snapshotBudget := byteSize(20e9)
@@ -153,6 +154,10 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	}
 	runner := &task.Runner{Agents: agents, Sandboxes: backend, DefaultAgent: *defaultAgent, OutDir: *out, CPUs: 2, MemMiB: 2048, Timeout: *timeout,
 		AgentIdle: *agentIdle, Stdout: io.Discard, Log: log, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, VMPrefix: serveVMPrefix}
+	if !orchestratorOnly {
+		runner.Reserve = reserve()
+		runner.Machine = machineSize(log, runner.Reserve)
+	}
 	removeLeftoverVMs(ctx, backend, serveVMPrefix, log)
 	var prs api.PRs // stays a nil interface when PRs are off (a nil *Publisher in it wouldn't be)
 	var publisher *publish.Publisher
@@ -195,7 +200,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	}
 	srv := &http.Server{
 		Handler: routes(os.Getenv("FORGERUN_PUBLIC_URL"), nil, api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
-			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, OutDir: *out, GitHubUser: githubUser,
+			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, Capacity: runner, OutDir: *out, GitHubUser: githubUser,
 			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, Log: log}))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

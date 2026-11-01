@@ -8,6 +8,7 @@ func TestByteSize(t *testing.T) {
 		want int64
 	}{
 		{"20GB", 20e9}, {"500MB", 500e6}, {"1.5gb", 1.5e9}, {" 2 TB ", 2e12}, {"1024", 1024}, {"0", 0}, {"7B", 7},
+		{"1GiB", 1 << 30}, {"512mib", 512 << 20}, {"1.5GiB", 3 << 29},
 	}
 	for _, tc := range tests {
 		var b byteSize
@@ -21,7 +22,7 @@ func TestByteSize(t *testing.T) {
 			t.Errorf("Set(%q) accepted %d", bad, b)
 		}
 	}
-	for in, want := range map[byteSize]string{20e9: "20GB", 1.5e9: "1.5GB", 0: "0", 512: "512"} {
+	for in, want := range map[byteSize]string{20e9: "20GB", 1.5e9: "1.5GB", 0: "0", 512: "512", 1 << 30: "1GiB", 3 << 29: "1.5GiB", 512 << 20: "512MiB"} {
 		if got := in.String(); got != want {
 			t.Errorf("String(%d) = %q, want %q", in, got, want)
 		}

@@ -4,10 +4,12 @@ import (
 	"cmp"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
 
+	"github.com/depak7/forgerun/internal/capacity"
 	"github.com/depak7/forgerun/internal/sandbox"
 )
 
@@ -70,4 +72,27 @@ func defaultStateDir(sub string) string {
 		return filepath.Join(os.TempDir(), "forgerun", sub)
 	}
 	return filepath.Join(home, ".forgerun", sub)
+}
+
+// reserveFlags registers -reserve-cpus and -reserve-mem on fs: what this
+// machine keeps back from its sandboxes for the OS, Docker and forgerun.
+func reserveFlags(fs *flag.FlagSet) func() capacity.Resources {
+	cpus := fs.Int("reserve-cpus", 1, "CPUs this machine keeps for itself, never given to sandboxes")
+	mem := byteSize(1 << 30)
+	fs.Var(&mem, "reserve-mem", "memory this machine keeps for itself, never given to sandboxes, e.g. 1GiB or 512MiB")
+	return func() capacity.Resources {
+		return capacity.Resources{CPUs: *cpus, MemMiB: int(int64(mem) / (1 << 20))}
+	}
+}
+
+// machineSize reads this machine's CPUs and memory. On failure it logs a
+// warning and returns zero: capacity is then reported as unknown.
+func machineSize(log *slog.Logger, reserve capacity.Resources) capacity.Resources {
+	m, err := capacity.Machine()
+	if err != nil {
+		log.Warn("this machine's size is unknown, so it won't report its capacity", "err", err)
+		return capacity.Resources{}
+	}
+	log.Info("capacity", "cpus", m.CPUs, "mem_mib", m.MemMiB, "reserved_cpus", reserve.CPUs, "reserved_mem_mib", reserve.MemMiB)
+	return m
 }

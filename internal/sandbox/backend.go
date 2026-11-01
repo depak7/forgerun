@@ -54,5 +54,9 @@ type Backend interface {
 	RemoveLeftovers(ctx context.Context, prefix string) (int, error)
 }
 
+// GeneralImage is forgerun's general-purpose image (images/sandbox): no
+// coding agent, for sandboxes people use directly.
+const GeneralImage = "depak7/forgerun-sandbox:dev"
+
 // Default is the backend used when none is chosen.
 var Default Backend = Microsandbox{}

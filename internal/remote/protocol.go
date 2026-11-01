@@ -11,6 +11,7 @@ package remote
 import (
 	"time"
 
+	"github.com/depak7/forgerun/internal/capacity"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/task"
 )
@@ -40,6 +41,9 @@ type Heartbeat struct {
 	MaxSessions int                `json:"max_sessions"`
 	Sessions    []task.OpenSession `json:"sessions"`
 	Running     []string           `json:"running"` // task IDs
+	// Capacity is the machine's CPUs and memory for sandboxes; nil from a
+	// worker that doesn't know its own, or predates capacity reports.
+	Capacity *capacity.Report `json:"capacity,omitempty"`
 }
 
 // Command is something the orchestrator asks a worker to do.

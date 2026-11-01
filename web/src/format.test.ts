@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatDuration, formatElapsed, formatWhen, shortID } from "./format";
+import { formatBytes, formatDuration, formatElapsed, formatMiB, formatWhen, shortID } from "./format";
 
 describe("format", () => {
   it("formats sizes", () => {
@@ -57,5 +57,13 @@ describe("repo checks", () => {
     expect(checkRepo("https://github.com/a/b")).toBe("");
     expect(isGitHub("https://github.com/a/b")).toBe(true);
     expect(isGitHub("https://gitlab.com/a/b")).toBe(false);
+  });
+});
+
+describe("formatMiB", () => {
+  it("shows MiB under a GiB, GiB above", () => {
+    expect(formatMiB(512)).toBe("512 MiB");
+    expect(formatMiB(13312)).toBe("13 GiB");
+    expect(formatMiB(15932)).toBe("15.6 GiB");
   });
 });

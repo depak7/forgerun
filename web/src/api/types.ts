@@ -146,4 +146,18 @@ export interface WorkerInfo {
   sessions: number;
   max_sessions: number;
   running: number;
+  capacity?: CapacityReport; // missing from a worker too old to report it
+}
+
+// Resources is an amount of CPUs and memory.
+export interface Resources {
+  cpus: number;
+  mem_mib: number;
+}
+
+// CapacityReport is what a worker can give sandboxes: free = total - reserved - promised.
+export interface CapacityReport {
+  total: Resources;
+  reserved: Resources; // kept back for the machine itself
+  promised: Resources; // held by its open VMs
 }

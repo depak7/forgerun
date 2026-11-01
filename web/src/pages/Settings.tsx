@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useAgents, useMe, useModels, useSnapshots, useStatus, useWorkers } from "../api/queries";
-import type { Agent, Snapshot, Status, WorkerInfo } from "../api/types";
-import { formatBytes, formatDuration, formatWhen, repoName } from "../format";
+import type { Agent, CapacityReport, Snapshot, Status, WorkerInfo } from "../api/types";
+import { formatBytes, formatDuration, formatMiB, formatWhen, repoName } from "../format";
 import styles from "./Settings.module.css";
 
 // SettingsPage shows how this server is set up: which agents can run and
@@ -242,11 +242,21 @@ function Workers() {
               {w.max_sessions > 0 ? ` of ${w.max_sessions}` : ""}
               {w.sandbox ? ` · sandboxes: ${w.sandbox === "gvisor" ? "gVisor" : "microVMs"}` : ""}
             </span>
+            {w.capacity && <span className={styles.sub}>{capacityLine(w.capacity)}</span>}
           </div>
         </div>
       ))}
     </div>
   );
+}
+
+// capacityLine is what a worker can still give sandboxes, out of what it
+// has after its reserve: "free 5 CPUs · 13 GiB of 7 CPUs · 15 GiB".
+function capacityLine(c: CapacityReport): string {
+  const usable = { cpus: Math.max(c.total.cpus - c.reserved.cpus, 0), mem_mib: Math.max(c.total.mem_mib - c.reserved.mem_mib, 0) };
+  const free = { cpus: Math.max(usable.cpus - c.promised.cpus, 0), mem_mib: Math.max(usable.mem_mib - c.promised.mem_mib, 0) };
+  const cpus = (n: number) => `${n} CPU${n === 1 ? "" : "s"}`;
+  return `free ${cpus(free.cpus)} · ${formatMiB(free.mem_mib)} of ${cpus(usable.cpus)} · ${formatMiB(usable.mem_mib)}`;
 }
 
 // Intake is the per-user limits and the switch that pauses new tasks.

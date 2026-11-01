@@ -40,6 +40,7 @@ func workerCmd(args []string) error {
 	home, _ := os.UserHomeDir()
 	state := fs.String("state", filepath.Join(home, ".forgerun", "worker"), "where this worker keeps its record of snapshots")
 	sandboxKind := sandboxFlag(fs)
+	reserve := reserveFlags(fs)
 	useSnapshots := fs.Bool("snapshots", true, "open sessions from their repo's snapshot, and save one when a session closes")
 	snapshotMaxAge := fs.Duration("snapshot-max-age", 7*24*time.Hour, "delete a repo's snapshot when unused for this long (0 = never)")
 	snapshotBudget := byteSize(20e9)
@@ -102,7 +103,8 @@ func workerCmd(args []string) error {
 	client := &remote.Client{URL: *server, Token: token, Name: *name, Sandbox: backend.Name(), Log: log}
 	runner := &task.Runner{Agents: agents, Sandboxes: backend, DefaultAgent: cmp.Or(firstOf(ids), "cursor"), OutDir: *out, CPUs: 2, MemMiB: 2048,
 		Timeout: *timeout, AgentIdle: *agentIdle, Stdout: io.Discard, Log: log, SessionIdle: *sessionIdle, MaxSessions: *maxSessions,
-		LogSink: client.LogSink, VMPrefix: workerVMPrefix}
+		LogSink: client.LogSink, VMPrefix: workerVMPrefix, Reserve: reserve()}
+	runner.Machine = machineSize(log, runner.Reserve)
 	removeLeftoverVMs(ctx, backend, workerVMPrefix, log)
 	sweepsDone := make(chan struct{})
 	if *useSnapshots {

@@ -255,6 +255,9 @@ func (c *Client) Heartbeats(ctx context.Context, pool *worker.Pool, runner *task
 	connected := false
 	for {
 		hb := Heartbeat{Worker: c.Name, Agents: agents, Adapters: adapters, Sandbox: c.Sandbox, MaxSessions: maxSessions, Sessions: runner.Sessions(), Running: pool.Running()}
+		if c, ok := runner.Capacity(); ok {
+			hb.Capacity = &c
+		}
 		var reply HeartbeatReply
 		hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		_, err := c.postJSON(hctx, pathHeartbeat, hb, &reply)

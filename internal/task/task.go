@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/depak7/forgerun/internal/agent"
+	"github.com/depak7/forgerun/internal/capacity"
 	"github.com/depak7/forgerun/internal/sandbox"
 )
 
@@ -120,6 +121,10 @@ type Runner struct {
 	// MaxSessions is how many sessions may be open at once; the least
 	// recently used idle one is closed to make room. 0 = no limit.
 	MaxSessions int
+	// Machine is this machine's CPUs and memory, and Reserve what it keeps
+	// for itself; a zero Machine means unknown (Capacity reports nothing).
+	Machine capacity.Resources
+	Reserve capacity.Resources
 
 	sessions *sessions
 }
@@ -379,6 +384,18 @@ func (r *Runner) Sessions() []OpenSession { return r.open().list() }
 
 // OpenSessions is how many sessions are open.
 func (r *Runner) OpenSessions() int { return r.open().count() }
+
+// Capacity reports what this machine can still give sandboxes. Every open
+// session holds its VM's CPUs and memory, busy or idle. ok is false when
+// the machine's size is unknown.
+func (r *Runner) Capacity() (c capacity.Report, ok bool) {
+	if r.Machine.CPUs == 0 {
+		return capacity.Report{}, false
+	}
+	n := r.open().count()
+	vm := capacity.Resources{CPUs: int(r.CPUs), MemMiB: int(r.MemMiB)}
+	return capacity.Report{Total: r.Machine, Reserved: r.Reserve, Promised: capacity.Resources{CPUs: n * vm.CPUs, MemMiB: n * vm.MemMiB}}, true
+}
 
 // RunSessions closes idle sessions until ctx ends. Close the rest with
 // CloseAll once no more turns will run.

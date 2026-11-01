@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/depak7/forgerun/internal/capacity"
 )
 
 // clock is a fake time source for the session bookkeeping.
@@ -146,5 +148,24 @@ func TestTailBuffer(t *testing.T) {
 	b.Write([]byte("world"))
 	if got := b.String(); got != "world" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestRunnerCapacity(t *testing.T) {
+	r := &Runner{CPUs: 2, MemMiB: 2048}
+	if _, ok := r.Capacity(); ok {
+		t.Error("a Runner that doesn't know its machine reported a capacity")
+	}
+	r.Machine = capacity.Resources{CPUs: 8, MemMiB: 16384}
+	r.Reserve = capacity.Resources{CPUs: 1, MemMiB: 1024}
+	a, _ := r.open().reserve("a", "cursor") // being opened counts already
+	r.open().reserve("b", "claude")
+	c, ok := r.Capacity()
+	if !ok || c.Promised != (capacity.Resources{CPUs: 4, MemMiB: 4096}) || c.Free() != (capacity.Resources{CPUs: 3, MemMiB: 11264}) {
+		t.Fatalf("with two sessions: %+v (free %+v)", c, c.Free())
+	}
+	r.open().drop(a)
+	if c, _ := r.Capacity(); c.Promised != (capacity.Resources{CPUs: 2, MemMiB: 2048}) {
+		t.Errorf("after closing one: promised %+v", c.Promised)
 	}
 }

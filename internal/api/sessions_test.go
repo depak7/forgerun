@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/depak7/forgerun/internal/capacity"
+	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/memory"
 	"github.com/depak7/forgerun/internal/task"
@@ -191,5 +194,67 @@ func TestAgentKeysOnWorkers(t *testing.T) {
 		if want := a.ID == "cursor"; a.Credential == nil || a.Credential.Set != want {
 			t.Errorf("%s: credential %+v, want set=%v", a.ID, a.Credential, want)
 		}
+	}
+}
+
+type fakeCapacity struct {
+	c  capacity.Report
+	ok bool
+}
+
+func (f fakeCapacity) Capacity() (capacity.Report, bool) { return f.c, f.ok }
+
+// GET /api/capacity: what a sandbox can get now, from this machine or the
+// connected workers, and the images it can start from.
+func TestCapacity(t *testing.T) {
+	get := func(h http.Handler) capacityJSON {
+		t.Helper()
+		var out capacityJSON
+		json.Unmarshal(mustData(t, do(h, "GET", "/api/capacity", ""), http.StatusOK), &out)
+		return out
+	}
+	names := func(imgs []imageJSON) (out []string) {
+		for _, i := range imgs {
+			out = append(out, i.Name)
+		}
+		return out
+	}
+
+	// In-process: this machine, less its reserve and its open VMs.
+	local := capacity.Report{Total: capacity.Resources{CPUs: 8, MemMiB: 16384}, Reserved: capacity.Resources{CPUs: 1, MemMiB: 1024},
+		Promised: capacity.Resources{CPUs: 2, MemMiB: 2048}}
+	h, _, _ := setup(t, func(c *Config) { c.Capacity = fakeCapacity{local, true} })
+	got := get(h)
+	if got.Workers != 1 || len(got.Free) != 1 || got.Free[0] != (capacity.Resources{CPUs: 5, MemMiB: 13312}) {
+		t.Errorf("in-process: %+v", got)
+	}
+	if n := names(got.Images); !slices.Equal(n, []string{"general", "cursor", "other-agent"}) || got.Images[0].Image != sandbox.GeneralImage {
+		t.Errorf("in-process images: %+v", got.Images)
+	}
+
+	// Size unknown: no free list, but never null.
+	h, _, _ = setup(t, func(c *Config) { c.Capacity = fakeCapacity{} })
+	if rec := do(h, "GET", "/api/capacity", ""); !strings.Contains(rec.Body.String(), `"free":[]`) {
+		t.Errorf("unknown size: %s", rec.Body)
+	}
+
+	// Workers apart: one entry per worker that reports, largest first; an
+	// older worker counts but has no entry. Images: agents some worker has.
+	small := &capacity.Report{Total: capacity.Resources{CPUs: 4, MemMiB: 4096}}
+	big := &capacity.Report{Total: capacity.Resources{CPUs: 16, MemMiB: 65536}, Reserved: capacity.Resources{CPUs: 1, MemMiB: 1024}}
+	h, _, _ = setup(t, func(c *Config) {
+		c.Workers = fakeWorkers{
+			{Name: "laptop", Adapters: []string{"cursor"}, Capacity: small},
+			{Name: "old", Adapters: []string{"cursor"}},
+			{Name: "box", Adapters: []string{"cursor"}, Capacity: big},
+		}
+	})
+	got = get(h)
+	want := []capacity.Resources{{CPUs: 15, MemMiB: 64512}, {CPUs: 4, MemMiB: 4096}}
+	if got.Workers != 3 || !slices.Equal(got.Free, want) {
+		t.Errorf("workers: %+v, want free %+v", got, want)
+	}
+	if n := names(got.Images); !slices.Equal(n, []string{"general", "cursor"}) {
+		t.Errorf("worker images: %v", n)
 	}
 }

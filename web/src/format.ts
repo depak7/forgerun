@@ -6,6 +6,12 @@ export function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
+// formatMiB shows memory given in MiB, as sandboxes are sized: "512 MiB", "13 GiB".
+export function formatMiB(mib: number): string {
+  if (mib >= 1024) return `${trim(mib / 1024)} GiB`;
+  return `${mib} MiB`;
+}
+
 function trim(n: number): string {
   return n.toFixed(1).replace(/\.0$/, "");
 }

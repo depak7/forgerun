@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/depak7/forgerun/internal/capacity"
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/memory"
@@ -259,5 +260,24 @@ func TestHello(t *testing.T) {
 	gone := &Client{URL: "http://127.0.0.1:1", Token: token, Log: slog.New(slog.DiscardHandler)}
 	if err := gone.Hello(context.Background()); err == nil || !strings.Contains(err.Error(), "reaching the orchestrator") {
 		t.Errorf("unreachable: %v", err)
+	}
+}
+
+// A worker's capacity reaches the orchestrator's worker list; an older
+// worker that sends none is listed without one.
+func TestHeartbeatCapacity(t *testing.T) {
+	rs, _, url := setup(t)
+	c := capacity.Report{Total: capacity.Resources{CPUs: 8, MemMiB: 16384}, Reserved: capacity.Resources{CPUs: 1, MemMiB: 1024}}
+	beat(t, url, Heartbeat{Worker: "box", Capacity: &c})
+	beat(t, url, Heartbeat{Worker: "old"})
+	got := map[string]*capacity.Report{}
+	for _, w := range rs.Workers() {
+		got[w.Name] = w.Capacity
+	}
+	if got["box"] == nil || *got["box"] != c {
+		t.Errorf("box: %+v, want %+v", got["box"], c)
+	}
+	if got["old"] != nil {
+		t.Errorf("old: %+v, want none", got["old"])
 	}
 }
