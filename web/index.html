@@ -196,45 +196,45 @@
           </li>
         </ul>
 
-        <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">How forgerun compares to cloud coding agents</h2>
+        <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">How forgerun compares to other ways of running coding agents</h2>
         <table style="width: 100%; border-collapse: collapse; color: #d4d8d4; font-size: 14px">
           <thead>
             <tr style="border-bottom: 1px solid #2a2f2c; text-align: left">
-              <th style="padding: 8px">Platform</th>
-              <th style="padding: 8px">Self-Hosted</th>
-              <th style="padding: 8px">Open Source</th>
-              <th style="padding: 8px">Dedicated VM per Task</th>
-              <th style="padding: 8px">API Keys Hidden from Sandbox</th>
+              <th style="padding: 8px">Setup</th>
+              <th style="padding: 8px">Isolation per Thread</th>
+              <th style="padding: 8px">API Keys &amp; GitHub Tokens</th>
+              <th style="padding: 8px">Task Start &amp; Workflow</th>
+              <th style="padding: 8px">Agents &amp; Cost</th>
             </tr>
           </thead>
           <tbody>
             <tr style="border-bottom: 1px solid #1c201e">
-              <td style="padding: 8px"><strong>forgerun</strong></td>
-              <td style="padding: 8px">Yes (any Linux VM or Apple Silicon Mac)</td>
-              <td style="padding: 8px">Yes (Apache-2.0)</td>
-              <td style="padding: 8px">Yes (microVM or gVisor sandbox)</td>
-              <td style="padding: 8px">Yes (host-side TLS placeholder proxy)</td>
+              <td style="padding: 8px"><strong>forgerun (your Mac or Linux VM)</strong></td>
+              <td style="padding: 8px">Dedicated microVM (libkrun) or gVisor kernel (0.34s boot)</td>
+              <td style="padding: 8px">Never inside the sandbox (host TLS proxy swaps placeholders)</td>
+              <td style="padding: 8px">2.8s warm disk snapshots; review diff before pushing branch/PR</td>
+              <td style="padding: 8px">claude-code (Pro/Max), cursor, opencode (free/paid), pi</td>
             </tr>
             <tr style="border-bottom: 1px solid #1c201e">
-              <td style="padding: 8px">Cursor Cloud Agents</td>
-              <td style="padding: 8px">Partly (tools only; loop in cloud)</td>
-              <td style="padding: 8px">No</td>
-              <td style="padding: 8px">Cloud only (shared on self-hosted)</td>
-              <td style="padding: 8px">No (env secrets readable by agent)</td>
+              <td style="padding: 8px">CLI on your laptop</td>
+              <td style="padding: 8px">Shares your machine; stops when you close the lid</td>
+              <td style="padding: 8px">Local keys, ~/.ssh, and .env files live on the same machine</td>
+              <td style="padding: 8px">Ties up your local working tree and branch</td>
+              <td style="padding: 8px">Your own subscriptions, one terminal at a time</td>
             </tr>
             <tr style="border-bottom: 1px solid #1c201e">
-              <td style="padding: 8px">OpenAI Codex Cloud</td>
-              <td style="padding: 8px">No</td>
-              <td style="padding: 8px">No</td>
-              <td style="padding: 8px">Yes (cloud VM)</td>
-              <td style="padding: 8px">Partly (network secrets proxied)</td>
+              <td style="padding: 8px">CLI in tmux or plain Docker on a VPS</td>
+              <td style="padding: 8px">Shared host kernel; containers share host or clone cold</td>
+              <td style="padding: 8px">Exported in env vars (readable by prompt injection or scripts)</td>
+              <td style="padding: 8px">~27s cold clone + install per clean run; no diff gate</td>
+              <td style="padding: 8px">Your own keys; DIY scripts for logs and PRs</td>
             </tr>
             <tr style="border-bottom: 1px solid #1c201e">
-              <td style="padding: 8px">OpenHands</td>
-              <td style="padding: 8px">Yes</td>
-              <td style="padding: 8px">Yes (MIT)</td>
-              <td style="padding: 8px">No (shared Docker kernel by default)</td>
-              <td style="padding: 8px">No (custom secrets exported to env)</td>
+              <td style="padding: 8px">Vendor-hosted cloud agents</td>
+              <td style="padding: 8px">Vendor cloud VM (shared host on self-hosted runners)</td>
+              <td style="padding: 8px">Managed in vendor cloud; env vars often visible to the agent</td>
+              <td style="padding: 8px">Runs on vendor infrastructure</td>
+              <td style="padding: 8px">Locked to one vendor's agent and cloud compute billing</td>
             </tr>
           </tbody>
         </table>

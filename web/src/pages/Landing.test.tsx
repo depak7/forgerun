@@ -14,7 +14,17 @@ describe("LandingPage", () => {
     expect(screen.getByText(/every turn in its own sandbox/)).toBeTruthy();
     expect(screen.getByRole("link", { name: /sign in with GitHub/ }).getAttribute("href")).toBe("/auth/github/login");
     expect(screen.getByRole("link", { name: /view on GitHub/ }).getAttribute("href")).toBe("https://github.com/depak7/forgerun");
-    for (const section of ["How it works", "Why it's safe to point at your code", "Agents", "What signing in means", "Run it yourself"]) {
+    expect(screen.getByRole("link", { name: "Star on GitHub" }).getAttribute("href")).toBe("https://github.com/depak7/forgerun");
+    expect(screen.getByRole("link", { name: /\[ star on GitHub \]/ }).getAttribute("href")).toBe("https://github.com/depak7/forgerun");
+    for (const section of [
+      "How it works",
+      "Why it's safe to point at your code",
+      "Agents",
+      "How it compares",
+      "What signing in means",
+      "Run it yourself",
+      "Frequently asked questions",
+    ]) {
       expect(screen.getByRole("heading", { name: section })).toBeTruthy();
     }
     expect(screen.queryByRole("alert")).toBeNull();
