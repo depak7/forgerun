@@ -92,6 +92,9 @@ type Result struct {
 	Reply      string // the end of what the agent wrote; "" if nothing
 	BaseCommit string // the commit the session's work started from
 	Asked      bool   // the agent asked the user questions instead of going on
+	// FolderDiff is a folder's uncommitted work at handoff, when this turn
+	// unpacked the folder (git diff --binary); "" otherwise.
+	FolderDiff string
 }
 
 // Runner runs turns and keeps each thread's session between them.
@@ -204,6 +207,7 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 		return res, fmt.Errorf("reading the session's commit: %w", err)
 	}
 	res.BaseCommit = strings.TrimSpace(res.BaseCommit)
+	res.FolderDiff, ss.folderDiff = ss.folderDiff, "" // reported once
 
 	_, continuer := ag.(agent.Continuer)
 	req := agent.Request{Dir: repoDir, Prompt: withGuidance(t.Prompt, t.Plan), ModelID: t.ModelID, Family: t.Family, Effort: t.Effort, ReadOnly: t.Plan}
@@ -343,7 +347,7 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 		}
 		if t.Folder != nil {
 			step("unpacking the folder %s", t.Repo)
-			if err := unpackFolder(ctx, ss.sb, t.Folder, repoDir); err != nil {
+			if ss.folderDiff, err = unpackFolder(ctx, ss.sb, t.Folder, repoDir); err != nil {
 				return nil, err
 			}
 		} else if t.Fetch != nil {

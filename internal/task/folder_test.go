@@ -85,7 +85,7 @@ func unpackUpload(t *testing.T, data []byte) (dir, head string) {
 	t.Helper()
 	dir = filepath.Join(t.TempDir(), "repo")
 	load := func(context.Context) ([]byte, error) { return data, nil }
-	if err := unpackFolder(context.Background(), hostSandbox{}, load, dir); err != nil {
+	if _, err := unpackFolder(context.Background(), hostSandbox{}, load, dir); err != nil {
 		t.Fatal(err)
 	}
 	return dir, hostRun(t, dir, "git", "rev-parse", "HEAD")
@@ -121,6 +121,12 @@ func TestUnpackRepoFolder(t *testing.T) {
 	if _, again := unpackUpload(t, data); again != head {
 		t.Errorf("unpacking again gave %s, want %s", again, head)
 	}
+	// The work at handoff, as a patch on the folder's own commit.
+	load := func(context.Context) ([]byte, error) { return data, nil }
+	handoff, err := unpackFolder(context.Background(), hostSandbox{}, load, filepath.Join(t.TempDir(), "r"))
+	if err != nil || !strings.Contains(handoff, "+// work in progress") || !strings.Contains(handoff, "new file mode") || strings.Contains(handoff, "build/") {
+		t.Errorf("handoff diff (%v):\n%s", err, handoff)
+	}
 }
 
 // A repo with nothing uncommitted starts from its own commit.
@@ -132,6 +138,10 @@ func TestUnpackCleanRepoFolder(t *testing.T) {
 	hostRun(t, src, "git", "-c", "user.name=u", "-c", "user.email=u@x", "commit", "-q", "-m", "mine")
 	if _, head := unpackUpload(t, tarball(t, src)); head != hostRun(t, src, "git", "rev-parse", "HEAD") {
 		t.Errorf("HEAD = %s, want the folder's own commit", head)
+	}
+	load := func(context.Context) ([]byte, error) { return tarball(t, src), nil }
+	if handoff, err := unpackFolder(context.Background(), hostSandbox{}, load, filepath.Join(t.TempDir(), "r")); err != nil || handoff != "" {
+		t.Errorf("nothing uncommitted: handoff %q, %v", handoff, err)
 	}
 }
 

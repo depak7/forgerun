@@ -247,6 +247,10 @@ func (s *Store) Finish(_ context.Context, id string, o store.Outcome) error {
 	r.BaseCommit, r.Reply, r.Asked = o.BaseCommit, o.Reply, o.Asked
 	now := time.Now()
 	r.FinishedAt = &now
+	if f, ok := s.folders[r.FolderID]; ok && o.FolderDiff != "" && f.handoffDiff == "" {
+		f.handoffDiff = o.FolderDiff
+		s.folders[r.FolderID] = f
+	}
 	return nil
 }
 
@@ -374,7 +378,8 @@ func (s *Store) Diff(_ context.Context, id string) (string, error) {
 // folder is an uploaded folder and its data.
 type folder struct {
 	store.Folder
-	data []byte
+	data        []byte
+	handoffDiff string
 }
 
 func (s *Store) SaveFolder(_ context.Context, f store.Folder, data []byte) error {
@@ -384,7 +389,7 @@ func (s *Store) SaveFolder(_ context.Context, f store.Folder, data []byte) error
 		return fmt.Errorf("saving folder %s: already exists", f.ID)
 	}
 	f.SizeBytes, f.CreatedAt = int64(len(data)), time.Now()
-	s.folders[f.ID] = folder{f, data}
+	s.folders[f.ID] = folder{Folder: f, data: data}
 	return nil
 }
 
@@ -406,6 +411,16 @@ func (s *Store) FolderData(_ context.Context, id string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %s", store.ErrFolderNotFound, id)
 	}
 	return f.data, nil
+}
+
+func (s *Store) FolderDiff(_ context.Context, id string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.folders[id]
+	if !ok {
+		return "", fmt.Errorf("%w: %s", store.ErrFolderNotFound, id)
+	}
+	return f.handoffDiff, nil
 }
 
 func (s *Store) List(_ context.Context, limit int, owner int64) ([]store.Record, error) {

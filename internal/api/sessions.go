@@ -96,10 +96,6 @@ func (s *Server) pushThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := thread[0].ID
-	if thread[0].FolderID != "" {
-		writeError(w, http.StatusBadRequest, "a folder's thread can't be pushed yet: take its changes from the diff")
-		return
-	}
 	if s.prs == nil {
 		writeError(w, http.StatusBadRequest, "this server can't push (it has no GITHUB_TOKEN)")
 		return
@@ -129,6 +125,17 @@ func (s *Server) pushThread(w http.ResponseWriter, r *http.Request) {
 		ids, patches = append(ids, t.ID), append(patches, diff)
 	}
 	pr := latest.PR
+	base, prBase := thread[0].BaseCommit, ""
+	if f := thread[0].FolderID; f != "" {
+		var handoff string
+		var ok bool
+		if base, prBase, handoff, ok = s.folderPush(w, r, thread[0]); !ok {
+			return
+		}
+		if handoff != "" && pr.Branch == "" { // the work at handoff goes first, once
+			patches = append([]string{handoff}, patches...)
+		}
+	}
 	openOnly := req.PR && pr.Number == 0 && pr.Branch != "" // the branch is pushed; only the pull request is new
 	if len(patches) == 0 && !openOnly {
 		writeError(w, http.StatusConflict, "nothing to push: every change in this thread is already on its branch")
@@ -153,7 +160,7 @@ func (s *Server) pushThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pub, err := s.prs.Publish(ctx, task.PublishRequest{Token: tok,
-		ThreadID: id, Repo: thread[0].Repo, BaseCommit: thread[0].BaseCommit, Patches: patches,
+		ThreadID: id, Repo: thread[0].Repo, BaseCommit: base, Patches: patches, PRBase: prBase,
 		Summary: summary, Requests: requests, OpenPR: req.PR, Branch: pr.Branch, PRNumber: pr.Number,
 	})
 	push := store.Push{LatestID: latest.ID, Summary: summary, PR: store.PullRequest{
@@ -184,4 +191,32 @@ func (s *Server) pushThread(w http.ResponseWriter, r *http.Request) {
 		out[i] = toJSON(t)
 	}
 	writeData(w, http.StatusOK, out)
+}
+
+// folderPush is what pushing a folder's thread needs: the commit the
+// folder was on (which must be on GitHub), the branch it was on, for the
+// pull request, and its uncommitted work at handoff, which goes on that
+// commit before the turns' changes. It writes the error response itself if
+// the folder can't be pushed.
+func (s *Server) folderPush(w http.ResponseWriter, r *http.Request, first store.Record) (base, branch, handoff string, ok bool) {
+	f, err := s.store.GetFolder(r.Context(), first.FolderID)
+	if err != nil {
+		s.internalError(w, r, err)
+		return "", "", "", false
+	}
+	if f.Repo == "" {
+		writeError(w, http.StatusBadRequest, "this folder isn't from a GitHub repo, so there's nowhere to push: take its changes from the diff")
+		return "", "", "", false
+	}
+	if first.BaseCommit != f.Base { // the folder had uncommitted work
+		if handoff, err = s.store.FolderDiff(r.Context(), f.ID); err != nil {
+			s.internalError(w, r, err)
+			return "", "", "", false
+		}
+		if handoff == "" {
+			writeError(w, http.StatusConflict, "the folder's uncommitted work at handoff isn't known yet; push after its first turn has run")
+			return "", "", "", false
+		}
+	}
+	return f.Base, f.Branch, handoff, true
 }

@@ -215,7 +215,7 @@ func (p *Pool) setRunning(id string, cancel context.CancelCauseFunc) {
 // outcome decides how a finished run is recorded.
 func outcome(ctx context.Context, res task.Result, err error) store.Outcome {
 	o := store.Outcome{State: task.Succeeded, LogPath: res.LogPath, Diff: res.Diff,
-		BaseCommit: res.BaseCommit, Reply: res.Reply, Asked: res.Asked}
+		BaseCommit: res.BaseCommit, Reply: res.Reply, Asked: res.Asked, FolderDiff: res.FolderDiff}
 	switch {
 	case err == nil:
 	case errors.Is(context.Cause(ctx), errCancelledByUser):

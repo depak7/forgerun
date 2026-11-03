@@ -175,11 +175,20 @@ func (s *Store) Start(ctx context.Context, id string) error {
 }
 
 func (s *Store) Finish(ctx context.Context, id string, o store.Outcome) error {
-	return s.transition(ctx, id, task.Running, o.State,
+	err := s.transition(ctx, id, task.Running, o.State,
 		`UPDATE tasks SET state = $3, error = $4, log_path = $5, diff = $6, finished_at = now(),
 			base_commit = $7, reply = $8, asked = $9
 		 WHERE id = $1 AND state = $2`,
 		nullable(o.Error), nullable(o.LogPath), nullable(o.Diff), nullable(o.BaseCommit), nullable(o.Reply), o.Asked)
+	if err != nil || o.FolderDiff == "" {
+		return err
+	}
+	// The first report stands: every unpacking of a folder gives the same.
+	if _, err := s.pool.Exec(ctx, `UPDATE folders SET handoff_diff = $2
+		WHERE id = (SELECT folder_id FROM tasks WHERE id = $1) AND handoff_diff IS NULL`, id, o.FolderDiff); err != nil {
+		return fmt.Errorf("saving the folder's handoff diff for %s: %w", id, err)
+	}
+	return nil
 }
 
 func (s *Store) RecordPush(ctx context.Context, threadID string, p store.Push) error {
@@ -328,8 +337,9 @@ func (s *Store) Diff(ctx context.Context, id string) (string, error) {
 }
 
 func (s *Store) SaveFolder(ctx context.Context, f store.Folder, data []byte) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO folders (id, name, owner_id, data) VALUES ($1, $2, $3, $4)`,
-		f.ID, f.Name, nullableID(f.Owner), data)
+	_, err := s.pool.Exec(ctx, `INSERT INTO folders (id, name, owner_id, data, repo, base_commit, branch)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		f.ID, f.Name, nullableID(f.Owner), data, nullable(f.Repo), nullable(f.Base), nullable(f.Branch))
 	if err != nil {
 		return fmt.Errorf("saving folder %s: %w", f.ID, err)
 	}
@@ -339,15 +349,26 @@ func (s *Store) SaveFolder(ctx context.Context, f store.Folder, data []byte) err
 func (s *Store) GetFolder(ctx context.Context, id string) (store.Folder, error) {
 	f := store.Folder{ID: id}
 	var owner *int64
-	err := s.pool.QueryRow(ctx, `SELECT name, owner_id, length(data), created_at FROM folders WHERE id = $1`, id).
-		Scan(&f.Name, &owner, &f.SizeBytes, &f.CreatedAt)
+	var repo, base, branch *string
+	err := s.pool.QueryRow(ctx, `SELECT name, owner_id, length(data), repo, base_commit, branch, created_at FROM folders WHERE id = $1`, id).
+		Scan(&f.Name, &owner, &f.SizeBytes, &repo, &base, &branch, &f.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Folder{}, fmt.Errorf("%w: %s", store.ErrFolderNotFound, id)
 	}
 	if owner != nil {
 		f.Owner = *owner
 	}
+	f.Repo, f.Base, f.Branch = deref(repo), deref(base), deref(branch)
 	return f, err
+}
+
+func (s *Store) FolderDiff(ctx context.Context, id string) (string, error) {
+	var diff *string
+	err := s.pool.QueryRow(ctx, `SELECT handoff_diff FROM folders WHERE id = $1`, id).Scan(&diff)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: %s", store.ErrFolderNotFound, id)
+	}
+	return deref(diff), err
 }
 
 func (s *Store) FolderData(ctx context.Context, id string) ([]byte, error) {

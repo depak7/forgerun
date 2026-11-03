@@ -21,8 +21,11 @@ var ErrNoSession = errors.New("no open session")
 type session struct {
 	thread  string
 	agentID string
-	repo    string          // the repo URL, which its snapshot is saved under; "" = not saved
-	sb      sandbox.Sandbox // nil while it's being opened
+	repo    string // the repo URL, which its snapshot is saved under; "" = not saved
+	// folderDiff is the folder's uncommitted work at handoff, from
+	// unpacking it, until a turn reports it.
+	folderDiff string
+	sb         sandbox.Sandbox // nil while it's being opened
 	// continued: the agent has a conversation in this VM that the next
 	// turn can carry on (see agent.Request.Continue).
 	continued bool

@@ -145,7 +145,10 @@ type Folder struct {
 	Name      string // shown where a thread's repo would be
 	Owner     int64  // the user who uploaded it; 0 = none (local mode)
 	SizeBytes int64  // of Data
-	CreatedAt time.Time
+	// For a folder from a GitHub repo: the repo (https://github.com/o/n),
+	// the commit it was on and its branch; all "" otherwise.
+	Repo, Base, Branch string
+	CreatedAt          time.Time
 }
 
 // APIToken is a personal token: it acts as its user from tools that have
@@ -178,6 +181,10 @@ type Outcome struct {
 	BaseCommit string
 	Reply      string
 	Asked      bool
+	// FolderDiff, for a folder's thread, is the folder's uncommitted work
+	// at handoff (git diff --binary), when the turn unpacked it; "" if
+	// none. It's kept with the folder.
+	FolderDiff string
 }
 
 // Push is the result of pushing a thread: which tasks' changes went to its
@@ -237,6 +244,9 @@ type Store interface {
 	GetFolder(ctx context.Context, id string) (Folder, error)
 	// FolderData returns an uploaded folder's data, or ErrFolderNotFound.
 	FolderData(ctx context.Context, id string) ([]byte, error)
+	// FolderDiff returns a folder's uncommitted work at handoff, as a
+	// turn reported it (Outcome.FolderDiff); "" until then.
+	FolderDiff(ctx context.Context, id string) (string, error)
 	// List returns the most recent tasks first: owner's only, or everyone's
 	// if owner is 0.
 	List(ctx context.Context, limit int, owner int64) ([]Record, error)

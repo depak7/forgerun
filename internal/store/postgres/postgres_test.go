@@ -1027,7 +1027,10 @@ func TestFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Start(ctx, first.ID)
-	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded})
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, FolderDiff: "+wip\n"})
+	if d, err := s.FolderDiff(ctx, "f-1"); err != nil || d != "+wip\n" {
+		t.Errorf("FolderDiff = %q, %v", d, err)
+	}
 	next := task.New("my-app", "more")
 	next.ParentID = first.ID
 	if err := s.Create(ctx, next, "cursor"); err != nil {
@@ -1036,10 +1039,26 @@ func TestFolders(t *testing.T) {
 	if rec, _ := s.Get(ctx, next.ID); rec.FolderID != "f-1" {
 		t.Errorf("follow-up folder %q, want f-1", rec.FolderID)
 	}
+	s.Start(ctx, next.ID)
+	s.Finish(ctx, next.ID, store.Outcome{State: task.Succeeded, FolderDiff: "+other\n"})
+	if d, _ := s.FolderDiff(ctx, "f-1"); d != "+wip\n" {
+		t.Errorf("the first report should stand: %q", d)
+	}
 	repo := task.New("https://example.com/r", "p")
 	s.Create(ctx, repo, "cursor")
 	if rec, _ := s.Get(ctx, repo.ID); rec.FolderID != "" {
 		t.Errorf("a repo task has folder %q", rec.FolderID)
+	}
+
+	gh := store.Folder{ID: "f-2", Name: "r", Repo: "https://github.com/o/r", Base: strings.Repeat("a", 40), Branch: "main"}
+	if err := s.SaveFolder(ctx, gh, []byte("tgz")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetFolder(ctx, "f-2"); got.Repo != gh.Repo || got.Base != gh.Base || got.Branch != "main" {
+		t.Errorf("GetFolder = %+v", got)
+	}
+	if d, err := s.FolderDiff(ctx, "f-2"); err != nil || d != "" {
+		t.Errorf("no diff yet: %q, %v", d, err)
 	}
 }
 

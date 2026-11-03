@@ -90,6 +90,8 @@ func newFixture(t *testing.T) *fixture {
 			fmt.Fprint(w, `{"number":7,"html_url":"https://github.com/o/r/pull/7","state":"open"}`)
 		case r.Method == "GET" && r.URL.Path == "/repos/o/r/pulls/7":
 			fmt.Fprint(w, `{"number":7,"html_url":"https://github.com/o/r/pull/7","state":"open"}`)
+		case r.Method == "GET" && r.URL.Path == "/repos/o/r/branches/feature/x":
+			fmt.Fprint(w, `{"name":"feature/x"}`)
 		case r.Method == "GET" && r.URL.Path == "/repos/o/r/pulls/8":
 			fmt.Fprint(w, `{"number":8,"state":"closed","merged":true}`)
 		default:
@@ -404,5 +406,33 @@ func TestPublishWithUserToken(t *testing.T) {
 	}
 	if _, err := p.IsOpen(context.Background(), "https://github.com/o/r", 7, forge.Token{}); err == nil {
 		t.Error("no token anywhere should fail")
+	}
+}
+
+// A pull request goes to the branch asked for when the repo has it (a
+// folder's thread: the branch the folder was on), else the default.
+func TestPublishToBranch(t *testing.T) {
+	for want, asked := range map[string]string{"feature/x": "feature/x", "main": "only-local"} {
+		f := newFixture(t)
+		req := f.request(t, "")
+		req.PRBase = asked
+		if _, err := f.publisher(secret).Publish(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.pulls[0]["base"]; got != want {
+			t.Errorf("asked for %s: pull request into %s, want %s", asked, got, want)
+		}
+	}
+}
+
+// A start commit GitHub doesn't have (a folder's unpushed local commit)
+// says to push it first.
+func TestPublishUnknownBase(t *testing.T) {
+	f := newFixture(t)
+	req := f.request(t, "")
+	req.BaseCommit = strings.Repeat("1", 40)
+	_, err := f.publisher(secret).Publish(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "isn't on GitHub: if it's a local commit, push it first") {
+		t.Errorf("err = %v", err)
 	}
 }

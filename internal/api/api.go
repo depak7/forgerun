@@ -294,7 +294,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t := task.New(cmp.Or(folder.Name, req.Repo), req.Prompt)
+	// A folder from a GitHub repo shows as that repo, like its branch will.
+	t := task.New(cmp.Or(folder.Repo, folder.Name, req.Repo), req.Prompt)
 	t.ModelID, t.Plan, t.Owner, t.FolderID = v.ID, req.Plan, viewerOf(r).ID, folder.ID
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.internalError(w, r, err)

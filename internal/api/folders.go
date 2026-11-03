@@ -11,8 +11,10 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
 
+	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/store"
 )
 
@@ -29,19 +31,35 @@ type folderJSON struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	SizeBytes int64  `json:"size_bytes"`
+	Repo      string `json:"repo"` // its GitHub repo, so its thread can be pushed; "" if none
 }
 
 // uploadFolder serves POST /api/folders?name=<name>: the body is a gzipped
 // tar of a local folder (or one file), which tasks can then work on instead
-// of a GitHub repo ({"folder": id} in place of "repo").
+// of a GitHub repo ({"folder": id} in place of "repo"). For a folder from a
+// GitHub repo, &repo=https://github.com/o/n&base=<commit>&branch=<name>
+// let its thread be pushed: onto that commit, with a pull request to that
+// branch.
 func (s *Server) uploadFolder(w http.ResponseWriter, r *http.Request) {
 	if !s.allowTurn(w, r) {
 		return
 	}
-	name := folderName(r.URL.Query().Get("name"))
+	q := r.URL.Query()
+	name := folderName(q.Get("name"))
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "name is required: the folder's name, e.g. ?name=my-app")
 		return
+	}
+	f := store.Folder{Name: name, Owner: viewerOf(r).ID, Branch: q.Get("branch")}
+	if repo := q.Get("repo"); repo != "" {
+		gh, err := forge.ParseRepo(repo)
+		if err != nil || !commitID.MatchString(q.Get("base")) || !validBranch(f.Branch) {
+			writeError(w, http.StatusBadRequest, "repo needs base (the commit the folder is on) and a valid branch, or none: "+repo)
+			return
+		}
+		f.Repo, f.Base = "https://"+gh.Host+"/"+gh.Owner+"/"+gh.Name, q.Get("base")
+	} else {
+		f.Branch = ""
 	}
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.maxFolder))
 	var tooBig *http.MaxBytesError
@@ -59,12 +77,21 @@ func (s *Server) uploadFolder(w http.ResponseWriter, r *http.Request) {
 	}
 	id := make([]byte, 8)
 	rand.Read(id)
-	f := store.Folder{ID: "f-" + hex.EncodeToString(id), Name: name, Owner: viewerOf(r).ID, SizeBytes: int64(len(data))}
+	f.ID, f.SizeBytes = "f-"+hex.EncodeToString(id), int64(len(data))
 	if err := s.store.SaveFolder(r.Context(), f, data); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	writeData(w, http.StatusCreated, folderJSON{ID: f.ID, Name: f.Name, SizeBytes: f.SizeBytes})
+	writeData(w, http.StatusCreated, folderJSON{ID: f.ID, Name: f.Name, SizeBytes: f.SizeBytes, Repo: f.Repo})
+}
+
+// commitID is a full git commit ID (SHA-1 or SHA-256).
+var commitID = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// validBranch accepts a branch name ("" = none: the folder was on a
+// detached commit) that can safely be passed on to git and GitHub.
+func validBranch(b string) bool {
+	return b == "" || len(b) <= 200 && !strings.HasPrefix(b, "-") && !strings.Contains(b, "..") && !strings.ContainsAny(b, " ~^:?*[\\\x00")
 }
 
 // folderName is what a thread shows for its folder: the last part of the

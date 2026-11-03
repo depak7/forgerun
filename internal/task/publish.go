@@ -52,6 +52,9 @@ type PublishRequest struct {
 	Summary  string   // "" if the agent couldn't give one
 	Requests []string // every request in the thread, oldest first
 	OpenPR   bool     // open a pull request if the thread has none yet
+	// PRBase is the branch a new pull request goes to: "" (or a branch
+	// GitHub doesn't have) means the repo's default branch.
+	PRBase string
 	// The thread's branch ("" = none yet: one is made) and pull request
 	// (0 = none yet).
 	Branch   string

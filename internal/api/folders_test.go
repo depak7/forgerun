@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -53,16 +54,68 @@ func TestFolderTask(t *testing.T) {
 	}
 	s.Start(t.Context(), tk.ID)
 	s.Finish(t.Context(), tk.ID, store.Outcome{State: task.Succeeded, Diff: "+a\n"})
+	// A folder that isn't from a GitHub repo has nowhere to push to.
+	_, apiErr := decode(t, do(h, "POST", "/api/threads/"+tk.ID+"/push", `{}`), http.StatusBadRequest)
+	if !strings.Contains(apiErr.Message, "isn't from a GitHub repo") {
+		t.Errorf("push: %q", apiErr.Message)
+	}
 	next := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+tk.ID+"/followups", `{"prompt":"more"}`), http.StatusCreated))
 	if next.Folder != f.ID {
 		t.Errorf("follow-up folder %q, want %q", next.Folder, f.ID)
 	}
+}
 
-	// Its changes come from the diff: there's no branch to push to yet.
-	_, apiErr := decode(t, do(h, "POST", "/api/threads/"+tk.ID+"/push", `{}`), http.StatusBadRequest)
-	if !strings.Contains(apiErr.Message, "can't be pushed yet") {
-		t.Errorf("push: %q", apiErr.Message)
+// A folder from a GitHub repo shows as that repo, and its thread pushes
+// onto the commit it was on: its work at handoff first, then the turns',
+// with the pull request to the branch it was on.
+func TestFolderPush(t *testing.T) {
+	var got []task.PublishRequest
+	h, s, _ := setup(t, func(c *Config) {
+		c.PRs = fakePRs{open: true, got: &got, pub: task.Published{Branch: "forgerun/x"}}
+	})
+	base := strings.Repeat("ab", 20)
+	body := folderTar(t, map[string]string{"main.go": "package main\n"})
+	decode(t, do(h, "POST", "/api/folders?name=app&repo=https://github.com/o/r&base=nope", body), http.StatusBadRequest)
+	decode(t, do(h, "POST", "/api/folders?name=app&repo=https://gitlab.com/o/r&base="+base, body), http.StatusBadRequest)
+	f := uploadOK(t, h, "app&repo=https://github.com/o/r.git&base="+base+"&branch=feature/x", body)
+	if f.Repo != "https://github.com/o/r" {
+		t.Fatalf("uploaded %+v", f)
 	}
+	tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"folder":"`+f.ID+`","prompt":"p"}`), http.StatusCreated))
+	if tk.Repo != "https://github.com/o/r" {
+		t.Errorf("thread repo %q", tk.Repo)
+	}
+	s.Start(t.Context(), tk.ID)
+	s.Finish(t.Context(), tk.ID, store.Outcome{State: task.Succeeded, BaseCommit: "handoffcommit", Diff: "+agent\n", FolderDiff: "+wip\n"})
+
+	mustData(t, do(h, "POST", "/api/threads/"+tk.ID+"/push", `{"pr":true}`), http.StatusOK)
+	if len(got) != 1 {
+		t.Fatalf("%d publishes", len(got))
+	}
+	p := got[0]
+	if p.Repo != "https://github.com/o/r" || p.BaseCommit != base || p.PRBase != "feature/x" || !slices.Equal(p.Patches, []string{"+wip\n", "+agent\n"}) {
+		t.Errorf("published %+v", p)
+	}
+
+	// The next push builds on the branch: the work at handoff is on it.
+	next := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+tk.ID+"/followups", `{"prompt":"more"}`), http.StatusCreated))
+	s.Start(t.Context(), next.ID)
+	s.Finish(t.Context(), next.ID, store.Outcome{State: task.Succeeded, BaseCommit: "turn1", Diff: "+more\n"})
+	mustData(t, do(h, "POST", "/api/threads/"+tk.ID+"/push", `{}`), http.StatusOK)
+	if p := got[1]; !slices.Equal(p.Patches, []string{"+more\n"}) || p.Branch != "forgerun/x" {
+		t.Errorf("second push %+v", p)
+	}
+}
+
+// Until a turn has reported the folder's work at handoff, a folder thread
+// with uncommitted work can't be pushed: it would leave that work out.
+func TestFolderPushNeedsHandoffDiff(t *testing.T) {
+	h, s, _ := setup(t, func(c *Config) { c.PRs = fakePRs{open: true} })
+	f := uploadOK(t, h, "app&repo=https://github.com/o/r&base="+strings.Repeat("c", 40), folderTar(t, map[string]string{"a": "a"}))
+	tk := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"folder":"`+f.ID+`","prompt":"p"}`), http.StatusCreated))
+	s.Start(t.Context(), tk.ID)
+	s.Finish(t.Context(), tk.ID, store.Outcome{State: task.Succeeded, BaseCommit: "handoffcommit", Diff: "+a\n"})
+	decode(t, do(h, "POST", "/api/threads/"+tk.ID+"/push", `{}`), http.StatusConflict)
 }
 
 func TestFolderUploadRefusals(t *testing.T) {

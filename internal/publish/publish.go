@@ -122,8 +122,11 @@ func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.
 			{"fetch", "-q", "--depth=1", "origin", from},
 			{"checkout", "-q", "-b", branch, "FETCH_HEAD"},
 		}
-		for _, args := range steps {
+		for i, args := range steps {
 			if _, err := g.run(args...); err != nil {
+				if i == 2 && !existing {
+					return task.Published{}, fmt.Errorf("the commit the work started from (%.12s) isn't on GitHub: if it's a local commit, push it first: %w", from, err)
+				}
 				return task.Published{}, err
 			}
 		}
@@ -165,7 +168,7 @@ func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.
 			return pub, fmt.Errorf("branch %s is pushed, but updating pull request #%d failed: %w", branch, req.PRNumber, err)
 		}
 	case req.OpenPR:
-		base, err := p.GitHub.DefaultBranch(ctx, tok, repo)
+		base, err := p.prBase(ctx, tok, repo, req.PRBase)
 		if err != nil {
 			return pub, fmt.Errorf("branch %s is pushed, but opening the pull request failed: %w", branch, err)
 		}
@@ -179,6 +182,17 @@ func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.
 	}
 	pub.PRURL, pub.PRNumber = pr.URL, pr.Number
 	return pub, nil
+}
+
+// prBase is the branch a new pull request goes to: want if the repo has
+// it, else the repo's default branch.
+func (p *Publisher) prBase(ctx context.Context, tok forge.Token, repo forge.Repo, want string) (string, error) {
+	if want != "" {
+		if ok, err := p.GitHub.HasBranch(ctx, tok, repo, want); err != nil || ok {
+			return want, err
+		}
+	}
+	return p.GitHub.DefaultBranch(ctx, tok, repo)
 }
 
 // IsOpen reports whether a repo's pull request is still open, so a

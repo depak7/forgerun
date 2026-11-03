@@ -116,6 +116,15 @@ func (g *GitHub) DefaultBranch(ctx context.Context, tok Token, repo Repo) (strin
 	return r.DefaultBranch, nil
 }
 
+// HasBranch reports whether repo has a branch named branch.
+func (g *GitHub) HasBranch(ctx context.Context, tok Token, repo Repo, branch string) (bool, error) {
+	err := g.call(ctx, tok, http.MethodGet, "/repos/"+repo.Owner+"/"+repo.Name+"/branches/"+branch, nil, nil)
+	if err != nil && strings.Contains(err.Error(), "HTTP 404") {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // Access is what a token may do with a repo.
 type Access struct {
 	Private       bool

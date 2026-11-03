@@ -285,7 +285,10 @@ func TestFolders(t *testing.T) {
 	first.FolderID = "f-1"
 	s.Create(ctx, first, "fake")
 	s.Claim(ctx)
-	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded})
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, FolderDiff: "+wip\n"})
+	if d, _ := s.FolderDiff(ctx, "f-1"); d != "+wip\n" {
+		t.Errorf("FolderDiff = %q", d)
+	}
 	next := task.New("my-app", "more")
 	next.ParentID = first.ID
 	if err := s.Create(ctx, next, "fake"); err != nil {
