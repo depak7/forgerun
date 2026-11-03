@@ -100,11 +100,12 @@ func TestFolderTaskRefusals(t *testing.T) {
 		t.Errorf("both: %q", apiErr.Message)
 	}
 	decode(t, do(h, "POST", "/api/tasks", `{"folder":"f-nope","prompt":"p"}`), http.StatusNotFound)
+}
 
-	// Separate workers can't get a folder yet.
-	h, _, _ = setup(t, func(c *Config) { c.Workers = fakeWorkers{{Name: "w", Agents: []string{"cursor"}}} })
-	_, apiErr = decode(t, do(h, "POST", "/api/folders?name=x", folderTar(t, map[string]string{"a": "a"})), http.StatusBadRequest)
-	if !strings.Contains(apiErr.Message, "only with forgerun serve") {
-		t.Errorf("workers: %q", apiErr.Message)
-	}
+// Separate workers download the folder from the orchestrator, so folders
+// work with them too.
+func TestFolderTaskWithWorkers(t *testing.T) {
+	h, _, _ := setup(t, func(c *Config) { c.Workers = fakeWorkers{{Name: "w", Agents: []string{"cursor"}}} })
+	f := uploadOK(t, h, "x", folderTar(t, map[string]string{"a": "a"}))
+	mustData(t, do(h, "POST", "/api/tasks", `{"folder":"`+f.ID+`","prompt":"p"}`), http.StatusCreated)
 }

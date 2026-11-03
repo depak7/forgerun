@@ -23,6 +23,7 @@ const (
 	pathClaim     = "/api/worker/claim"
 	pathThread    = "/api/worker/threads/"  // {id}
 	pathTask      = "/api/worker/tasks/"    // {id}/diff, {id}/log, {id}/finish
+	pathFolder    = "/api/worker/folders/"  // {id}: an uploaded folder's data
 	pathResult    = "/api/worker/commands/" // {id}/result
 	claimWait     = 25 * time.Second        // how long a claim waits for work
 	heartbeatGap  = 2 * time.Second         // how often a worker reports

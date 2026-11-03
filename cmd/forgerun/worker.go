@@ -127,6 +127,7 @@ func workerCmd(args []string) error {
 
 	pool := worker.New(client, runner, *workers, log)
 	pool.Fetchers = client.Fetchers
+	pool.Folders = client.FolderData
 	heartbeatsDone := make(chan struct{})
 	go func() {
 		client.Heartbeats(ctx, pool, runner, ids, agents.IDs(), *maxSessions)

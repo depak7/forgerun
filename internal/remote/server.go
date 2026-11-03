@@ -84,6 +84,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.heartbeat(w, r)
 	case r.Method == http.MethodPost && p == pathClaim:
 		s.claim(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(p, pathFolder):
+		s.folder(w, r, strings.TrimPrefix(p, pathFolder))
 	case r.Method == http.MethodGet && strings.HasPrefix(p, pathThread):
 		s.thread(w, r, strings.TrimPrefix(p, pathThread))
 	case strings.HasPrefix(p, pathTask):
@@ -195,6 +197,17 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	writeJSON(w, recs)
+}
+
+// folder sends an uploaded folder, for a turn of a folder's thread.
+func (s *Server) folder(w http.ResponseWriter, r *http.Request, id string) {
+	data, err := s.Store.FolderData(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Write(data)
 }
 
 func (s *Server) diff(w http.ResponseWriter, r *http.Request, id string) {

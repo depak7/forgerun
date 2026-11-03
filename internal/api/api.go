@@ -256,10 +256,6 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "give a repo or a folder, not both")
 		return
 	case req.Folder != "":
-		if s.workers != nil {
-			writeError(w, http.StatusBadRequest, "folders work only with forgerun serve for now, not with separate workers")
-			return
-		}
 		var ok bool
 		if folder, ok = s.ownFolder(w, r, req.Folder); !ok {
 			return

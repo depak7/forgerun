@@ -175,7 +175,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	if orchestratorOnly {
 		return orchestrate(ctx, stop, ln, db, log, orchestratorConfig{
 			api: api.Config{Store: db, Agents: agents, Agent: *defaultAgent, DefaultModel: *defaultModel, RequireZDR: *requireZDR,
-				PRs: prs, OutDir: *out, GitHubUser: githubUser, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, Log: log},
+				PRs: prs, OutDir: *out, GitHubUser: githubUser, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, MaxFolder: int64(maxFolder), Log: log},
 			workerToken: workerToken, publisher: publisher, prTokens: prTokens,
 		})
 	}

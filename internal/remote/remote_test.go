@@ -281,3 +281,31 @@ func TestHeartbeatCapacity(t *testing.T) {
 		t.Errorf("old: %+v, want none", got["old"])
 	}
 }
+
+// A worker downloads a folder's thread's folder from the orchestrator,
+// with its token; the turn says which folder.
+func TestFolderData(t *testing.T) {
+	_, s, url := setup(t)
+	ctx := context.Background()
+	s.SaveFolder(ctx, store.Folder{ID: "f-1", Name: "my-app"}, []byte("tgz"))
+	tk := task.New("my-app", "p")
+	tk.FolderID = "f-1"
+	if err := s.Create(ctx, tk, "fake"); err != nil {
+		t.Fatal(err)
+	}
+	c := client(url, "mac")
+	rec, ok, err := c.Claim(ctx)
+	if err != nil || !ok || rec.FolderID != "f-1" {
+		t.Fatalf("Claim = %+v, %v, %v", rec, ok, err)
+	}
+	if data, err := c.FolderData(ctx, rec.FolderID); err != nil || string(data) != "tgz" {
+		t.Errorf("FolderData = %q, %v", data, err)
+	}
+	if _, err := c.FolderData(ctx, "f-nope"); err == nil || !strings.Contains(err.Error(), "404") {
+		t.Errorf("unknown folder: %v", err)
+	}
+	stranger := &Client{URL: url, Token: "wrong", Name: "x", Log: c.Log}
+	if _, err := stranger.FolderData(ctx, "f-1"); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Errorf("wrong token: %v", err)
+	}
+}

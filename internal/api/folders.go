@@ -38,10 +38,6 @@ func (s *Server) uploadFolder(w http.ResponseWriter, r *http.Request) {
 	if !s.allowTurn(w, r) {
 		return
 	}
-	if s.workers != nil {
-		writeError(w, http.StatusBadRequest, "folders work only with forgerun serve for now, not with separate workers")
-		return
-	}
 	name := folderName(r.URL.Query().Get("name"))
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "name is required: the folder's name, e.g. ?name=my-app")

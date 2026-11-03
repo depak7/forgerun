@@ -171,6 +171,17 @@ func (c *Client) Diff(ctx context.Context, id string) (string, error) {
 	return string(b), err
 }
 
+// FolderData downloads an uploaded folder from the orchestrator, for a
+// turn of a folder's thread.
+func (c *Client) FolderData(ctx context.Context, id string) ([]byte, error) {
+	resp, err := c.do(ctx, http.MethodGet, pathFolder+id, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
 // Fetchers gives a turn of a private repo a fetcher with the token the
 // orchestrator sent: the repo is fetched on this host, never by the VM.
 func (c *Client) Fetchers(_ context.Context, rec store.Record) (task.Fetcher, error) {
