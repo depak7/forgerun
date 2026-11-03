@@ -993,3 +993,18 @@ func TestKeylessModels(t *testing.T) {
 	h = serve(fakeWorkers{{Name: "w", Agents: []string{"cursor"}, Adapters: []string{"cursor"}}})
 	decode(t, do(h, "POST", "/api/tasks", freeTask), http.StatusBadRequest)
 }
+
+// An agent whose models come from several providers (pi) needs the chosen
+// model's provider's key, not just any of its keys.
+func TestProviderKeyPerModel(t *testing.T) {
+	routed := models.Variant{ID: "openrouter/openai/gpt-5.5", AgentID: "pi", Family: "openrouter/openai/gpt-5.5", Name: "GPT-5.5 (OpenRouter)", IsDefault: true, AgentDefault: true}
+	direct := models.Variant{ID: "openai/gpt-5.5", AgentID: "pi", Family: "openai/gpt-5.5", Name: "GPT-5.5", IsDefault: true}
+	h := New(Config{Store: memory.New(append(slices.Clone(testModels), routed, direct)...), Pool: &fakePool{}, Agent: "cursor", Log: slog.New(slog.DiscardHandler),
+		Agents: agent.NewSet(agent.StaticCredentials{"CURSOR_API_KEY": "k", "OPENROUTER_API_KEY": "or"}, &agent.Cursor{}, &agent.Pi{})})
+
+	mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://x.com/r","prompt":"p","agent":"pi","model":"openrouter/openai/gpt-5.5"}`), http.StatusCreated)
+	_, apiErr := decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://x.com/r","prompt":"p","agent":"pi","model":"openai/gpt-5.5"}`), http.StatusBadRequest)
+	if !strings.Contains(apiErr.Message, "set OPENAI_API_KEY") {
+		t.Errorf("model without its provider's key: %q", apiErr.Message)
+	}
+}

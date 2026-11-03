@@ -11,7 +11,7 @@ import (
 func TestSet(t *testing.T) {
 	ctx := context.Background()
 	s := NewSet(StaticCredentials{"CURSOR_API_KEY": "k"}, Builtin()...)
-	if ids := s.IDs(); !slices.Equal(ids, []string{"claude-code", "cursor", "opencode"}) {
+	if ids := s.IDs(); !slices.Equal(ids, []string{"claude-code", "cursor", "opencode", "pi"}) {
 		t.Errorf("IDs = %v", ids)
 	}
 	if _, err := s.Get("nope"); !errors.Is(err, ErrUnknownAgent) {
@@ -19,7 +19,7 @@ func TestSet(t *testing.T) {
 	}
 
 	cursor, _ := s.Get("cursor")
-	secrets, err := s.Secrets(ctx, cursor, false)
+	secrets, err := s.Secrets(ctx, cursor, "", false)
 	if err != nil || len(secrets) != 1 || secrets[0].Value != "k" {
 		t.Errorf("cursor secrets = %+v, %v", secrets, err)
 	}
@@ -48,7 +48,7 @@ func TestEnvCredentialsAreReadWhenNeeded(t *testing.T) {
 	}
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "later")
 	a, _ := s.Get("claude-code")
-	if secrets, err := s.Secrets(ctx, a, false); err != nil || secrets[0].Value != "later" {
+	if secrets, err := s.Secrets(ctx, a, "", false); err != nil || secrets[0].Value != "later" {
 		t.Errorf("after setting it: %+v, %v", secrets, err)
 	}
 }
@@ -60,17 +60,52 @@ func TestSecretsForKeylessModels(t *testing.T) {
 	ctx := context.Background()
 	oc := &OpenCode{}
 	none := NewSet(StaticCredentials{}, oc)
-	if secrets, err := none.Secrets(ctx, oc, true); err != nil || len(secrets) != 0 {
+	if secrets, err := none.Secrets(ctx, oc, "", true); err != nil || len(secrets) != 0 {
 		t.Errorf("keyless, no key: %+v, %v", secrets, err)
 	}
-	if _, err := none.Secrets(ctx, oc, false); !errors.Is(err, ErrNoCredential) {
+	if _, err := none.Secrets(ctx, oc, "", false); !errors.Is(err, ErrNoCredential) {
 		t.Errorf("needs a key, no key: %v", err)
 	}
-	if _, err := NewSet(nil, oc).Secrets(ctx, oc, true); err != nil {
+	if _, err := NewSet(nil, oc).Secrets(ctx, oc, "", true); err != nil {
 		t.Errorf("keyless, no credential source: %v", err)
 	}
 	keyed := NewSet(StaticCredentials{"OPENCODE_API_KEY": "k"}, oc)
-	if secrets, err := keyed.Secrets(ctx, oc, true); err != nil || len(secrets) != 1 || secrets[0].Value != "k" {
+	if secrets, err := keyed.Secrets(ctx, oc, "", true); err != nil || len(secrets) != 1 || secrets[0].Value != "k" {
 		t.Errorf("keyless, key set: %+v, %v", secrets, err)
+	}
+}
+
+// A Providers agent needs its model's provider's key; the others it has go
+// along too, for a later turn on another provider.
+func TestSecretsForProviders(t *testing.T) {
+	ctx := context.Background()
+	pi := &Pi{}
+	s := NewSet(StaticCredentials{"OPENROUTER_API_KEY": "or"}, pi)
+
+	secrets, err := s.Secrets(ctx, pi, "openrouter/openai/gpt-5.5", false)
+	if err != nil || len(secrets) != 1 || secrets[0].EnvVar != "OPENROUTER_API_KEY" || secrets[0].Value != "or" {
+		t.Errorf("openrouter model: %+v, %v", secrets, err)
+	}
+	_, err = s.Secrets(ctx, pi, "openai/gpt-5.5", false)
+	if !errors.Is(err, ErrNoCredential) || !strings.Contains(err.Error(), "pi's openai models: set OPENAI_API_KEY") {
+		t.Errorf("openai model without its key: %v", err)
+	}
+	if _, err := s.Secrets(ctx, pi, "nope/model", false); err == nil || errors.Is(err, ErrNoCredential) {
+		t.Errorf("unknown provider: %v", err)
+	}
+	if _, err := s.Secrets(ctx, pi, "openai/gpt-5.5", true); err != nil {
+		t.Errorf("keyless: %v", err)
+	}
+
+	// Check is about any key; CheckModel about the model's.
+	if err := s.Check(ctx, "pi"); err != nil {
+		t.Errorf("Check with one key: %v", err)
+	}
+	if err := s.CheckModel(ctx, "pi", "anthropic/claude-opus-5-5"); !errors.Is(err, ErrNoCredential) {
+		t.Errorf("CheckModel without its key: %v", err)
+	}
+	err = NewSet(StaticCredentials{}, pi).Check(ctx, "pi")
+	if !errors.Is(err, ErrNoCredential) || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY") {
+		t.Errorf("no keys: %v", err)
 	}
 }

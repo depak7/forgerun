@@ -89,7 +89,19 @@ func realEnv(kind string) doctor.Env {
 	home, _ := os.UserHomeDir()
 	var agents []doctor.Agent
 	for _, a := range agent.Builtin() {
-		agents = append(agents, doctor.Agent{ID: a.ID(), Credential: a.Credential()})
+		cred := a.Credential()
+		if p, ok := a.(agent.Providers); ok {
+			// Any one provider's key will do: report the first that's set,
+			// else all their names.
+			cred = agent.CredentialNames(a)
+			for _, name := range p.Credentials() {
+				if os.Getenv(name) != "" {
+					cred = name
+					break
+				}
+			}
+		}
+		agents = append(agents, doctor.Agent{ID: a.ID(), Credential: cred})
 	}
 	web := &http.Client{Timeout: 10 * time.Second}
 	return doctor.Env{

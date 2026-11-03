@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "pi, pinned with its whole dependency tree (package-lock.json) for the agent-pi image",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0"
+  }
+}

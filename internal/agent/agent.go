@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"io"
+	"strings"
 
 	"github.com/depak7/forgerun/internal/sandbox"
 )
@@ -80,6 +81,35 @@ func ActivityPaths(a Agent) []string {
 		return w.ActivityPaths()
 	}
 	return a.StatePaths()
+}
+
+// Providers is an optional Agent capability, for an agent whose models come
+// from several providers, each with its own credential (pi). Such an
+// agent's Credential is "" and these take its place; which credential a
+// task needs depends on its model.
+type Providers interface {
+	// CredentialFor names the credential a model needs (its ID, as in the
+	// models table), or "" if the model names no provider the agent knows.
+	CredentialFor(modelID string) string
+	// Credentials names every credential the agent can use, sorted.
+	Credentials() []string
+	// SecretFor turns one credential's value into its proxy secret.
+	SecretFor(name, value string) sandbox.Secret
+}
+
+// CredentialNames is how an agent's credential is named in messages and
+// settings: Credential, or each of a Providers agent's, e.g.
+// "ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY".
+func CredentialNames(a Agent) string {
+	p, ok := a.(Providers)
+	if !ok {
+		return a.Credential()
+	}
+	names := p.Credentials()
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
 }
 
 // Replier is an optional Agent capability, for agents whose output mixes

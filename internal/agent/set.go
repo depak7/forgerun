@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/depak7/forgerun/internal/sandbox"
 )
@@ -19,7 +20,7 @@ var (
 )
 
 // Builtin returns every agent forgerun has an adapter for.
-func Builtin() []Agent { return []Agent{&Cursor{}, &ClaudeCode{}, &OpenCode{}} }
+func Builtin() []Agent { return []Agent{&Cursor{}, &ClaudeCode{}, &OpenCode{}, &Pi{}} }
 
 // Credentials gives an agent's credential when a task needs it. The value
 // isn't kept: a key added or changed later is used by the next task.
@@ -81,8 +82,13 @@ func (s Set) IDs() []string { return slices.Sorted(maps.Keys(s.agents)) }
 // secrets. An agent that needs no credential gets none. keyless says the
 // task's model runs without the credential (e.g. a free model): a missing
 // one is then no error. A credential that is set is passed anyway, because
-// a later turn in the same VM may use a model that needs it.
-func (s Set) Secrets(ctx context.Context, a Agent, keyless bool) ([]sandbox.Secret, error) {
+// a later turn in the same VM may use a model that needs it. modelID is the
+// task's model, for an agent whose credential depends on it (Providers);
+// "" asks only that the agent have some credential.
+func (s Set) Secrets(ctx context.Context, a Agent, modelID string, keyless bool) ([]sandbox.Secret, error) {
+	if p, ok := a.(Providers); ok {
+		return s.providerSecrets(ctx, a, p, modelID, keyless)
+	}
 	name := a.Credential()
 	if name == "" {
 		return nil, nil
@@ -103,14 +109,56 @@ func (s Set) Secrets(ctx context.Context, a Agent, keyless bool) ([]sandbox.Secr
 	return a.Secrets(v), nil
 }
 
+// providerSecrets is Secrets for a Providers agent: every provider
+// credential that is set, as a later turn may switch provider, as long as
+// the one the model needs is among them.
+func (s Set) providerSecrets(ctx context.Context, a Agent, p Providers, modelID string, keyless bool) ([]sandbox.Secret, error) {
+	var out []sandbox.Secret
+	have := map[string]bool{}
+	for _, name := range p.Credentials() {
+		if s.creds == nil {
+			break
+		}
+		v, err := s.creds.Value(ctx, a.ID(), name)
+		if errors.Is(err, ErrNoCredential) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p.SecretFor(name, v))
+		have[name] = true
+	}
+	need := p.CredentialFor(modelID)
+	provider, _, _ := strings.Cut(modelID, "/")
+	switch {
+	case keyless:
+	case modelID == "" && len(out) == 0:
+		return nil, fmt.Errorf("%w for %s: set %s", ErrNoCredential, a.ID(), CredentialNames(a))
+	case modelID == "":
+	case need == "":
+		return nil, fmt.Errorf("%s has no provider %q (model %s)", a.ID(), provider, modelID)
+	case !have[need]:
+		return nil, fmt.Errorf("%w for %s's %s models: set %s", ErrNoCredential, a.ID(), provider, need)
+	}
+	return out, nil
+}
+
 // Check reports whether a task can run on agent id now: forgerun has an
-// adapter for it and its credential is configured. Tasks on models that
-// need no credential can run either way; Check is about the credential.
+// adapter for it and its credential is configured (for a Providers agent,
+// any of them). Tasks on models that need no credential can run either
+// way; Check is about the credential.
 func (s Set) Check(ctx context.Context, id string) error {
+	return s.CheckModel(ctx, id, "")
+}
+
+// CheckModel is Check for one model: for a Providers agent, the model's own
+// provider's credential must be set. "" checks for any credential.
+func (s Set) CheckModel(ctx context.Context, id, modelID string) error {
 	a, err := s.Get(id)
 	if err != nil {
 		return err
 	}
-	_, err = s.Secrets(ctx, a, false)
+	_, err = s.Secrets(ctx, a, modelID, false)
 	return err
 }

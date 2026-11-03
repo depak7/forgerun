@@ -379,7 +379,7 @@ func (s *Server) checkKey(w http.ResponseWriter, r *http.Request, agentID string
 	if v.Keyless {
 		return true
 	}
-	if err := s.agents.Check(r.Context(), agentID); err != nil {
+	if err := s.agents.CheckModel(r.Context(), agentID, v.ID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return false
 	}
@@ -807,7 +807,7 @@ func (s *Server) credential(ctx context.Context, agentID string, vs []models.Var
 	if err != nil {
 		return nil
 	}
-	c := &credentialJSON{Name: a.Credential(), Optional: slices.ContainsFunc(vs, func(v models.Variant) bool {
+	c := &credentialJSON{Name: agent.CredentialNames(a), Optional: slices.ContainsFunc(vs, func(v models.Variant) bool {
 		return v.AgentID == agentID && v.Keyless
 	})}
 	if s.workers != nil { // keys live on the workers

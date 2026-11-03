@@ -296,7 +296,7 @@ func logAgents(ctx context.Context, db store.Store, agents agent.Set, log *slog.
 		ag, _ := agents.Get(id)
 		credential := "set"
 		if err := agents.Check(ctx, id); err != nil {
-			credential = "missing (" + ag.Credential() + "); tasks on models that need it will be refused"
+			credential = "missing (" + agent.CredentialNames(ag) + "); tasks on models that need it will be refused"
 		}
 		log.Info("agent", "id", id, "enabled", a.Enabled, "credential", credential)
 	}

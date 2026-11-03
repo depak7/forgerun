@@ -320,7 +320,7 @@ func (r *Runner) acquire(ctx context.Context, ag agent.Agent, t Task, step func(
 // plus every earlier turn's changes, each as a commit.
 func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *session, step func(string, ...any)) ([]Turn, error) {
 	// The credential is fetched now, for this session only.
-	secrets, err := r.Agents.Secrets(ctx, ag, t.Keyless)
+	secrets, err := r.Agents.Secrets(ctx, ag, t.ModelID, t.Keyless)
 	if err != nil {
 		return nil, err
 	}
