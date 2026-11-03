@@ -52,6 +52,7 @@ type Config struct {
 	Workers      Workers           // remote workers; nil = they run in this process
 	Capacity     Capacity          // this machine's, when workers run in this process; nil = unknown
 	Limits       Limits            // per-user limits (signed-in users who aren't admins)
+	MaxFolder    int64             // largest folder upload in bytes, compressed; 0 = DefaultMaxFolder
 	Log          *slog.Logger
 }
 
@@ -122,15 +123,17 @@ type Server struct {
 	outDir       string
 	githubUser   string
 	snapshots    *SnapshotSettings
+	maxFolder    int64
 	log          *slog.Logger
 }
 
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, workers: cfg.Workers, capacity: cfg.Capacity, limits: cfg.Limits, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, workers: cfg.Workers, capacity: cfg.Capacity, limits: cfg.Limits, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, maxFolder: cmp.Or(cfg.MaxFolder, DefaultMaxFolder), log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
+	mux.HandleFunc("POST /api/folders", srv.uploadFolder)
 	mux.HandleFunc("GET /api/tasks", srv.listTasks)
 	mux.HandleFunc("GET /api/tasks/{id}", srv.getTask)
 	mux.HandleFunc("POST /api/tasks/{id}/cancel", srv.cancelTask)
@@ -163,7 +166,8 @@ func New(cfg Config) http.Handler {
 // Every field is always present so clients get one fixed shape.
 type taskJSON struct {
 	ID         string     `json:"id"`
-	Repo       string     `json:"repo"`
+	Repo       string     `json:"repo"`   // git URL; for a folder's thread, the folder's name
+	Folder     string     `json:"folder"` // the uploaded folder's ID; "" for a repo's thread
 	Prompt     string     `json:"prompt"`
 	Agent      string     `json:"agent"`
 	Model      string     `json:"model"`  // family, e.g. "claude-opus-5-5" or "auto"
@@ -190,7 +194,7 @@ type taskJSON struct {
 
 func toJSON(r store.Record) taskJSON {
 	return taskJSON{
-		ID: r.ID, Repo: r.Repo, Prompt: r.Prompt, Agent: r.AgentID,
+		ID: r.ID, Repo: r.Repo, Folder: r.FolderID, Prompt: r.Prompt, Agent: r.AgentID,
 		Model: r.Model.Family, Effort: r.Model.Effort, Thinking: r.Model.Thinking, Fast: r.Model.Fast, ModelID: r.Model.ID,
 		State: r.State, Error: r.Error, HasDiff: r.HasDiff, SnapshotID: r.SnapshotID,
 		PR:      prJSON{Requested: r.PR.Requested, URL: r.PR.URL, Number: r.PR.Number, Branch: r.PR.Branch, Error: r.PR.Error},
@@ -231,6 +235,7 @@ func utc(t *time.Time) *time.Time {
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Repo     string `json:"repo"`
+		Folder   string `json:"folder"` // an uploaded folder's ID, in place of repo
 		Prompt   string `json:"prompt"`
 		Model    string `json:"model"`
 		Effort   string `json:"effort"`
@@ -245,9 +250,25 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	if !s.allowTurn(w, r) {
 		return
 	}
-	if err := validateRepo(req.Repo); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	var folder store.Folder
+	switch {
+	case req.Folder != "" && req.Repo != "":
+		writeError(w, http.StatusBadRequest, "give a repo or a folder, not both")
 		return
+	case req.Folder != "":
+		if s.workers != nil {
+			writeError(w, http.StatusBadRequest, "folders work only with forgerun serve for now, not with separate workers")
+			return
+		}
+		var ok bool
+		if folder, ok = s.ownFolder(w, r, req.Folder); !ok {
+			return
+		}
+	default:
+		if err := validateRepo(req.Repo); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
 		writeError(w, http.StatusBadRequest, "prompt is required")
@@ -255,7 +276,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	// Refuse now rather than after the agent has done the work: the
 	// changes can only be pushed to a repo the user can push to.
-	if s.prs != nil {
+	if s.prs != nil && folder.ID == "" {
 		if _, err := forge.ParseRepo(req.Repo); err != nil {
 			writeError(w, http.StatusBadRequest, "forgerun pushes the changes to a branch: "+err.Error())
 			return
@@ -274,8 +295,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t := task.New(req.Repo, req.Prompt)
-	t.ModelID, t.Plan, t.Owner = v.ID, req.Plan, viewerOf(r).ID
+	t := task.New(cmp.Or(folder.Name, req.Repo), req.Prompt)
+	t.ModelID, t.Plan, t.Owner, t.FolderID = v.ID, req.Plan, viewerOf(r).ID, folder.ID
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.internalError(w, r, err)
 		return

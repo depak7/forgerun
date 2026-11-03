@@ -56,12 +56,17 @@ func rebuild(ctx context.Context, sb sandbox.Sandbox, t Task, history []Turn) er
 		return err
 	}
 	base := t.ThreadBase
-	if t.Fetch != nil {
+	switch {
+	case t.Folder != nil:
+		// Unpacking the folder again, as the session opened, made base.
+	case t.Fetch != nil:
 		if _, err := HostFetch(ctx, sb, t.Fetch, t.Repo, base, repoDir); err != nil {
 			return fmt.Errorf("fetching the thread's start commit: %w", err)
 		}
-	} else if err := git("fetch", "-q", "--depth=1", "origin", base); err != nil {
-		return fmt.Errorf("fetching the thread's start commit: %w", err)
+	default:
+		if err := git("fetch", "-q", "--depth=1", "origin", base); err != nil {
+			return fmt.Errorf("fetching the thread's start commit: %w", err)
+		}
 	}
 	if err := git("checkout", "-q", "-B", "forgerun-session", base); err != nil {
 		return fmt.Errorf("checking out the thread's start commit: %w", err)

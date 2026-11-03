@@ -25,8 +25,8 @@ func cfgDatabase(url string) string {
 	return "unparsable URL"
 }
 
-// openTest connects to FORGERUN_TEST_DATABASE_URL and empties the tasks
-// and snapshots tables. Tests are skipped when the variable is unset.
+// openTest connects to FORGERUN_TEST_DATABASE_URL and empties the tasks,
+// snapshots and folders tables. Tests are skipped when the variable is unset.
 func openTest(t *testing.T) *Store {
 	t.Helper()
 	url := os.Getenv("FORGERUN_TEST_DATABASE_URL")
@@ -44,7 +44,7 @@ func openTest(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	if _, err := s.pool.Exec(ctx, `TRUNCATE tasks, snapshots`); err != nil {
+	if _, err := s.pool.Exec(ctx, `TRUNCATE tasks, snapshots, folders`); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -997,5 +997,48 @@ func TestMigrationStatus(t *testing.T) {
 	}
 	if _, _, err := MigrationStatus(context.Background(), "postgres://nobody@127.0.0.1:1/x?connect_timeout=2"); err == nil {
 		t.Error("no database: no error")
+	}
+}
+
+// A folder's data is kept apart from its details, and a thread's follow-ups
+// stay on the folder it started from.
+func TestFolders(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	if _, err := s.GetFolder(ctx, "f-nope"); !errors.Is(err, store.ErrFolderNotFound) {
+		t.Errorf("unknown folder: %v", err)
+	}
+	if _, err := s.FolderData(ctx, "f-nope"); !errors.Is(err, store.ErrFolderNotFound) {
+		t.Errorf("unknown folder's data: %v", err)
+	}
+	if err := s.SaveFolder(ctx, store.Folder{ID: "f-1", Name: "my-app"}, []byte("tgz")); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.GetFolder(ctx, "f-1")
+	if err != nil || f.Name != "my-app" || f.Owner != 0 || f.SizeBytes != 3 || f.CreatedAt.IsZero() {
+		t.Errorf("GetFolder = %+v, %v", f, err)
+	}
+	if data, err := s.FolderData(ctx, "f-1"); err != nil || string(data) != "tgz" {
+		t.Errorf("FolderData = %q, %v", data, err)
+	}
+
+	first := task.New("my-app", "p")
+	first.FolderID = "f-1"
+	if err := s.Create(ctx, first, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	s.Start(ctx, first.ID)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded})
+	next := task.New("my-app", "more")
+	next.ParentID = first.ID
+	if err := s.Create(ctx, next, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, next.ID); rec.FolderID != "f-1" {
+		t.Errorf("follow-up folder %q, want f-1", rec.FolderID)
+	}
+	repo := task.New("https://example.com/r", "p")
+	s.Create(ctx, repo, "cursor")
+	if rec, _ := s.Get(ctx, repo.ID); rec.FolderID != "" {
+		t.Errorf("a repo task has folder %q", rec.FolderID)
 	}
 }

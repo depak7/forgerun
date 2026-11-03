@@ -26,6 +26,10 @@ var ErrAgentNotFound = errors.New("agent not found")
 // current one for a repo and agent (meaning: start the task cold).
 var ErrSnapshotNotFound = errors.New("snapshot not found")
 
+// ErrFolderNotFound is returned when there's no uploaded folder with the
+// given ID.
+var ErrFolderNotFound = errors.New("folder not found")
+
 // ErrThreadBusy means the thread already has a queued or running task.
 var ErrThreadBusy = errors.New("the thread already has a queued or running task")
 
@@ -44,7 +48,8 @@ type Agent struct {
 // Record is a task as stored: what was asked, and what happened.
 type Record struct {
 	ID         string
-	Repo       string
+	Repo       string // git URL; for a folder's thread, the folder's name
+	FolderID   string // the uploaded folder the thread works on; "" for a repo's thread
 	Prompt     string
 	AgentID    string
 	Model      models.Variant // the model the task runs on (from the models table)
@@ -129,6 +134,17 @@ type Thread struct {
 	UpdatedAt time.Time
 }
 
+// Folder is a copy of a local folder (or one file), uploaded to work on
+// instead of a GitHub repo. Its data is a gzipped tar of the files, with
+// the folder's .git if it's a repo.
+type Folder struct {
+	ID        string
+	Name      string // shown where a thread's repo would be
+	Owner     int64  // the user who uploaded it; 0 = none (local mode)
+	SizeBytes int64  // of Data
+	CreatedAt time.Time
+}
+
 // User is someone who signed in with GitHub.
 type User struct {
 	ID        int64
@@ -201,6 +217,13 @@ type Store interface {
 	Get(ctx context.Context, id string) (Record, error)
 	// Diff returns a task's changes as git diff output; "" if it has none.
 	Diff(ctx context.Context, id string) (string, error)
+	// SaveFolder saves an uploaded folder (f.ID, Name, Owner) and its data.
+	SaveFolder(ctx context.Context, f Folder, data []byte) error
+	// GetFolder returns an uploaded folder, without its data, or
+	// ErrFolderNotFound.
+	GetFolder(ctx context.Context, id string) (Folder, error)
+	// FolderData returns an uploaded folder's data, or ErrFolderNotFound.
+	FolderData(ctx context.Context, id string) ([]byte, error)
 	// List returns the most recent tasks first: owner's only, or everyone's
 	// if owner is 0.
 	List(ctx context.Context, limit int, owner int64) ([]Record, error)

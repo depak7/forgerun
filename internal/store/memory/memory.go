@@ -29,6 +29,7 @@ type Store struct {
 	logins    map[string]login
 	models    map[modelKey]models.Variant
 	snapshots map[int64]*store.Snapshot
+	folders   map[string]folder
 	lastID    int64 // the last snapshot id handed out
 }
 
@@ -39,7 +40,7 @@ var _ store.Store = (*Store)(nil)
 // to it, and its default is the variant marked AgentDefault.
 func New(vs ...models.Variant) *Store {
 	s := &Store{tasks: map[string]*store.Record{}, diffs: map[string]string{}, users: map[int64]*store.User{}, logins: map[string]login{}, models: map[modelKey]models.Variant{},
-		snapshots: map[int64]*store.Snapshot{}}
+		snapshots: map[int64]*store.Snapshot{}, folders: map[string]folder{}}
 	for _, v := range vs {
 		s.models[modelKey{v.AgentID, v.ID}] = v
 	}
@@ -60,7 +61,10 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 	if !ok { // mirrors the Postgres foreign keys / missing agent default
 		return fmt.Errorf("creating task %s: no model %q for agent %s", t.ID, t.ModelID, agentID)
 	}
-	rec := &store.Record{ID: t.ID, Repo: t.Repo, Prompt: t.Prompt, AgentID: agentID,
+	if _, ok := s.folders[t.FolderID]; t.FolderID != "" && !ok {
+		return fmt.Errorf("creating task %s: %w: %s", t.ID, store.ErrFolderNotFound, t.FolderID)
+	}
+	rec := &store.Record{ID: t.ID, Repo: t.Repo, FolderID: t.FolderID, Prompt: t.Prompt, AgentID: agentID,
 		Model: m, State: task.Queued, Plan: t.Plan, Owner: t.Owner, ThreadID: t.ID, CreatedAt: time.Now()}
 	if t.ParentID != "" { // mirrors the Postgres thread rules and indexes
 		parent, ok := s.tasks[t.ParentID]
@@ -75,7 +79,7 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 				return fmt.Errorf("creating task %s: %w", t.ID, store.ErrThreadBusy)
 			}
 		}
-		rec.ParentID, rec.ThreadID = parent.ID, parent.ThreadID
+		rec.ParentID, rec.ThreadID, rec.FolderID = parent.ID, parent.ThreadID, parent.FolderID
 		rec.PR = parent.PR // the thread's branch and pull request
 		rec.PR.Error = ""
 	}
@@ -363,6 +367,43 @@ func (s *Store) Diff(_ context.Context, id string) (string, error) {
 		return "", fmt.Errorf("%w: %s", store.ErrNotFound, id)
 	}
 	return s.diffs[id], nil
+}
+
+// folder is an uploaded folder and its data.
+type folder struct {
+	store.Folder
+	data []byte
+}
+
+func (s *Store) SaveFolder(_ context.Context, f store.Folder, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.folders[f.ID]; ok {
+		return fmt.Errorf("saving folder %s: already exists", f.ID)
+	}
+	f.SizeBytes, f.CreatedAt = int64(len(data)), time.Now()
+	s.folders[f.ID] = folder{f, data}
+	return nil
+}
+
+func (s *Store) GetFolder(_ context.Context, id string) (store.Folder, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.folders[id]
+	if !ok {
+		return store.Folder{}, fmt.Errorf("%w: %s", store.ErrFolderNotFound, id)
+	}
+	return f.Folder, nil
+}
+
+func (s *Store) FolderData(_ context.Context, id string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.folders[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", store.ErrFolderNotFound, id)
+	}
+	return f.data, nil
 }
 
 func (s *Store) List(_ context.Context, limit int, owner int64) ([]store.Record, error) {

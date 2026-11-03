@@ -58,6 +58,8 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	useSnapshots := fs.Bool("snapshots", true, "open sessions from their repo's snapshot, and save one when a session closes")
 	snapshotMaxAge := fs.Duration("snapshot-max-age", 7*24*time.Hour, "delete a repo's snapshot when no task has used it for this long (0 = never)")
 	snapshotBudget := byteSize(20e9)
+	maxFolder := byteSize(api.DefaultMaxFolder)
+	fs.Var(&maxFolder, "max-folder", "largest folder upload, compressed, e.g. 50MiB")
 	fs.Var(&snapshotBudget, "snapshot-budget", "total disk for snapshots, e.g. 500MB or 20GB; least recently used are deleted first (0 = no limit)")
 	snapshotSweep := fs.Duration("snapshot-sweep", 10*time.Minute, "how often to check snapshot limits and clean up")
 	turnsPerDay := fs.Int("user-turns-per-day", 20, "turns each signed-in user (not admins) may start per 24 hours (0 = no limit)")
@@ -198,10 +200,11 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	if publisher != nil {
 		pool.Fetchers = repoFetchers(db, auth, publisher, log)
 	}
+	pool.Folders = db.FolderData
 	srv := &http.Server{
 		Handler: routes(os.Getenv("FORGERUN_PUBLIC_URL"), nil, api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
 			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, Capacity: runner, OutDir: *out, GitHubUser: githubUser,
-			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, Log: log}))),
+			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, MaxFolder: int64(maxFolder), Log: log}))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

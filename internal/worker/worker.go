@@ -49,6 +49,9 @@ type Pool struct {
 	// repos the VM can't clone itself (private ones), nil for the others.
 	// owner is the task's user (0 = none), whose GitHub access is used.
 	Fetchers func(ctx context.Context, rec store.Record) (task.Fetcher, error)
+	// Folders, if set, loads an uploaded folder's data, for a folder's
+	// thread. Without it, this pool fails folder tasks.
+	Folders func(ctx context.Context, id string) ([]byte, error)
 
 	mu      sync.Mutex
 	running map[string]context.CancelCauseFunc // task ID → cancel, for tasks running here
@@ -133,11 +136,16 @@ func (p *Pool) execute(ctx context.Context, log *slog.Logger, rec store.Record) 
 	p.setRunning(rec.ID, cancel)
 
 	log.Info("task started", "id", rec.ID, "repo", rec.Repo, "thread", rec.ThreadID)
-	t := task.Task{ID: rec.ID, ThreadID: rec.ThreadID, ParentID: rec.ParentID, Repo: rec.Repo, Prompt: rec.Prompt,
+	t := task.Task{ID: rec.ID, ThreadID: rec.ThreadID, ParentID: rec.ParentID, Repo: rec.Repo, FolderID: rec.FolderID, Prompt: rec.Prompt,
 		AgentID: rec.AgentID, ModelID: rec.Model.ID, Family: rec.Model.Family, Effort: rec.Model.Effort, Keyless: rec.Model.Keyless, Plan: rec.Plan}
 	var res task.Result
 	var err error
-	if p.Fetchers != nil {
+	switch {
+	case rec.FolderID != "" && p.Folders == nil:
+		err = errors.New("this worker can't run a folder's tasks yet")
+	case rec.FolderID != "":
+		t.Folder = func(ctx context.Context) ([]byte, error) { return p.Folders(ctx, rec.FolderID) }
+	case p.Fetchers != nil:
 		t.Fetch, err = p.Fetchers(taskCtx, rec)
 	}
 	if err == nil && t.ParentID != "" {

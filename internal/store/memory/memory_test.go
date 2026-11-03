@@ -262,3 +262,36 @@ func TestClaimFor(t *testing.T) {
 		t.Errorf("running = %v", running)
 	}
 }
+
+// Mirrors the Postgres store: follow-ups stay on the thread's folder, and a
+// task can't name a folder that wasn't uploaded.
+func TestFolders(t *testing.T) {
+	s, ctx := New(fakeDefault), context.Background()
+	if err := s.SaveFolder(ctx, store.Folder{ID: "f-1", Name: "my-app", Owner: 7}, []byte("tgz")); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := s.GetFolder(ctx, "f-1"); err != nil || f.Owner != 7 || f.SizeBytes != 3 {
+		t.Errorf("GetFolder = %+v, %v", f, err)
+	}
+	if data, err := s.FolderData(ctx, "f-1"); err != nil || string(data) != "tgz" {
+		t.Errorf("FolderData = %q, %v", data, err)
+	}
+	bad := task.New("x", "p")
+	bad.FolderID = "f-nope"
+	if err := s.Create(ctx, bad, "fake"); !errors.Is(err, store.ErrFolderNotFound) {
+		t.Errorf("unknown folder: %v", err)
+	}
+	first := task.New("my-app", "p")
+	first.FolderID = "f-1"
+	s.Create(ctx, first, "fake")
+	s.Claim(ctx)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded})
+	next := task.New("my-app", "more")
+	next.ParentID = first.ID
+	if err := s.Create(ctx, next, "fake"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get(ctx, next.ID); rec.FolderID != "f-1" {
+		t.Errorf("follow-up folder %q", rec.FolderID)
+	}
+}

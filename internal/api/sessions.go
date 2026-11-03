@@ -96,6 +96,10 @@ func (s *Server) pushThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := thread[0].ID
+	if thread[0].FolderID != "" {
+		writeError(w, http.StatusBadRequest, "a folder's thread can't be pushed yet: take its changes from the diff")
+		return
+	}
 	if s.prs == nil {
 		writeError(w, http.StatusBadRequest, "this server can't push (it has no GITHUB_TOKEN)")
 		return

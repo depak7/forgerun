@@ -53,15 +53,16 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	// branch and pull request; if the parent doesn't exist, nothing is inserted.
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id, pr_requested,
-		                   parent_id, thread_id, pr_url, pr_number, pr_branch, plan, owner_id)
+		                   parent_id, thread_id, pr_url, pr_number, pr_branch, plan, owner_id, folder_id)
 		SELECT $1, $2, $3, $4, $5,
 		       COALESCE(NULLIF($6, ''), (SELECT default_model_id FROM agents WHERE id = $4)),
 		       COALESCE(p.pr_requested, false),
-		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch, $8, $9
+		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch, $8, $9,
+		       COALESCE(p.folder_id, NULLIF($10, ''))
 		FROM (SELECT NULLIF($7::text, '') AS parent) want
 		LEFT JOIN tasks p ON p.id = want.parent
 		WHERE want.parent IS NULL OR p.id IS NOT NULL`,
-		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID, t.Plan, nullableID(t.Owner))
+		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID, t.Plan, nullableID(t.Owner), t.FolderID)
 	if err != nil {
 		return fmt.Errorf("creating task %s: %w", t.ID, threadError(err)) // includes the FK error for an unknown model
 	}
@@ -302,7 +303,7 @@ const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, 
 // selectColumns is the task (aliased t) plus its model.
 const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.diff IS NOT NULL,
 	t.snapshot_id, t.pr_requested, t.pr_url, t.pr_error, t.base_commit, t.summary,
-	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.plan, t.asked, t.owner_id, t.created_at, t.started_at, t.finished_at, ` + modelColumns
+	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.plan, t.asked, t.owner_id, t.folder_id, t.created_at, t.started_at, t.finished_at, ` + modelColumns
 
 const fromTasks = ` FROM tasks t
 	JOIN models m ON m.agent_id = t.agent_id AND m.id = t.model_id
@@ -324,6 +325,38 @@ func (s *Store) Diff(ctx context.Context, id string) (string, error) {
 		return "", fmt.Errorf("%w: %s", store.ErrNotFound, id)
 	}
 	return deref(diff), err
+}
+
+func (s *Store) SaveFolder(ctx context.Context, f store.Folder, data []byte) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO folders (id, name, owner_id, data) VALUES ($1, $2, $3, $4)`,
+		f.ID, f.Name, nullableID(f.Owner), data)
+	if err != nil {
+		return fmt.Errorf("saving folder %s: %w", f.ID, err)
+	}
+	return nil
+}
+
+func (s *Store) GetFolder(ctx context.Context, id string) (store.Folder, error) {
+	f := store.Folder{ID: id}
+	var owner *int64
+	err := s.pool.QueryRow(ctx, `SELECT name, owner_id, length(data), created_at FROM folders WHERE id = $1`, id).
+		Scan(&f.Name, &owner, &f.SizeBytes, &f.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Folder{}, fmt.Errorf("%w: %s", store.ErrFolderNotFound, id)
+	}
+	if owner != nil {
+		f.Owner = *owner
+	}
+	return f, err
+}
+
+func (s *Store) FolderData(ctx context.Context, id string) ([]byte, error) {
+	var data []byte
+	err := s.pool.QueryRow(ctx, `SELECT data FROM folders WHERE id = $1`, id).Scan(&data)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", store.ErrFolderNotFound, id)
+	}
+	return data, err
 }
 
 func (s *Store) List(ctx context.Context, limit int, owner int64) ([]store.Record, error) {
@@ -522,7 +555,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		state                               string
 		errMsg, logPath                     *string // nil = NULL
 		prURL, prError, baseCommit, summary *string
-		parentID, prBranch, reply           *string
+		parentID, prBranch, reply, folderID *string
 		owner                               *int64
 		prNumber                            *int
 		startedAt, finishedAt               *time.Time
@@ -530,7 +563,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
 		&errMsg, &logPath, &rec.HasDiff, &rec.SnapshotID,
 		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary,
-		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &owner, &rec.CreatedAt, &startedAt, &finishedAt,
+		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &owner, &folderID, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
 		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR, &rec.Model.Keyless)
 	if err != nil {
@@ -543,7 +576,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	rec.Error, rec.LogPath = deref(errMsg), deref(logPath)
 	rec.PR.URL, rec.PR.Error = deref(prURL), deref(prError)
 	rec.BaseCommit, rec.Summary, rec.Reply = deref(baseCommit), deref(summary), deref(reply)
-	rec.ParentID, rec.PR.Branch = deref(parentID), deref(prBranch)
+	rec.ParentID, rec.PR.Branch, rec.FolderID = deref(parentID), deref(prBranch), deref(folderID)
 	if prNumber != nil {
 		rec.PR.Number = *prNumber
 	}

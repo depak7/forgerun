@@ -37,7 +37,10 @@ type Task struct {
 	ThreadID string // the thread's first task; "" = this task starts a thread
 	ParentID string // the task this one follows; "" for a thread's first task
 	Owner    int64  // the user who started it; 0 = nobody signed in (local mode)
-	Repo     string // git URL
+	Repo     string // git URL; for a folder, its name
+	// FolderID is the uploaded folder the thread works on, instead of
+	// cloning Repo; "" for a repo. Follow-ups inherit it.
+	FolderID string
 	Prompt   string
 	AgentID  string // which agent runs it; "" = Runner.DefaultAgent
 	ModelID  string // exact agent model id; "" or "auto" lets the agent choose
@@ -53,6 +56,9 @@ type Task struct {
 	// Fetch, if set, gets the repo's code on the host (private repos): the
 	// VM never clones from GitHub itself. nil = the VM clones directly.
 	Fetch Fetcher
+	// Folder, set for a folder's thread, loads the uploaded folder (a
+	// gzipped tar), which the session starts from instead of a clone.
+	Folder func(ctx context.Context) ([]byte, error)
 	// History loads the thread's earlier turns, oldest first. It's called
 	// only when the thread's session has to be (re)built; nil = none.
 	History func(ctx context.Context) ([]Turn, error)
@@ -298,7 +304,9 @@ func (r *Runner) acquire(ctx context.Context, ag agent.Agent, t Task, step func(
 	}
 
 	ss, evicted := r.open().reserve(t.thread(), ag.ID())
-	ss.repo = t.Repo
+	if t.Folder == nil { // a folder's session isn't saved as a snapshot
+		ss.repo = t.Repo
+	}
 	for _, e := range evicted {
 		step("closing the least recently used session to make room")
 		r.closeSession(e, "too many sessions")
@@ -333,7 +341,12 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 		if ss.sb, err = r.sandboxes().New(ctx, r.VMPrefix+t.ID, cfg); err != nil {
 			return nil, err
 		}
-		if t.Fetch != nil {
+		if t.Folder != nil {
+			step("unpacking the folder %s", t.Repo)
+			if err := unpackFolder(ctx, ss.sb, t.Folder, repoDir); err != nil {
+				return nil, err
+			}
+		} else if t.Fetch != nil {
 			step("fetching %s on the host (private repo)", t.Repo)
 			if err := HostClone(ctx, ss.sb, t.Fetch, t.Repo, repoDir); err != nil {
 				return nil, fmt.Errorf("clone: %w", err)
@@ -455,7 +468,7 @@ func (r *Runner) closeSession(ss *session, reason string) {
 	if ss.sb == nil {
 		return
 	}
-	if r.Snapshots != nil {
+	if r.Snapshots != nil && ss.repo != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
 		ag, err := r.Agents.Get(ss.agentID)
 		if err == nil {
@@ -530,7 +543,7 @@ func fileProbe(sb sandbox.Sandbox, paths []string) func(context.Context) bool {
 // session must start cold: snapshots are off, the repo has none yet, or it
 // couldn't be used. A snapshot never fails a turn.
 func (r *Runner) restore(ctx context.Context, ag agent.Agent, t Task, cfg sandbox.Config, step func(string, ...any)) sandbox.Sandbox {
-	if r.Snapshots == nil {
+	if r.Snapshots == nil || t.Folder != nil {
 		return nil
 	}
 	sb, err := r.Snapshots.Restore(ctx, RestoreRequest{

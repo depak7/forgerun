@@ -335,3 +335,49 @@ func TestFetchers(t *testing.T) {
 		t.Errorf("error = %q", rec.Error)
 	}
 }
+
+// A folder's task gets the folder from the pool's loader, not a fetcher;
+// a pool without one fails it.
+func TestFolders(t *testing.T) {
+	s := memory.New(fakeDefault)
+	s.SaveFolder(context.Background(), store.Folder{ID: "f-1", Name: "my-app"}, []byte("tgz"))
+	tk := task.New("my-app", "x")
+	tk.FolderID = "f-1"
+	if err := s.Create(context.Background(), tk, "fake"); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan task.Task, 1)
+	p := New(s, fakeExec(func(_ context.Context, tk task.Task) (task.Result, error) {
+		got <- tk
+		return task.Result{}, nil
+	}), 1, slog.New(slog.DiscardHandler))
+	p.poll = 10 * time.Millisecond
+	p.Fetchers = func(context.Context, store.Record) (task.Fetcher, error) {
+		return nil, errors.New("a folder's task asked for a fetcher")
+	}
+	p.Folders = s.FolderData
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		p.Run(ctx)
+		close(done)
+	}()
+	waitState(t, s, tk.ID, task.Succeeded)
+	cancel()
+	<-done // stopped: the next task is for a pool without a loader
+	run := <-got
+	if run.Fetch != nil || run.Folder == nil || run.FolderID != "f-1" {
+		t.Fatalf("task got fetch %v, folder %v, id %q", run.Fetch, run.Folder != nil, run.FolderID)
+	}
+	if data, err := run.Folder(context.Background()); err != nil || string(data) != "tgz" {
+		t.Errorf("folder = %q, %v", data, err)
+	}
+
+	other := task.New("my-app", "y")
+	other.FolderID = "f-1"
+	s.Create(context.Background(), other, "fake")
+	startPool(t, s, fakeExec(func(context.Context, task.Task) (task.Result, error) { return task.Result{}, nil }), 1, 10*time.Millisecond)
+	if rec := waitState(t, s, other.ID, task.Failed); !strings.Contains(rec.Error, "can't run a folder's tasks") {
+		t.Errorf("error = %q", rec.Error)
+	}
+}
