@@ -161,3 +161,48 @@ func TestUnpackPlainFolder(t *testing.T) {
 		t.Errorf("unpacking again gave %s, want %s", again, head)
 	}
 }
+
+// Unpacking over a checkout restored from a snapshot keeps what both
+// ignore (installed dependencies), and nothing else of the old checkout;
+// the commit is the same as a cold start's, and the diff stays clean.
+func TestUnpackOverSnapshot(t *testing.T) {
+	src := t.TempDir()
+	hostRun(t, src, "git", "init", "-q")
+	os.WriteFile(filepath.Join(src, ".gitignore"), []byte("node_modules/\n*.log\n"), 0o644)
+	os.WriteFile(filepath.Join(src, "index.js"), []byte("1\n"), 0o644)
+	hostRun(t, src, "git", "add", "-A")
+	hostRun(t, src, "git", "-c", "user.name=u", "-c", "user.email=u@x", "commit", "-q", "-m", "one")
+	os.WriteFile(filepath.Join(src, "index.js"), []byte("2\n"), 0o644)
+	data := tarball(t, src)
+	_, cold := unpackUpload(t, data)
+
+	dir, _ := unpackUpload(t, data) // the snapshot's checkout, from an earlier session
+	os.MkdirAll(filepath.Join(dir, "node_modules", "left-pad"), 0o755)
+	os.WriteFile(filepath.Join(dir, "node_modules", "left-pad", "index.js"), []byte("x\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "debug.log"), []byte("old\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "stray.txt"), []byte("an old turn's file\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "index.js"), []byte("an old turn's edit\n"), 0o644)
+
+	load := func(context.Context) ([]byte, error) { return data, nil }
+	if _, err := unpackFolder(context.Background(), hostSandbox{}, load, dir); err != nil {
+		t.Fatal(err)
+	}
+	if head := hostRun(t, dir, "git", "rev-parse", "HEAD"); head != cold {
+		t.Errorf("HEAD %s, want the cold start's %s", head, cold)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "node_modules", "left-pad", "index.js")); err != nil {
+		t.Errorf("dependencies not kept: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stray.txt")); err == nil {
+		t.Error("an old turn's untracked file was kept")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "index.js")); string(b) != "2\n" {
+		t.Errorf("index.js = %q, want the folder's", b)
+	}
+	if st := hostRun(t, dir, "git", "status", "--porcelain"); st != "" {
+		t.Errorf("not clean: %q", st)
+	}
+	if _, err := os.Stat(dir + ".new"); err == nil {
+		t.Error("the new checkout's folder was left behind")
+	}
+}

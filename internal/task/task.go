@@ -308,9 +308,7 @@ func (r *Runner) acquire(ctx context.Context, ag agent.Agent, t Task, step func(
 	}
 
 	ss, evicted := r.open().reserve(t.thread(), ag.ID())
-	if t.Folder == nil { // a folder's session isn't saved as a snapshot
-		ss.repo = t.Repo
-	}
+	ss.repo, ss.folder = snapshotRepo(t), t.Folder != nil
 	for _, e := range evicted {
 		step("closing the least recently used session to make room")
 		r.closeSession(e, "too many sessions")
@@ -345,21 +343,24 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 		if ss.sb, err = r.sandboxes().New(ctx, r.VMPrefix+t.ID, cfg); err != nil {
 			return nil, err
 		}
-		if t.Folder != nil {
-			step("unpacking the folder %s", t.Repo)
-			if ss.folderDiff, err = unpackFolder(ctx, ss.sb, t.Folder, repoDir); err != nil {
-				return nil, err
-			}
-		} else if t.Fetch != nil {
+		switch {
+		case t.Folder != nil: // unpacked below, warm or cold
+		case t.Fetch != nil:
 			step("fetching %s on the host (private repo)", t.Repo)
 			if err := HostClone(ctx, ss.sb, t.Fetch, t.Repo, repoDir); err != nil {
 				return nil, fmt.Errorf("clone: %w", err)
 			}
-		} else {
+		default:
 			step("cloning %s", t.Repo)
 			if _, err := ss.sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"clone", "--depth=1", t.Repo, repoDir}}); err != nil {
 				return nil, fmt.Errorf("clone: %w", err)
 			}
+		}
+	}
+	if t.Folder != nil {
+		step("unpacking the folder %s", t.Repo)
+		if ss.folderDiff, err = unpackFolder(ctx, ss.sb, t.Folder, repoDir); err != nil {
+			return nil, err
 		}
 	}
 	var history []Turn
@@ -380,6 +381,16 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 	}
 	step("session ready in %s (%s)", time.Since(start).Round(100*time.Millisecond), mode)
 	return history, nil
+}
+
+// snapshotRepo is what a thread's snapshots are kept under: its repo, or
+// for a folder, its owner's folder of that name (or GitHub repo). A
+// folder's files are its owner's, so its snapshots serve only them.
+func snapshotRepo(t Task) string {
+	if t.Folder == nil {
+		return t.Repo
+	}
+	return fmt.Sprintf("folder:%d:%s", t.Owner, t.Repo)
 }
 
 // CloseSession closes a thread's idle session, saving its VM as the
@@ -472,12 +483,12 @@ func (r *Runner) closeSession(ss *session, reason string) {
 	if ss.sb == nil {
 		return
 	}
-	if r.Snapshots != nil && ss.repo != "" {
+	if r.Snapshots != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
 		ag, err := r.Agents.Get(ss.agentID)
 		if err == nil {
 			err = r.Snapshots.Save(ctx, ss.sb, SnapshotRequest{
-				TaskID: ss.sb.Name(), Repo: ss.repo, AgentID: ss.agentID, RepoDir: repoDir, StatePaths: ag.StatePaths(),
+				TaskID: ss.sb.Name(), Repo: ss.repo, AgentID: ss.agentID, RepoDir: repoDir, StatePaths: ag.StatePaths(), Folder: ss.folder,
 			}, func(format string, a ...any) { log.Info(fmt.Sprintf(format, a...)) })
 		}
 		cancel()
@@ -547,11 +558,12 @@ func fileProbe(sb sandbox.Sandbox, paths []string) func(context.Context) bool {
 // session must start cold: snapshots are off, the repo has none yet, or it
 // couldn't be used. A snapshot never fails a turn.
 func (r *Runner) restore(ctx context.Context, ag agent.Agent, t Task, cfg sandbox.Config, step func(string, ...any)) sandbox.Sandbox {
-	if r.Snapshots == nil || t.Folder != nil {
+	if r.Snapshots == nil {
 		return nil
 	}
 	sb, err := r.Snapshots.Restore(ctx, RestoreRequest{
-		TaskID: t.ID, VMName: r.VMPrefix + t.ID, Repo: t.Repo, AgentID: ag.ID(), RepoDir: repoDir, Config: cfg, Fetch: t.Fetch,
+		TaskID: t.ID, VMName: r.VMPrefix + t.ID, Repo: snapshotRepo(t), AgentID: ag.ID(), RepoDir: repoDir, Config: cfg, Fetch: t.Fetch,
+		Folder: t.Folder != nil,
 	}, step)
 	switch {
 	case errors.Is(err, ErrNoSnapshot):

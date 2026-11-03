@@ -32,6 +32,9 @@ type RestoreRequest struct {
 	RepoDir string         // checkout inside the VM
 	Config  sandbox.Config // CPUs, memory, lifetime and secrets for the new VM
 	Fetch   Fetcher        // set for private repos: the code comes from the host
+	// Folder: a folder's snapshot, whose code the caller replaces with the
+	// folder (keeping ignored files); there's no remote to update from.
+	Folder bool
 }
 
 // SnapshotRequest says which VM state to keep and how to clean it first.
@@ -41,4 +44,5 @@ type SnapshotRequest struct {
 	AgentID    string
 	RepoDir    string   // checkout inside the VM
 	StatePaths []string // agent leftovers to delete before snapshotting
+	Folder     bool     // a folder's session: there's no remote to reset to
 }

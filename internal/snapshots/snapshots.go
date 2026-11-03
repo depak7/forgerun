@@ -75,12 +75,14 @@ func (m *Manager) Restore(ctx context.Context, req task.RestoreRequest, logf fun
 
 	// A failure here (e.g. the network) doesn't mean the snapshot is bad,
 	// so it's kept; only this VM is discarded.
-	commit, err := update(ctx, sb, req)
-	if err != nil {
-		sb.Destroy()
-		return nil, err
+	if !req.Folder { // a folder's code is replaced by the caller
+		commit, err := update(ctx, sb, req)
+		if err != nil {
+			sb.Destroy()
+			return nil, err
+		}
+		logf("updated to %.7s", commit)
 	}
-	logf("updated to %.7s", commit)
 
 	if err := m.Store.UseSnapshot(ctx, req.TaskID, snap.ID); err != nil {
 		logf("warning: recording snapshot use: %v", err) // the VM is fine; carry on
@@ -159,8 +161,17 @@ func (m *Manager) remove(ctx context.Context, snap store.Snapshot) error {
 //
 // Kept: git-ignored files (node_modules, build caches). Removed: the agent's
 // edits, commits and branches, untracked files, and the agent's state paths.
+//
+// A folder's checkout is left as it is: the next session replaces it with
+// its folder, keeping only the ignored files.
 func clean(ctx context.Context, sb sandbox.Sandbox, req task.SnapshotRequest) (string, error) {
-	commit, err := resetToDefault(ctx, sb, req.RepoDir)
+	var commit string
+	var err error
+	if req.Folder {
+		commit, err = git(ctx, sb, req.RepoDir, "rev-parse", "HEAD")
+	} else {
+		commit, err = resetToDefault(ctx, sb, req.RepoDir)
+	}
 	if err != nil {
 		return "", err
 	}

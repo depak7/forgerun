@@ -21,7 +21,8 @@ var ErrNoSession = errors.New("no open session")
 type session struct {
 	thread  string
 	agentID string
-	repo    string // the repo URL, which its snapshot is saved under; "" = not saved
+	repo    string // what its snapshot is saved under (snapshotRepo)
+	folder  bool   // a folder's session: its snapshot has no remote to reset to
 	// folderDiff is the folder's uncommitted work at handoff, from
 	// unpacking it, until a turn reports it.
 	folderDiff string

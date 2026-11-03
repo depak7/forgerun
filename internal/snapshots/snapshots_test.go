@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -362,5 +363,75 @@ func TestBloated(t *testing.T) {
 		if got := bloated(tc.size, tc.used); got != tc.want {
 			t.Errorf("bloated(%d MB on disk, %d MB used) = %v, want %v", tc.size/mb, tc.used/mb, got, tc.want)
 		}
+	}
+}
+
+// depsAgent "installs" an ignored dependency folder, and says whether one
+// was already there.
+type depsAgent struct{}
+
+func (depsAgent) ID() string                      { return "fake" }
+func (depsAgent) Image() string                   { return "depak7/forgerun-agent-cursor:dev" }
+func (depsAgent) Credential() string              { return "" }
+func (depsAgent) Secrets(string) []sandbox.Secret { return nil }
+func (depsAgent) StatePaths() []string            { return nil }
+func (depsAgent) Run(ctx context.Context, sb sandbox.Sandbox, req agent.Request, logs io.Writer) error {
+	script := `set -e
+if [ -e deps/data ]; then echo "agent found the installed deps"; fi
+mkdir -p deps && echo installed > deps/data
+echo edited >> app.txt`
+	return sb.Stream(ctx, sandbox.Cmd{Name: "sh", Args: []string{"-c", script}, Dir: req.Dir}, logs)
+}
+
+// A folder's thread saves a snapshot too, under its owner's folder: the
+// next thread on the folder starts warm, with the ignored dependencies,
+// and the agent's diff holds only its own change.
+func TestFolderWarmStart(t *testing.T) {
+	r, s := setup(t, depsAgent{})
+	ctx := context.Background()
+	src := t.TempDir()
+	for _, c := range []string{"git init -q", "printf 'deps/\n' > .gitignore", "printf 'one\n' > app.txt",
+		"git add -A", "git -c user.name=u -c user.email=u@x commit -qm one", "printf 'wip\n' >> app.txt"} {
+		if out, err := exec.Command("sh", "-c", "cd "+src+" && "+c).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v %s", c, err, out)
+		}
+	}
+	tgz, err := exec.Command("tar", "-czf", "-", "-C", src, ".").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SaveFolder(ctx, store.Folder{ID: "f-warm", Name: "app"}, tgz)
+
+	run := func() (string, task.Result) {
+		t.Helper()
+		tk := task.New("app", "unused")
+		tk.FolderID, tk.Owner = "f-warm", 0
+		tk.Folder = func(context.Context) ([]byte, error) { return tgz, nil }
+		if err := s.Create(ctx, tk, "fake"); err != nil {
+			t.Fatal(err)
+		}
+		res, err := r.Run(ctx, tk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.CloseAll()
+		log, _ := os.ReadFile(res.LogPath)
+		return string(log), res
+	}
+	coldLog, cold := run()
+	if strings.Contains(coldLog, "found the installed deps") || !strings.Contains(cold.FolderDiff, "+wip") {
+		t.Fatalf("cold:\n%s\nfolder diff %q", coldLog, cold.FolderDiff)
+	}
+	if _, err := s.CurrentSnapshot(ctx, "folder:0:app", "fake"); err != nil {
+		t.Fatalf("no snapshot under the folder's key: %v", err)
+	}
+	warmLog, warm := run()
+	for _, want := range []string{"restored from snapshot", "(warm)", "agent found the installed deps"} {
+		if !strings.Contains(warmLog, want) {
+			t.Errorf("warm log lacks %q:\n%s", want, warmLog)
+		}
+	}
+	if warm.BaseCommit != cold.BaseCommit || strings.Contains(warm.Diff, "deps") || !strings.Contains(warm.Diff, "+edited") {
+		t.Errorf("warm base %s (cold %s), diff:\n%s", warm.BaseCommit, cold.BaseCommit, warm.Diff)
 	}
 }
