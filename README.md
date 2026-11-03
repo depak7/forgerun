@@ -86,25 +86,14 @@ has no key proxy of its own, forgerun's (`internal/secretproxy`) keeps keys out.
 
 ## How it compares
 
-| | Self-hosted | Open source | A VM per task | Keys readable inside the sandbox |
+When you want to run coding agents off your laptop, you have four ways to do it:
+
+| Setup | Isolation per thread | API keys & GitHub tokens | Task start & workflow | Agents & cost |
 |---|---|---|---|---|
-| **forgerun** | Yes | Yes (Apache-2.0) | Yes: a microVM per thread (a gVisor sandbox on Linux without KVM) | No: placeholders, swapped by a proxy outside the sandbox |
-| Cursor cloud agents | Partly: [self-hosted machines][c2] run the tools; Cursor runs the agent loop | No | Yes on Cursor's cloud ([isolated VMs][c1]); not on self-hosted machines, where [several agents share one][c2] | Yes: [environment-variable secrets are visible][c3] to the agent |
-| OpenAI Codex cloud | No | No | Yes: [each cloud task runs in a VM][x1] | Partly: environment variables yes; [network secrets][x1] are placeholders swapped by a proxy |
-| OpenHands | Yes | Yes (MIT) | No: [Docker containers][o1] | Yes: [custom secrets are exported][o2] into the agent's environment |
-| Claude Code on your own VPS | Yes | No ([Claude Code][a3] is proprietary; its [sandbox runtime][a1] is open) | No by default: an [OS-level sandbox][a1] for shell commands; a VM is [yours to build][a2] | Yes by default; a [mask mode][a1] covers shell commands only |
-
-Checked against each vendor's own docs on 2026-10-24.
-
-[c1]: https://cursor.com/docs/cloud-agent
-[c2]: https://cursor.com/docs/cloud-agent/self-hosted
-[c3]: https://cursor.com/docs/cloud-agent/security-network
-[x1]: https://learn.chatgpt.com/docs/environments/cloud-environments
-[o1]: https://docs.openhands.dev/openhands/usage/sandboxes/overview
-[o2]: https://docs.openhands.dev/openhands/usage/settings/secrets-settings
-[a1]: https://code.claude.com/docs/en/sandboxing
-[a2]: https://code.claude.com/docs/en/sandbox-environments
-[a3]: https://github.com/anthropics/claude-code/blob/main/LICENSE.md
+| **forgerun (on your Mac or Linux VM)** | A microVM (`libkrun`) per thread, or a `gVisor` user-space kernel on Linux without KVM | **Never inside the sandbox:** placeholders swapped by a host TLS proxy; host pushes only when you click push | **2.8 s** from a rolling repo disk snapshot; review the diff in the web UI before pushing a branch or PR | `claude-code` (Pro/Max subscription), `cursor`, `opencode` (free or paid), `pi` — switch agents mid-thread |
+| **CLI on your laptop** (`claude`, `cursor`, `opencode`) | Shares your machine (or an OS-level shell sandbox); stops when you close the lid | Local keys, `~/.ssh`, `.env` files, and `git` credentials live on the same machine | Ties up your local working tree and branch | Your own subscriptions and keys, one terminal at a time |
+| **CLI in `tmux` or plain Docker on a VPS** | Shared host kernel; tasks share a container or clone from scratch | **Exported in the environment:** readable by prompt injection or `postinstall` scripts | Cold `git clone` + dependency install (~27 s) on every clean run; no built-in diff gate | Your own keys; DIY scripts for logs, sessions, and PRs |
+| **Vendor-hosted cloud agents** | Cloud VM on the vendor's infrastructure (shared host on self-hosted runners) | Managed on vendor cloud; env secrets are often readable by the agent or left to you on self-hosted runners | Runs in the vendor's cloud | Locked to a single vendor's agent and cloud compute billing |
 
 ## Architecture
 

@@ -17,7 +17,19 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
           <span>&gt;_</span> forgerun
         </div>
         <nav className={styles.topLinks}>
-          <a href={repoURL}>GitHub</a>
+          <a href="#how" className={styles.topNavHideMobile}>
+            How it works
+          </a>
+          <a href="#compare" className={styles.topNavHideMobile}>
+            Compare
+          </a>
+          <a href="#faq" className={styles.topNavHideMobile}>
+            FAQ
+          </a>
+          <a className={styles.starPill} href={repoURL} target="_blank" rel="noreferrer">
+            <StarIcon />
+            <span>Star on GitHub</span>
+          </a>
           {!signInHidden && (
             <a className={styles.topSignIn} href="/auth/github/login">
               [ sign in ]
@@ -48,7 +60,8 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
               </a>
             )}
             <a className={styles.buttonGhost} href={repoURL}>
-              [ view on GitHub ]
+              <StarIcon />
+              <span>[ view on GitHub ]</span>
             </a>
           </div>
           {error && (
@@ -59,6 +72,21 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
         </section>
 
         <DemoVideo />
+
+        <section className={styles.metrics} aria-label="Key benchmarks">
+          <div className={styles.metric}>
+            <span className={styles.metricVal}>26.8s → 2.8s</span>
+            <span className={styles.metricDesc}>Warm task start from a repo disk snapshot with dependencies installed</span>
+          </div>
+          <div className={styles.metric}>
+            <span className={styles.metricVal}>0.34s</span>
+            <span className={styles.metricDesc}>gVisor user-space kernel cold boot on standard Linux VMs without KVM</span>
+          </div>
+          <div className={styles.metric}>
+            <span className={styles.metricVal}>0 keys in VM</span>
+            <span className={styles.metricDesc}>Sandboxes see only placeholders; a host TLS proxy swaps keys per API host</span>
+          </div>
+        </section>
 
         <section className={styles.section} aria-labelledby="how">
           <h2 id="how" className={styles.heading}>
@@ -142,43 +170,43 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
             <table className={styles.compareTable}>
               <thead>
                 <tr>
-                  <th scope="col">Platform</th>
-                  <th scope="col">Self-hosted</th>
-                  <th scope="col">Open source</th>
-                  <th scope="col">A VM per task</th>
-                  <th scope="col">Keys hidden from sandbox</th>
+                  <th scope="col">Setup</th>
+                  <th scope="col">Isolation per thread</th>
+                  <th scope="col">API keys &amp; GitHub tokens</th>
+                  <th scope="col">Task start &amp; workflow</th>
+                  <th scope="col">Agents &amp; cost</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
                   <td>
-                    <strong className="mono">forgerun</strong>
+                    <strong className="mono">forgerun</strong> (your Mac or Linux VM)
                   </td>
-                  <td>Yes</td>
-                  <td>Yes (Apache-2.0)</td>
-                  <td>Yes: microVM (libkrun) or gVisor (0.34s boot)</td>
-                  <td>Yes: host-side TLS proxy swaps placeholders</td>
+                  <td>Dedicated microVM (libkrun) or gVisor kernel (0.34s boot)</td>
+                  <td>Never inside the sandbox: host TLS proxy swaps placeholders</td>
+                  <td>2.8s warm disk snapshots; review diff before pushing branch/PR</td>
+                  <td>claude-code (Pro/Max), cursor, opencode (free/paid), pi</td>
                 </tr>
                 <tr>
-                  <td>Cursor cloud agents</td>
-                  <td>Partly (tools only)</td>
-                  <td>No</td>
-                  <td>Cloud only (shared on self-hosted)</td>
-                  <td>No: env secrets visible to agent</td>
+                  <td>CLI on your laptop</td>
+                  <td>Shares your machine; stops when you close the lid</td>
+                  <td>Local keys, ~/.ssh, and .env files live on the same machine</td>
+                  <td>Ties up your local working tree and branch</td>
+                  <td>Your own subscriptions, one terminal at a time</td>
                 </tr>
                 <tr>
-                  <td>OpenAI Codex cloud</td>
-                  <td>No</td>
-                  <td>No</td>
-                  <td>Yes (cloud VM)</td>
-                  <td>Partly (network secrets proxied)</td>
+                  <td>CLI in tmux or plain Docker on a VPS</td>
+                  <td>Shared host kernel; containers share host or clone cold</td>
+                  <td>Exported in env vars (readable by prompt injection or scripts)</td>
+                  <td>~27s cold clone + install per clean run; no diff gate</td>
+                  <td>Your own keys; DIY scripts for logs and PRs</td>
                 </tr>
                 <tr>
-                  <td>OpenHands</td>
-                  <td>Yes</td>
-                  <td>Yes (MIT)</td>
-                  <td>No (Docker containers)</td>
-                  <td>No (custom secrets exported)</td>
+                  <td>Vendor-hosted cloud agents</td>
+                  <td>Vendor cloud VM (shared host on self-hosted runners)</td>
+                  <td>Managed in vendor cloud; env vars often visible to the agent</td>
+                  <td>Runs on vendor infrastructure</td>
+                  <td>Locked to one vendor&apos;s agent and cloud compute billing</td>
                 </tr>
               </tbody>
             </table>
@@ -228,6 +256,63 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
           </p>
           <a className={styles.link} href={`${repoURL}#by-hand`}>
             Set it up by hand →
+          </a>
+        </section>
+
+        <section className={styles.section} aria-labelledby="faq">
+          <h2 id="faq" className={styles.heading}>
+            Frequently asked questions
+          </h2>
+          <div className={styles.faqs}>
+            <details className={styles.faqItem}>
+              <summary className={styles.faqQuestion}>Can I use my existing Claude Pro or Max subscription?</summary>
+              <p className={styles.faqAnswer}>
+                Yes. Run <code className={styles.inline}>claude setup-token</code> on any machine with Claude Code installed and give the
+                token to the installer as <code className={styles.inline}>CLAUDE_CODE_OAUTH_TOKEN</code>. Turns run against your
+                subscription limits instead of pay-per-token API billing, and the token stays outside the sandbox behind the host proxy.
+              </p>
+            </details>
+            <details className={styles.faqItem}>
+              <summary className={styles.faqQuestion}>Does my Linux VPS need KVM or nested virtualization?</summary>
+              <p className={styles.faqAnswer}>
+                No. Where KVM (<code className={styles.inline}>/dev/kvm</code>) or Apple Silicon is available, forgerun boots a
+                hardware-isolated microVM (<code className={styles.inline}>libkrun</code>). On standard cloud VMs without KVM, the
+                installer automatically configures Docker with <code className={styles.inline}>gVisor</code> (
+                <code className={styles.inline}>runsc</code>) so every thread still gets its own isolated user-space kernel (0.34s cold
+                boot).
+              </p>
+            </details>
+            <details className={styles.faqItem}>
+              <summary className={styles.faqQuestion}>What happens if a prompt injection or dependency script tries to read my keys?</summary>
+              <p className={styles.faqAnswer}>
+                Inside the sandbox, environment variables hold only inert placeholders (<code className={styles.inline}>$MSB_…</code> or{" "}
+                <code className={styles.inline}>FORGERUN_PH_…</code>). A TLS proxy on the host swaps the placeholder for the real key
+                only on outbound requests to that agent&apos;s official API host. Sending the placeholder to any other host is blocked,
+                and GitHub push tokens never enter the sandbox at all.
+              </p>
+            </details>
+            <details className={styles.faqItem}>
+              <summary className={styles.faqQuestion}>Can I host the web UI on a cheap VPS and run the VMs on my Mac at home?</summary>
+              <p className={styles.faqAnswer}>
+                Yes. Run <code className={styles.inline}>forgerun server</code> on a small 1 GB VPS and{" "}
+                <code className={styles.inline}>forgerun worker</code> on your Mac or home Linux box. Workers dial out over HTTPS to
+                claim turns, stream logs, and return diffs — zero inbound ports need to be opened on your home network.
+              </p>
+            </details>
+          </div>
+        </section>
+
+        <section className={styles.starBanner} aria-label="Star on GitHub">
+          <div className={styles.starBannerText}>
+            <h2 className={styles.starBannerTitle}>Free, open-source (Apache-2.0), and built to self-host.</h2>
+            <p className={styles.starBannerSub}>
+              Star <code className={styles.inline}>depak7/forgerun</code> on GitHub to bookmark it, follow new agent adapters, or inspect
+              the code.
+            </p>
+          </div>
+          <a className={styles.starBannerBtn} href={repoURL} target="_blank" rel="noreferrer">
+            <StarIcon />
+            <span>[ star on GitHub ]</span>
           </a>
         </section>
       </main>
@@ -306,5 +391,20 @@ function InstallCommand() {
         {copied ? "[ copied ]" : "[ copy ]"}
       </button>
     </div>
+  );
+}
+
+function StarIcon() {
+  return (
+    <svg
+      className={styles.starIcon}
+      width={15}
+      height={15}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z" />
+    </svg>
   );
 }

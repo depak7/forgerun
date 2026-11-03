@@ -191,7 +191,7 @@ func TestEmbeddedDistIndexSEO(t *testing.T) {
 		`"@type": "SoftwareSourceCode"`,
 		`"@type": "VideoObject"`,
 		`href="https://forgerun.depak.dev/llms.txt"`,
-		`How forgerun compares to cloud coding agents`,
+		`How forgerun compares to other ways of running coding agents`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered index.html missing %q", want)

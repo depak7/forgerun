@@ -42,6 +42,26 @@
 .topLinks .topSignIn {
   color: var(--accent);
 }
+.starPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text) !important;
+  font-weight: 500;
+}
+.starPill:hover {
+  border-color: var(--accent-line);
+  background: var(--raised);
+}
+.starIcon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
 
 .main {
   flex: 1;
@@ -107,6 +127,7 @@
   background: var(--accent-hover);
 }
 .buttonGhost {
+  gap: 8px;
   border: 1px solid var(--line-strong);
   color: var(--text);
 }
@@ -162,6 +183,35 @@
   font-family: var(--font-mono);
   font-size: 13px;
   color: var(--faint);
+}
+
+/* Three key numbers right below the demo video. */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: -24px;
+}
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.metricVal {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: -0.4px;
+}
+.metricDesc {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .section {
@@ -366,6 +416,83 @@
   color: var(--accent-hover);
 }
 
+.faqs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 820px;
+}
+.faqItem {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 16px 20px;
+}
+.faqQuestion {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text);
+  font-size: 15px;
+}
+.faqAnswer {
+  margin-top: 12px !important;
+  font-size: 14px;
+  color: var(--text-soft) !important;
+  line-height: 1.6;
+}
+
+.starBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 28px 28px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  background: var(--accent-tint);
+}
+.starBannerText {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 640px;
+}
+.starBannerTitle {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--text);
+}
+.starBannerSub {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+.starBannerBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+}
+.starBannerBtn:hover {
+  background: var(--accent-hover);
+  color: var(--accent-ink);
+}
+.starBannerBtn .starIcon {
+  color: var(--accent-ink);
+}
+
 .footer {
   display: flex;
   flex-wrap: wrap;
@@ -408,8 +535,12 @@
   }
   .steps,
   .points,
-  .choices {
+  .choices,
+  .metrics {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .topNavHideMobile {
+    display: none;
   }
   /* The command scrolls in its box; the copy button goes under it. */
   .install {
