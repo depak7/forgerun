@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/depak7/forgerun/internal/capacity"
-	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/memory"
 	"github.com/depak7/forgerun/internal/task"
@@ -204,8 +203,8 @@ type fakeCapacity struct {
 
 func (f fakeCapacity) Capacity() (capacity.Report, bool) { return f.c, f.ok }
 
-// GET /api/capacity: what a sandbox can get now, from this machine or the
-// connected workers, and the images it can start from.
+// GET /api/capacity: what's free now, on this machine or on the connected
+// workers.
 func TestCapacity(t *testing.T) {
 	get := func(h http.Handler) capacityJSON {
 		t.Helper()
@@ -213,13 +212,6 @@ func TestCapacity(t *testing.T) {
 		json.Unmarshal(mustData(t, do(h, "GET", "/api/capacity", ""), http.StatusOK), &out)
 		return out
 	}
-	names := func(imgs []imageJSON) (out []string) {
-		for _, i := range imgs {
-			out = append(out, i.Name)
-		}
-		return out
-	}
-
 	// In-process: this machine, less its reserve and its open VMs.
 	local := capacity.Report{Total: capacity.Resources{CPUs: 8, MemMiB: 16384}, Reserved: capacity.Resources{CPUs: 1, MemMiB: 1024},
 		Promised: capacity.Resources{CPUs: 2, MemMiB: 2048}}
@@ -227,9 +219,6 @@ func TestCapacity(t *testing.T) {
 	got := get(h)
 	if got.Workers != 1 || len(got.Free) != 1 || got.Free[0] != (capacity.Resources{CPUs: 5, MemMiB: 13312}) {
 		t.Errorf("in-process: %+v", got)
-	}
-	if n := names(got.Images); !slices.Equal(n, []string{"general", "cursor", "other-agent"}) || got.Images[0].Image != sandbox.GeneralImage {
-		t.Errorf("in-process images: %+v", got.Images)
 	}
 
 	// Size unknown: no free list, but never null.
@@ -239,7 +228,7 @@ func TestCapacity(t *testing.T) {
 	}
 
 	// Workers apart: one entry per worker that reports, largest first; an
-	// older worker counts but has no entry. Images: agents some worker has.
+	// older worker counts but has no entry.
 	small := &capacity.Report{Total: capacity.Resources{CPUs: 4, MemMiB: 4096}}
 	big := &capacity.Report{Total: capacity.Resources{CPUs: 16, MemMiB: 65536}, Reserved: capacity.Resources{CPUs: 1, MemMiB: 1024}}
 	h, _, _ = setup(t, func(c *Config) {
@@ -253,8 +242,5 @@ func TestCapacity(t *testing.T) {
 	want := []capacity.Resources{{CPUs: 15, MemMiB: 64512}, {CPUs: 4, MemMiB: 4096}}
 	if got.Workers != 3 || !slices.Equal(got.Free, want) {
 		t.Errorf("workers: %+v, want free %+v", got, want)
-	}
-	if n := names(got.Images); !slices.Equal(n, []string{"general", "cursor"}) {
-		t.Errorf("worker images: %v", n)
 	}
 }

@@ -23,7 +23,6 @@ import (
 	"github.com/depak7/forgerun/internal/capacity"
 	"github.com/depak7/forgerun/internal/forge"
 	"github.com/depak7/forgerun/internal/models"
-	"github.com/depak7/forgerun/internal/sandbox"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/task"
 )
@@ -988,31 +987,19 @@ func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, out)
 }
 
-// capacityJSON is what a new sandbox can be given right now.
+// capacityJSON is what the machines running sessions have free right now.
 type capacityJSON struct {
 	Workers int `json:"workers"` // connected workers; 1 when they run in this process
 	// Free is what each worker that reports its capacity has free, largest
 	// first. Workers aren't named: that's for admins (GET /api/workers).
-	Free   []capacity.Resources `json:"free"`
-	Images []imageJSON          `json:"images"` // what a sandbox can start from
-}
-
-type imageJSON struct {
-	Name  string `json:"name"`  // "general", or the agent whose CLI it has
-	Image string `json:"image"` // e.g. "depak7/forgerun-sandbox:dev"
+	Free []capacity.Resources `json:"free"`
 }
 
 // capacityNow serves GET /api/capacity.
 func (s *Server) capacityNow(w http.ResponseWriter, r *http.Request) {
-	agents, err := s.store.ListAgents(r.Context())
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	out := capacityJSON{Free: []capacity.Resources{}, Images: []imageJSON{{Name: "general", Image: sandbox.GeneralImage}}}
-	var live []WorkerInfo
+	out := capacityJSON{Free: []capacity.Resources{}}
 	if s.workers != nil {
-		live = s.workers.Workers()
+		live := s.workers.Workers()
 		out.Workers = len(live)
 		for _, wk := range live {
 			if wk.Capacity != nil {
@@ -1030,13 +1017,6 @@ func (s *Server) capacityNow(w http.ResponseWriter, r *http.Request) {
 	slices.SortFunc(out.Free, func(a, b capacity.Resources) int {
 		return cmp.Or(cmp.Compare(b.MemMiB, a.MemMiB), cmp.Compare(b.CPUs, a.CPUs))
 	})
-	for _, a := range agents { // enabled agents some machine here can start
-		ag, err := s.agents.Get(a.ID)
-		if err != nil || (s.workers != nil && !workersHave(live, a.ID)) {
-			continue
-		}
-		out.Images = append(out.Images, imageJSON{Name: a.ID, Image: ag.Image()})
-	}
 	writeData(w, http.StatusOK, out)
 }
 
