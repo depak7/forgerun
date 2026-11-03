@@ -508,32 +508,6 @@ rest), its CA given to the sandbox. microsandbox stays the default where KVM or 
 Silicon is available. Snapshots for warm starts: `docker commit` of the session's
 container (to design).
 
-## 14. A general-purpose sandbox image
-
-**Question.** Can one image without a coding agent (`images/sandbox`) give people and
-their own agents a usable machine: clone a repo, install dependencies, and run Go, Python
-and Node tests? How big is it, and how fast does it boot?
-
-**Test** (2026-11-01, `out/sbxcheck/`): Ubuntu 24.04 with build-essential, git, Python 3.12
-(pip, venv), Node 22 and Go 1.27.3 copied from their official images, jq, ripgrep. Built
-for linux/amd64 and linux/arm64 with the `forgerun-multi` builder. Before it was pushed,
-microsandbox pulled it from a throwaway local registry (`registry:2` on 127.0.0.1:5055,
-`WithRegistryInsecure`). In a 2 CPU / 2 GiB microVM on the Mac, one script: tool versions,
-`git clone` of depak7/playground, a Go module with `go test`, Python `unittest` and
-`pytest` installed into a venv, `node --test` and an `npm install`.
-
-**Results.**
-- Everything passed (exit 0); the whole script took about 12 s, mostly the pip and npm
-  downloads.
-- Size: 1.23 GB unpacked, 281 MB to download.
-- Boot with the image already pulled: 0.4 s. The first pull wasn't timed.
-- The amd64 build, run under emulation in Docker, has the same tools.
-- The root filesystem had 3.9 GB, with 97 MB used after the script.
-- Not run under gVisor yet (no Linux host at hand).
-
-**Decision.** `depak7/forgerun-sandbox:dev` is the default image for bare sandboxes. The
-agent images stay as they are and remain selectable.
-
 ## Researched, not yet tested: Claude Code authentication
 
 Based on community guides and issue reports (not official docs), to be confirmed by
