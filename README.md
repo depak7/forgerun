@@ -191,6 +191,7 @@ first start; the agent images are pulled the first time an agent runs.
 | `CURSOR_API_KEY` | For the `cursor` agent. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | For `claude-code`; the output of `claude setup-token` (Pro/Max subscription). |
 | `OPENCODE_API_KEY` | Optional, for `opencode`'s paid models: a key from an [OpenCode Console](https://opencode.ai/console) service account ("Inference only"). Its free models need no key. |
+| `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | For `pi`: the API key of each provider whose models you'll pick (an `openrouter/…` model needs `OPENROUTER_API_KEY`, and so on). pi's subscription logins can't be used. Each key is sent only to its provider's API. |
 
 An agent without its key is still listed; only its tasks are refused, except on models that need no key.
 

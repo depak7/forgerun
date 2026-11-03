@@ -66,7 +66,9 @@ func usage() {
 
 The database URL defaults to $FORGERUN_DATABASE_URL, then $DATABASE_URL, then the docker-compose dev database.
 Agents read their credential when a task needs it: CURSOR_API_KEY (cursor),
-CLAUDE_CODE_OAUTH_TOKEN (claude-code, from claude setup-token). serve also
+CLAUDE_CODE_OAUTH_TOKEN (claude-code, from claude setup-token), OPENCODE_API_KEY
+(opencode's paid models), and for pi its model's provider's key: OPENROUTER_API_KEY,
+OPENAI_API_KEY or ANTHROPIC_API_KEY. serve also
 needs GITHUB_TOKEN to push threads' branches and open pull requests.
 server and worker share FORGERUN_WORKER_TOKEN; agent keys belong on the workers.
 `)
