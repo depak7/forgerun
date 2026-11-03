@@ -3,9 +3,21 @@
 [![License: Apache-2.0](https://img.shields.io/github/license/depak7/forgerun)](LICENSE)
 [![Go version](https://img.shields.io/github/go-mod/go-version/depak7/forgerun)](go.mod)
 [![CI](https://github.com/depak7/forgerun/actions/workflows/ci.yml/badge.svg)](https://github.com/depak7/forgerun/actions/workflows/ci.yml)
+[![GitHub stars](https://img.shields.io/github/stars/depak7/forgerun?style=flat)](https://github.com/depak7/forgerun/stargazers)
+[![Live Demo](https://img.shields.io/badge/demo-forgerun.depak.dev-4ADE9B)](https://forgerun.depak.dev)
 
-Run Claude Code, Cursor CLI and OpenCode on your repo, each in its own microVM, on your
-own box. Review the diff, then push.
+**Open-source, self-hosted AI coding agent runner.** Run Claude Code, Cursor CLI, OpenCode, and Pi on your GitHub repositories — each conversation thread in its own isolated microVM (via [microsandbox](https://github.com/superradcompany/microsandbox) / `libkrun`) or [gVisor](https://gvisor.dev) sandbox, on your own Mac or Linux machine. Review the unified diff, then push a branch or pull request.
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="https://forgerun.depak.dev">Live Demo</a> ·
+  <a href="#how-it-works">How It Works</a> ·
+  <a href="#how-it-compares">Comparison</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="docs/deploying.md">Deploying</a> ·
+  <a href="docs/experiments.md">Benchmarks</a> ·
+  <a href="#faq">FAQ</a>
+</p>
 
 [![forgerun demo: click to watch with sound](docs/demo.gif)](https://forgerun.depak.dev)
 
@@ -326,6 +338,50 @@ web/                the React UI (embedded with -tags webui)
 images/             agent VM images
 docs/experiments.md what each experiment showed, and why things are the way they are
 ```
+
+## FAQ
+
+<details>
+<summary><b>What is forgerun?</b></summary>
+<br />
+
+forgerun is an open-source (Apache-2.0), self-hosted coding agent runner packaged as a single Go binary with an embedded React web UI. It executes coding agents (`claude-code`, `cursor`, `opencode`, `pi`) on your GitHub repositories inside hardware-isolated `libkrun` microVMs or gVisor user-space kernel sandboxes, keeps warm disk snapshots for 2.8-second task starts, and proxies API keys outside the sandbox.
+
+</details>
+
+<details>
+<summary><b>How does forgerun keep API keys and GitHub tokens out of the sandbox?</b></summary>
+<br />
+
+Inside the microVM or gVisor container, credential environment variables hold only inert placeholders (`$MSB_…` or `FORGERUN_PH_…`). A TLS-intercepting proxy on the host swaps the placeholder for the real secret only on outbound HTTPS requests to the agent's official API host (`api.anthropic.com`, `*.cursor.sh`, `opencode.ai`, etc.). Sending the placeholder to any other domain is blocked. GitHub tokens never enter the VM at all: private repositories are fetched on the host and diffs are pushed from the host only when you click push.
+
+</details>
+
+<details>
+<summary><b>Can I run forgerun on a cheap cloud VPS without KVM / nested virtualization?</b></summary>
+<br />
+
+Yes. When KVM (`/dev/kvm`) or Apple Silicon hypervisor support is present, forgerun defaults to `microsandbox` microVMs. On standard Linux cloud VMs without nested virtualization, the installer automatically sets up Docker with the `gVisor` (`runsc`) user-space kernel runtime (0.34s cold sandbox boot) and forgerun's built-in secret proxy. You can also run `forgerun server` (orchestrator + web UI) on a small 1 GB VPS and connect `forgerun worker` from your Mac or home Linux box over outbound HTTPS.
+
+</details>
+
+<details>
+<summary><b>Can I use my existing Claude Pro or Max subscription?</b></summary>
+<br />
+
+Yes. Run `claude setup-token` on any machine with Claude Code installed, then set `CLAUDE_CODE_OAUTH_TOKEN` on your forgerun worker or server. Tasks run against your Claude Pro or Max plan limits instead of pay-per-token API billing, and the OAuth token stays on the host behind the secret proxy.
+
+</details>
+
+## Star history
+
+<a href="https://www.star-history.com/#depak7/forgerun&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=depak7/forgerun&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=depak7/forgerun&type=Date" />
+    <img alt="forgerun GitHub stars over time" src="https://api.star-history.com/svg?repos=depak7/forgerun&type=Date" width="720" />
+  </picture>
+</a>
 
 ## License
 
