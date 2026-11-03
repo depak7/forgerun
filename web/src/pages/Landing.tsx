@@ -116,18 +116,77 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
           <div className={styles.agents}>
             <div className={styles.agent}>
               <span className="mono">cursor</span>
-              <span>Cursor CLI, with its model list</span>
+              <span>Cursor CLI, with its model list, thinking modes and effort levels</span>
             </div>
             <div className={styles.agent}>
               <span className="mono">claude-code</span>
-              <span>Claude Code: Sonnet, Opus, Fable</span>
+              <span>Claude Code: Sonnet, Opus, Fable (runs on your Claude Pro or Max subscription)</span>
             </div>
             <div className={styles.agent}>
               <span className="mono">opencode</span>
               <span>OpenCode, including free models that need no key</span>
             </div>
+            <div className={styles.agent}>
+              <span className="mono">pi</span>
+              <span>Pi coding agent across OpenRouter, OpenAI and Anthropic keys</span>
+            </div>
           </div>
           <p className={styles.note}>Agents are adapters: adding another is one Go file and a list of models.</p>
+        </section>
+
+        <section className={styles.section} aria-labelledby="compare">
+          <h2 id="compare" className={styles.heading}>
+            How it compares
+          </h2>
+          <div className={styles.tableWrap}>
+            <table className={styles.compareTable}>
+              <thead>
+                <tr>
+                  <th scope="col">Platform</th>
+                  <th scope="col">Self-hosted</th>
+                  <th scope="col">Open source</th>
+                  <th scope="col">A VM per task</th>
+                  <th scope="col">Keys hidden from sandbox</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <strong className="mono">forgerun</strong>
+                  </td>
+                  <td>Yes</td>
+                  <td>Yes (Apache-2.0)</td>
+                  <td>Yes: microVM (libkrun) or gVisor (0.34s boot)</td>
+                  <td>Yes: host-side TLS proxy swaps placeholders</td>
+                </tr>
+                <tr>
+                  <td>Cursor cloud agents</td>
+                  <td>Partly (tools only)</td>
+                  <td>No</td>
+                  <td>Cloud only (shared on self-hosted)</td>
+                  <td>No: env secrets visible to agent</td>
+                </tr>
+                <tr>
+                  <td>OpenAI Codex cloud</td>
+                  <td>No</td>
+                  <td>No</td>
+                  <td>Yes (cloud VM)</td>
+                  <td>Partly (network secrets proxied)</td>
+                </tr>
+                <tr>
+                  <td>OpenHands</td>
+                  <td>Yes</td>
+                  <td>Yes (MIT)</td>
+                  <td>No (Docker containers)</td>
+                  <td>No (custom secrets exported)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className={styles.note}>
+            Warm disk snapshots cut task start from <strong>26.8s to 2.8s</strong> on <code className={styles.inline}>expressjs/express</code>{" "}
+            (<a className={styles.inlineLink} href={`${repoURL}/blob/main/docs/experiments.md`}>read the benchmarks →</a>).
+          </p>
         </section>
 
         <section className={styles.section} aria-labelledby="signin">
@@ -175,7 +234,12 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
 
       <footer className={styles.footer}>
         <span>forgerun · Apache-2.0</span>
-        <a href={repoURL}>github.com/depak7/forgerun</a>
+        <div className={styles.footerLinks}>
+          <a href={`${repoURL}/blob/main/docs/deploying.md`}>Deploying</a>
+          <a href={`${repoURL}/blob/main/docs/experiments.md`}>Benchmarks</a>
+          <a href="/llms.txt">llms.txt</a>
+          <a href={repoURL}>github.com/depak7/forgerun</a>
+        </div>
       </footer>
     </div>
   );

@@ -3,47 +3,254 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>forgerun: run coding agents on your own VM</title>
+    <title>forgerun: Self-Hosted AI Coding Agent Runner in MicroVMs</title>
     <meta
       name="description"
-      content="Open-source and self-hosted. forgerun runs Claude Code, Cursor CLI and OpenCode on your repo, every turn in its own sandbox, on any Linux VM or Mac. Stop paying for sandboxes."
+      content="Open-source, self-hosted runner for Claude Code, Cursor CLI &amp; OpenCode. Run each coding task in an isolated microVM or gVisor sandbox with 2.8s warm snapshots."
     />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="author" content="Deepak S (depak7)" />
     <meta name="theme-color" content="#0F1110" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <!-- %SITE% is the server's FORGERUN_PUBLIC_URL (empty when unset), filled in as it serves this page. -->
     <link rel="canonical" href="%SITE%/" />
+    <link rel="alternate" type="text/markdown" href="%SITE%/llms.txt" title="forgerun LLM &amp; Agent Documentation" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="forgerun" />
+    <meta property="og:locale" content="en_US" />
     <meta property="og:url" content="%SITE%/" />
-    <meta property="og:title" content="forgerun: run coding agents on your own VM" />
+    <meta property="og:title" content="forgerun: Self-Hosted AI Coding Agent Runner in MicroVMs" />
     <meta
       property="og:description"
-      content="Open source, self-hosted. Claude Code, Cursor CLI and OpenCode, every turn in its own sandbox. Stop paying for sandboxes."
+      content="Open-source, self-hosted runner for Claude Code, Cursor CLI &amp; OpenCode. Run each coding task in an isolated microVM or gVisor sandbox with 2.8s warm snapshots."
     />
     <meta property="og:image" content="%SITE%/og.png" />
+    <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="forgerun: stop paying for sandboxes. Run coding agents on your own VM." />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="forgerun: run coding agents on your own VM" />
-    <meta name="twitter:description" content="Open source, self-hosted. Every turn in its own sandbox. Stop paying for sandboxes." />
+    <meta name="twitter:title" content="forgerun: Self-Hosted AI Coding Agent Runner in MicroVMs" />
+    <meta
+      name="twitter:description"
+      content="Open-source, self-hosted runner for Claude Code, Cursor CLI &amp; OpenCode. Every turn in its own microVM or gVisor sandbox. Stop paying for sandboxes."
+    />
     <meta name="twitter:image" content="%SITE%/og.png" />
+    <meta name="twitter:image:alt" content="forgerun: stop paying for sandboxes. Run coding agents on your own VM." />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "%SITE%/#organization",
+            "name": "forgerun",
+            "url": "%SITE%/",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "%SITE%/favicon.svg"
+            },
+            "sameAs": [
+              "https://github.com/depak7/forgerun"
+            ]
+          },
+          {
+            "@type": "WebSite",
+            "@id": "%SITE%/#website",
+            "name": "forgerun",
+            "url": "%SITE%/",
+            "publisher": {
+              "@id": "%SITE%/#organization"
+            }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "%SITE%/#software",
+            "name": "forgerun",
+            "applicationCategory": "DeveloperApplication",
+            "operatingSystem": "Linux, macOS (Apple Silicon)",
+            "description": "Open-source, self-hosted AI coding agent runner. Runs Claude Code, Cursor CLI, OpenCode, and Pi on your GitHub repositories inside isolated libkrun microVMs or gVisor sandboxes with host-side secret proxying and 2.8-second warm disk snapshots.",
+            "url": "%SITE%/",
+            "downloadUrl": "https://raw.githubusercontent.com/depak7/forgerun/main/install.sh",
+            "softwareHelp": "https://github.com/depak7/forgerun#readme",
+            "license": "https://www.apache.org/licenses/LICENSE-2.0",
+            "isAccessibleForFree": true,
+            "author": {
+              "@id": "%SITE%/#organization"
+            },
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            },
+            "featureList": [
+              "Hardware-isolated microVM per thread via microsandbox (libkrun) on macOS Apple Silicon and Linux KVM",
+              "User-space kernel sandbox fallback via gVisor (runsc) on standard cloud VMs without KVM (0.34s cold boot)",
+              "Host-side TLS secret proxy swaps placeholder tokens so API keys never enter the sandbox",
+              "Warm disk snapshots cut task startup from 26.8s to 2.8s with dependencies pre-installed",
+              "Pluggable adapters for Claude Code, Cursor CLI, OpenCode, and Pi",
+              "Diff review and squashed branch push with optional GitHub pull request creation",
+              "Split orchestrator and outbound HTTPS worker architecture with zero inbound ports required"
+            ]
+          },
+          {
+            "@type": "SoftwareSourceCode",
+            "@id": "%SITE%/#sourcecode",
+            "name": "forgerun",
+            "codeRepository": "https://github.com/depak7/forgerun",
+            "programmingLanguage": [
+              "Go",
+              "TypeScript"
+            ],
+            "runtimePlatform": [
+              "Linux",
+              "macOS"
+            ],
+            "license": "https://www.apache.org/licenses/LICENSE-2.0",
+            "targetProduct": {
+              "@id": "%SITE%/#software"
+            }
+          },
+          {
+            "@type": "VideoObject",
+            "@id": "%SITE%/#demo-video",
+            "name": "forgerun 30-second live demo: running coding agents in an isolated microVM",
+            "description": "Watch a real 30-second task run on forgerun: selecting a GitHub repository and coding agent, executing inside an isolated microVM, reviewing the diff, and pushing a branch.",
+            "thumbnailUrl": "%SITE%/demo/poster.jpg",
+            "contentUrl": "%SITE%/demo/forgerun-demo.mp4",
+            "uploadDate": "2026-10-26T00:00:00Z",
+            "duration": "PT30S",
+            "creator": {
+              "@id": "%SITE%/#organization"
+            }
+          }
+        ]
+      }
+    </script>
   </head>
   <body style="margin: 0; background: #0f1110">
     <div id="root">
-      <!-- What forgerun is, readable without JavaScript (search engines, link previews).
-           The app replaces it as soon as it starts. -->
-      <main style="max-width: 720px; margin: 0 auto; padding: 96px 24px; font-family: system-ui, sans-serif; color: #eceeec">
-        <h1 style="font-weight: 500">Stop paying for sandboxes. Run coding agents on your own VM.</h1>
-        <p style="color: #9da39e; line-height: 1.55">
-          forgerun runs Claude Code, Cursor CLI and OpenCode on your repo, every turn in its own sandbox: a microVM, or gVisor
-          on VMs without KVM. Bring any Linux server or a Mac, and nothing reaches your repo until you push. Open source,
-          Apache-2.0.
+      <!-- What forgerun is, readable without JavaScript (search engines, AI crawlers, link previews).
+           The React app replaces #root as soon as it hydrates. -->
+      <main style="max-width: 820px; margin: 0 auto; padding: 72px 24px; font-family: system-ui, sans-serif; color: #eceeec; line-height: 1.6">
+        <p style="font-family: monospace; font-size: 12px; color: #4ade9b; letter-spacing: 0.8px">OPEN SOURCE · APACHE-2.0 · SELF-HOSTED</p>
+        <h1 style="font-weight: 500; font-size: 40px; line-height: 1.15">Stop paying for sandboxes. Run coding agents on your own VM.</h1>
+        <p style="color: #d4d8d4; font-size: 18px">
+          <strong>forgerun</strong> is an open-source, self-hosted AI coding agent runner that executes
+          <a style="color: #4ade9b" href="https://code.claude.com/docs">Claude Code</a>,
+          <a style="color: #4ade9b" href="https://cursor.com/docs/cloud-agent">Cursor CLI</a>,
+          <a style="color: #4ade9b" href="https://opencode.ai">OpenCode</a>, and Pi on your GitHub repositories.
+          Every conversation thread runs in its own isolated sandbox — a hardware-virtualized microVM via
+          <a style="color: #4ade9b" href="https://github.com/superradcompany/microsandbox">microsandbox</a> (libkrun) on Apple Silicon Macs and Linux with KVM, or a
+          <a style="color: #4ade9b" href="https://gvisor.dev">gVisor</a> user-space kernel sandbox on any standard Linux VPS without nested virtualization.
         </p>
         <p style="color: #9da39e">
-          Try it yourself: <code>curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh</code>
+          Try it yourself with one command: <code>curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh</code>
         </p>
-        <p><a style="color: #4ade9b" href="https://github.com/depak7/forgerun">github.com/depak7/forgerun</a></p>
+        <p>
+          <a style="color: #4ade9b" href="https://github.com/depak7/forgerun">View on GitHub (github.com/depak7/forgerun)</a> ·
+          <a style="color: #4ade9b" href="https://github.com/depak7/forgerun/blob/main/docs/deploying.md">Deployment Guide</a> ·
+          <a style="color: #4ade9b" href="https://github.com/depak7/forgerun/blob/main/docs/experiments.md">Benchmarks &amp; Architecture</a> ·
+          <a style="color: #4ade9b" href="%SITE%/llms.txt">llms.txt</a>
+        </p>
+
+        <figure style="margin: 32px 0">
+          <img
+            src="/og.png"
+            alt="forgerun overview: self-hosted coding agent runner with isolated microVMs, secret proxy, and warm snapshots"
+            width="1200"
+            height="630"
+            style="max-width: 100%; height: auto; border-radius: 10px; border: 1px solid #232725"
+          />
+        </figure>
+
+        <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">How it works</h2>
+        <ol style="color: #9da39e">
+          <li>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">01. Give it a task</h3>
+            <p style="margin-top: 0">Pick a GitHub repository, an agent (<code>cursor</code>, <code>claude-code</code>, <code>opencode</code>, or <code>pi</code>), and a model, then describe what you want changed — or ask for a read-only plan first and approve it before any code is modified.</p>
+          </li>
+          <li>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">02. It works in an isolated microVM</h3>
+            <p style="margin-top: 0">The agent clones your repository, installs packages, builds, and runs tests inside its own dedicated VM. Warm disk snapshots reduce task startup time from <strong>26.8 seconds to 2.8 seconds</strong> (measured on <code>expressjs/express</code> with 304 npm packages pre-installed). The VM stays alive between follow-up messages so the agent retains its working tree and conversation context.</p>
+          </li>
+          <li>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">03. Review the diff, then push</h3>
+            <p style="margin-top: 0">Inspect the live execution log and unified git diff for each turn in the web UI. When satisfied, press push to publish a single squashed commit to a <code>forgerun/…</code> branch and optionally open a GitHub pull request.</p>
+          </li>
+        </ol>
+
+        <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">Why it's safe to point at your code</h2>
+        <ul style="color: #9da39e">
+          <li>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">One sandbox per thread</h3>
+            <p style="margin-top: 0">Each thread executes inside its own libkrun microVM (or a gVisor <code>runsc</code> container with a dedicated user-space kernel burning 0.34s cold boot on KVM-less Linux hosts). Untrusted code and dependencies stay isolated from your host kernel.</p>
+          </li>
+          <li>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Keys never enter the sandbox</h3>
+            <p style="margin-top: 0">Inside the sandbox, credential environment variables contain only inert placeholders (<code>$MSB_…</code> or <code>FORGERUN_PH_…</code>). A host-side TLS proxy swaps in the real API key exclusively for requests destined to the agent's official API endpoint.</p>
+          </li>
+          <li>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Nothing reaches GitHub until you push</h3>
+            <p style="margin-top: 0">Agents have no GitHub push credentials inside the sandbox. Changes are extracted as a git patch and only pushed by the host when you explicitly click push.</p>
+          </li>
+        </ul>
+
+        <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">How forgerun compares to cloud coding agents</h2>
+        <table style="width: 100%; border-collapse: collapse; color: #d4d8d4; font-size: 14px">
+          <thead>
+            <tr style="border-bottom: 1px solid #2a2f2c; text-align: left">
+              <th style="padding: 8px">Platform</th>
+              <th style="padding: 8px">Self-Hosted</th>
+              <th style="padding: 8px">Open Source</th>
+              <th style="padding: 8px">Dedicated VM per Task</th>
+              <th style="padding: 8px">API Keys Hidden from Sandbox</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px"><strong>forgerun</strong></td>
+              <td style="padding: 8px">Yes (any Linux VM or Apple Silicon Mac)</td>
+              <td style="padding: 8px">Yes (Apache-2.0)</td>
+              <td style="padding: 8px">Yes (microVM or gVisor sandbox)</td>
+              <td style="padding: 8px">Yes (host-side TLS placeholder proxy)</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">Cursor Cloud Agents</td>
+              <td style="padding: 8px">Partly (tools only; loop in cloud)</td>
+              <td style="padding: 8px">No</td>
+              <td style="padding: 8px">Cloud only (shared on self-hosted)</td>
+              <td style="padding: 8px">No (env secrets readable by agent)</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">OpenAI Codex Cloud</td>
+              <td style="padding: 8px">No</td>
+              <td style="padding: 8px">No</td>
+              <td style="padding: 8px">Yes (cloud VM)</td>
+              <td style="padding: 8px">Partly (network secrets proxied)</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">OpenHands</td>
+              <td style="padding: 8px">Yes</td>
+              <td style="padding: 8px">Yes (MIT)</td>
+              <td style="padding: 8px">No (shared Docker kernel by default)</td>
+              <td style="padding: 8px">No (custom secrets exported to env)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">Supported Agents &amp; Subscriptions</h2>
+        <ul style="color: #9da39e">
+          <li><code>cursor</code> — Cursor CLI with full model catalog, thinking modes, and effort controls.</li>
+          <li><code>claude-code</code> — Anthropic Claude Code (Sonnet, Opus, Fable) using your existing Claude Pro or Max subscription via <code>claude setup-token</code>.</li>
+          <li><code>opencode</code> — OpenCode CLI, including zero-configuration free models that require no API key.</li>
+          <li><code>pi</code> — Multi-provider coding agent supporting OpenRouter, OpenAI, and Anthropic keys.</li>
+        </ul>
+
+        <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">Run it yourself</h2>
+        <p style="color: #9da39e">
+          Deploy everything in one binary (<code>forgerun serve</code>) on an Apple Silicon Mac or Linux server, or split the lightweight web orchestrator (<code>forgerun server</code>) on a $5 VPS while connecting outbound workers (<code>forgerun worker</code>) from your own hardware over HTTPS with zero open inbound ports. Run <code>forgerun doctor</code> anytime to verify KVM, gVisor, microsandbox, Postgres, and token readiness.
+        </p>
       </main>
     </div>
     <script type="module" src="/src/main.tsx"></script>
