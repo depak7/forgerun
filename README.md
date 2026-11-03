@@ -223,6 +223,7 @@ is yours. With them, people sign in with GitHub and see only their own threads.
 | `FORGERUN_SECRET_KEY` | encrypts users' GitHub tokens at rest: `openssl rand -hex 32` |
 | `FORGERUN_ADMINS` | GitHub usernames that see everything and the settings |
 | `FORGERUN_HIDE_SIGN_IN` | `true` keeps the sign-in buttons off the landing page; signing in still works at `/auth/github/login` |
+| `FORGERUN_ANALYTICS_WEBSITE_ID` | a website ID for the analytics script at `cloud.umami.is`: the pages load it. Unset (the default), they load no analytics |
 
 ### Useful `serve` flags
 

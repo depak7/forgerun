@@ -5,7 +5,6 @@
 package webui
 
 import (
-	"bytes"
 	"html"
 	"io/fs"
 	"net/http"
@@ -26,12 +25,18 @@ func Files() fs.FS { return files }
 // into index.html's link-preview, canonical and JSON-LD tags, robots.txt,
 // sitemap.xml and llms.txt, so search engines and link previews see this
 // server's own address.
-func Handler(fsys fs.FS, site string) http.Handler {
+//
+// analytics is a website ID for the analytics script
+// (FORGERUN_ANALYTICS_WEBSITE_ID, or ""). With one, index.html loads the
+// script; without one the page has no script tag at all, so a self-hosted
+// server sends page views nowhere.
+func Handler(fsys fs.FS, site, analytics string) http.Handler {
 	if fsys == nil {
 		return http.HandlerFunc(placeholder)
 	}
 	// Escaped once: it goes into HTML attributes and XML.
 	site = html.EscapeString(strings.TrimRight(site, "/"))
+	page := strings.NewReplacer("%SITE%", site, "%ANALYTICS%", analyticsTag(analytics))
 	files := http.FileServerFS(fsys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -70,7 +75,7 @@ func Handler(fsys fs.FS, site string) http.Handler {
 		if strings.HasPrefix(name, "assets/") || !isAppRoute(name) {
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("X-Robots-Tag", "noindex")
-			serveIndex(w, fsys, site, http.StatusNotFound)
+			serveIndex(w, fsys, page, http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Vary", "Accept")
@@ -79,19 +84,29 @@ func Handler(fsys fs.FS, site string) http.Handler {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-cache") // always pick up a new build
-		serveIndex(w, fsys, site, http.StatusOK)
+		serveIndex(w, fsys, page, http.StatusOK)
 	})
 }
 
-func serveIndex(w http.ResponseWriter, fsys fs.FS, site string, status int) {
-	page, err := fs.ReadFile(fsys, "index.html")
+// analyticsTag is the script tag that loads the analytics script for
+// website id, or "" without one.
+func analyticsTag(id string) string {
+	if id = strings.TrimSpace(id); id == "" {
+		return ""
+	}
+	return `<script defer src="https://cloud.umami.is/script.js" data-website-id="` + html.EscapeString(id) + `"></script>`
+}
+
+// serveIndex sends index.html with page's placeholders filled in.
+func serveIndex(w http.ResponseWriter, fsys fs.FS, page *strings.Replacer, status int) {
+	index, err := fs.ReadFile(fsys, "index.html")
 	if err != nil {
 		http.Error(w, "index.html is missing from the build", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	_, _ = w.Write(bytes.ReplaceAll(page, []byte("%SITE%"), []byte(site)))
+	_, _ = page.WriteString(w, string(index))
 }
 
 // isAppRoute reports whether clean relative path name is a valid client-side

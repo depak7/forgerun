@@ -10,7 +10,7 @@ import (
 
 // app is a stand-in for the Vite build.
 var app = fstest.MapFS{
-	"index.html":          {Data: []byte(`<!doctype html><link rel="canonical" href="%SITE%/"><div id=root></div>`)},
+	"index.html":          {Data: []byte(`<!doctype html><link rel="canonical" href="%SITE%/">%ANALYTICS%<div id=root></div>`)},
 	"assets/index-abc.js": {Data: []byte("console.log('app')")},
 }
 
@@ -21,7 +21,7 @@ func get(h http.Handler, path string) *httptest.ResponseRecorder {
 }
 
 func TestServesTheApp(t *testing.T) {
-	h := Handler(app, "")
+	h := Handler(app, "", "")
 	for _, path := range []string{"/", "/threads/t-123", "/settings", "/tasks/new"} {
 		rec := get(h, path)
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id=root`) {
@@ -34,28 +34,28 @@ func TestServesTheApp(t *testing.T) {
 }
 
 func TestServesAssetsWithLongCaching(t *testing.T) {
-	rec := get(Handler(app, ""), "/assets/index-abc.js")
+	rec := get(Handler(app, "", ""), "/assets/index-abc.js")
 	if rec.Code != http.StatusOK || rec.Body.String() != "console.log('app')" {
 		t.Fatalf("asset: %d %q", rec.Code, rec.Body)
 	}
 	if !strings.Contains(rec.Header().Get("Cache-Control"), "immutable") {
 		t.Errorf("asset cache = %q", rec.Header().Get("Cache-Control"))
 	}
-	if rec := get(Handler(app, ""), "/assets/gone-old.js"); rec.Code != http.StatusNotFound {
+	if rec := get(Handler(app, "", ""), "/assets/gone-old.js"); rec.Code != http.StatusNotFound {
 		t.Errorf("missing asset: %d, want 404 (not the app)", rec.Code)
 	}
 }
 
 func TestOnlyReads(t *testing.T) {
 	rec := httptest.NewRecorder()
-	Handler(app, "").ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", nil))
+	Handler(app, "", "").ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST: %d", rec.Code)
 	}
 }
 
 func TestPlaceholderWithoutUI(t *testing.T) {
-	rec := get(Handler(nil, ""), "/anything")
+	rec := get(Handler(nil, "", ""), "/anything")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "make build") {
 		t.Errorf("placeholder: %d %q", rec.Code, rec.Body)
 	}
@@ -65,22 +65,22 @@ func TestPlaceholderWithoutUI(t *testing.T) {
 // engines see it; without one the links stay relative.
 func TestFillsInTheSite(t *testing.T) {
 	for _, path := range []string{"/", "/index.html", "/threads/t-1"} {
-		body := get(Handler(app, "https://forgerun.example.com/"), path).Body.String()
+		body := get(Handler(app, "https://forgerun.example.com/", ""), path).Body.String()
 		if !strings.Contains(body, `href="https://forgerun.example.com/"`) || strings.Contains(body, "%SITE%") {
 			t.Errorf("%s: %q", path, body)
 		}
 	}
-	if body := get(Handler(app, ""), "/").Body.String(); !strings.Contains(body, `href="/"`) {
+	if body := get(Handler(app, "", ""), "/").Body.String(); !strings.Contains(body, `href="/"`) {
 		t.Errorf("no site: %q", body)
 	}
 	// It's config, but it lands in HTML: escaped.
-	if body := get(Handler(app, `https://x.example.com/"><script>`), "/").Body.String(); strings.Contains(body, "<script>") {
+	if body := get(Handler(app, `https://x.example.com/"><script>`, ""), "/").Body.String(); strings.Contains(body, "<script>") {
 		t.Errorf("not escaped: %q", body)
 	}
 }
 
 func TestRobotsAndSitemap(t *testing.T) {
-	h := Handler(app, "https://forgerun.example.com")
+	h := Handler(app, "https://forgerun.example.com", "")
 	robots := get(h, "/robots.txt")
 	for _, want := range []string{
 		"Disallow: /api/",
@@ -105,16 +105,16 @@ func TestRobotsAndSitemap(t *testing.T) {
 		t.Errorf("sitemap: %q %q", sm.Header().Get("Content-Type"), sm.Body)
 	}
 	// Without an address there's no sitemap, and robots.txt doesn't point to one.
-	if rec := get(Handler(app, ""), "/sitemap.xml"); rec.Code != http.StatusNotFound {
+	if rec := get(Handler(app, "", ""), "/sitemap.xml"); rec.Code != http.StatusNotFound {
 		t.Errorf("sitemap without a site: %d", rec.Code)
 	}
-	if body := get(Handler(app, ""), "/robots.txt").Body.String(); strings.Contains(body, "Sitemap") {
+	if body := get(Handler(app, "", ""), "/robots.txt").Body.String(); strings.Contains(body, "Sitemap") {
 		t.Errorf("robots without a site: %q", body)
 	}
 }
 
 func TestLlmsTxtAndMarkdownDelivery(t *testing.T) {
-	h := Handler(app, "https://forgerun.example.com")
+	h := Handler(app, "https://forgerun.example.com", "")
 	for _, path := range []string{"/llms.txt", "/llms-full.txt", "/index.md"} {
 		rec := get(h, path)
 		if rec.Code != http.StatusOK {
@@ -141,7 +141,7 @@ func TestLlmsTxtAndMarkdownDelivery(t *testing.T) {
 }
 
 func TestUnknownPathsReturnReal404(t *testing.T) {
-	h := Handler(app, "https://forgerun.example.com")
+	h := Handler(app, "https://forgerun.example.com", "")
 	for _, path := range []string{
 		"/no-such-page",
 		"/.well-known/ai-catalog.json",
@@ -163,7 +163,7 @@ func TestUnknownPathsReturnReal404(t *testing.T) {
 }
 
 func TestSecurityHeaders(t *testing.T) {
-	rec := get(Handler(app, "https://forgerun.example.com"), "/")
+	rec := get(Handler(app, "https://forgerun.example.com", ""), "/")
 	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("X-Content-Type-Options = %q", rec.Header().Get("X-Content-Type-Options"))
 	}
@@ -180,7 +180,7 @@ func TestEmbeddedDistIndexSEO(t *testing.T) {
 	if fsys == nil {
 		t.Skip("built without -tags webui")
 	}
-	rec := get(Handler(fsys, "https://forgerun.depak.dev"), "/")
+	rec := get(Handler(fsys, "https://forgerun.depak.dev", ""), "/")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -199,5 +199,23 @@ func TestEmbeddedDistIndexSEO(t *testing.T) {
 	}
 	if strings.Contains(body, "%SITE%") {
 		t.Error("rendered index.html still contains unexpanded %SITE% placeholder")
+	}
+}
+
+// The analytics script loads only when the server has a website ID; without
+// one the page has no script tag, so a self-hosted server reports nothing.
+func TestAnalytics(t *testing.T) {
+	for _, path := range []string{"/", "/threads/t-1", "/nope"} {
+		body := get(Handler(app, "", "abc-123"), path).Body.String()
+		if !strings.Contains(body, `<script defer src="https://cloud.umami.is/script.js" data-website-id="abc-123"></script>`) {
+			t.Errorf("%s: %q", path, body)
+		}
+	}
+	if body := get(Handler(app, "", ""), "/").Body.String(); strings.Contains(body, "<script") || strings.Contains(body, "%ANALYTICS%") {
+		t.Errorf("no website ID: %q", body)
+	}
+	// It's config, but it lands in HTML: escaped.
+	if body := get(Handler(app, "", `x"><img src=y>`), "/").Body.String(); strings.Contains(body, "<img") {
+		t.Errorf("not escaped: %q", body)
 	}
 }
