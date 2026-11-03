@@ -57,7 +57,7 @@ func TestHandoffTools(t *testing.T) {
 	write(t, src, "app.go", "package app\n// wip\n")
 	write(t, src, ".env", "KEY=x\n")
 
-	args, _ := json.Marshal(map[string]any{"path": filepath.Join(src), "summary": "Requested: X. Done: Y. Left: Z."})
+	args, _ := json.Marshal(map[string]any{"path": filepath.Join(src), "title": " Fix  the\nthing ", "summary": "Requested: X. Done: Y. Left: Z."})
 	out, err := call(t, tools, "forgerun_handoff", string(args))
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestHandoffTools(t *testing.T) {
 	}
 	id := threads[0].ID
 	rec, _ := s.Get(context.Background(), id)
-	if rec.FolderID == "" || !strings.HasPrefix(rec.Prompt, handoffPreamble) || !strings.HasSuffix(rec.Prompt, "Left: Z.") {
+	if rec.FolderID == "" || rec.Prompt != "Fix the thing\n\nRequested: X. Done: Y. Left: Z.\n\n"+handoffNote {
 		t.Errorf("thread %+v", rec)
 	}
 	if f, _ := s.GetFolder(context.Background(), rec.FolderID); f.Name != filepath.Base(src) {
@@ -108,8 +108,8 @@ func TestHandoffTools(t *testing.T) {
 func TestHandoffErrors(t *testing.T) {
 	c, _ := server(t)
 	tools := Tools(c)
-	if _, err := call(t, tools, "forgerun_handoff", `{"path":"/tmp"}`); err == nil {
-		t.Error("no summary: no error")
+	if _, err := call(t, tools, "forgerun_handoff", `{"path":"/tmp","summary":"s"}`); err == nil {
+		t.Error("no title: no error")
 	}
 	if _, err := call(t, tools, "forgerun_status", `{}`); err == nil {
 		t.Error("no thread: no error")

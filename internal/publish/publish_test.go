@@ -132,7 +132,7 @@ func (f *fixture) request(t *testing.T, summary string) task.PublishRequest {
 func TestBranch(t *testing.T) {
 	tests := []struct{ id, prompt, want string }{
 		{"t-20261015-224534-9fe9cc", "Add a hello world program in Go", "forgerun/add-a-hello-world-program-in-go-9fe9cc"},
-		{"t-1-abcdef", "Fix the `parseDate()` bug!\nDetails: it's off by one.", "forgerun/fix-the-parsedate-bug-details-it-s-off-abcdef"},
+		{"t-1-abcdef", "Fix the `parseDate()` bug!\nDetails: it's off by one.", "forgerun/fix-the-parsedate-bug-abcdef"},
 		{"t-1-abcdef", "Ünïcode only: 日本語", "forgerun/n-code-only-abcdef"},
 		{"t-1-abcdef", "!!!", "forgerun/abcdef"},
 		{"t-1-abcdef", strings.Repeat("x", 60), "forgerun/" + strings.Repeat("x", 40) + "-abcdef"},

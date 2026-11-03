@@ -44,11 +44,13 @@ const (
 const maxSlug = 40
 
 // Branch is the branch a thread's changes are pushed to: a few words of the
-// prompt and the end of the task ID, e.g. forgerun/add-a-hello-world-9fe9cc.
-// The ID's random tail keeps two tasks with the same prompt apart, so a push
-// never lands on someone else's branch (pushes are never forced).
+// prompt's first line (which titles the pull request too) and the end of
+// the task ID, e.g. forgerun/add-a-hello-world-9fe9cc. The ID's random tail
+// keeps two tasks with the same prompt apart, so a push never lands on
+// someone else's branch (pushes are never forced).
 func Branch(taskID, prompt string) string {
-	slug := slugify(prompt)
+	first, _, _ := strings.Cut(strings.TrimSpace(prompt), "\n")
+	slug := slugify(first)
 	suffix := taskID[max(0, len(taskID)-6):]
 	if slug == "" {
 		return "forgerun/" + suffix

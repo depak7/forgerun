@@ -10,11 +10,10 @@ import (
 	"github.com/depak7/forgerun/internal/mcp"
 )
 
-// handoffPreamble opens a handed-off thread's first message, for the agent
-// that carries on.
-const handoffPreamble = `You're carrying on work handed off from a coding session on the user's machine. The repo here is their folder as it was at the handoff, uncommitted work included. Here is that session's summary:
-
-`
+// handoffNote ends a handed-off thread's first message, for the agent
+// that carries on. The message starts with the title, which names the
+// thread, its branch and its pull request.
+const handoffNote = `(Handed off from a coding session on the user's machine: the repo here is their folder as it was then, uncommitted work included. The summary above is that session's.)`
 
 // Tools are the MCP tools a local agent hands work off with.
 func Tools(c *Client) []mcp.Tool {
@@ -34,26 +33,29 @@ Returns the thread's ID and link. Check on it later with forgerun_status, and fe
   "type": "object",
   "properties": {
     "path": {"type": "string", "description": "Absolute path of the folder (or one file) to hand off: usually the project you're working in."},
+    "title": {"type": "string", "description": "The task in a few words, e.g. 'Add retries to the payment client': it names the thread, its branch and pull request."},
     "summary": {"type": "string", "description": "The handoff summary: Requested, Done, Left (see the tool's description)."},
     "agent": {"type": "string", "description": "forgerun agent to carry on with, e.g. claude-code, cursor, opencode, pi. Omit for the server's default."},
     "model": {"type": "string", "description": "Model for that agent, as forgerun names it. Omit for the agent's default."},
     "effort": {"type": "string", "description": "Reasoning effort, e.g. low, medium, high. Omit for the default."},
     "plan": {"type": "boolean", "description": "Plan first: the agent proposes a plan and waits for the user's approval in forgerun."}
   },
-  "required": ["path", "summary"]
+  "required": ["path", "title", "summary"]
 }`),
 			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
 				var a struct {
-					Path, Summary, Agent, Model, Effort string
-					Plan                                bool
+					Path, Title, Summary, Agent, Model, Effort string
+					Plan                                       bool
 				}
 				if err := json.Unmarshal(args, &a); err != nil {
 					return "", err
 				}
-				if strings.TrimSpace(a.Path) == "" || strings.TrimSpace(a.Summary) == "" {
-					return "", errors.New("path and summary are required")
+				title, summary := strings.Join(strings.Fields(a.Title), " "), strings.TrimSpace(a.Summary)
+				if strings.TrimSpace(a.Path) == "" || title == "" || summary == "" {
+					return "", errors.New("path, title and summary are required")
 				}
-				return c.handoff(ctx, a.Path, Start{Prompt: handoffPreamble + strings.TrimSpace(a.Summary), Agent: a.Agent, Model: a.Model, Effort: a.Effort, Plan: a.Plan})
+				prompt := title + "\n\n" + summary + "\n\n" + handoffNote
+				return c.handoff(ctx, a.Path, Start{Prompt: prompt, Agent: a.Agent, Model: a.Model, Effort: a.Effort, Plan: a.Plan})
 			},
 		},
 		{
