@@ -35,6 +35,8 @@ func main() {
 		err = workerCmd(os.Args[2:])
 	case "doctor":
 		err = doctorCmd(os.Args[2:])
+	case "mcp":
+		err = mcpCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -62,6 +64,8 @@ func usage() {
                                             runs turns for a forgerun server; dials out, nothing to open
   forgerun doctor [-role worker|serve|server] [-env file] [-quick] [-json]
                                             checks this machine's setup and says how to fix what's wrong
+  forgerun mcp [-server https://…]          MCP tools for a local agent, on stdin/stdout: hand work off to forgerun,
+                                            check on it, get its changes (token: FORGERUN_TOKEN, if the server has sign-in)
   forgerun run   -repo <git-url> -prompt <task> [-agent cursor] [-model m] [-effort e] [-timeout 2h] [-out out]
 
 The database URL defaults to $FORGERUN_DATABASE_URL, then $DATABASE_URL, then the docker-compose dev database.
