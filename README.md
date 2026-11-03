@@ -2,7 +2,6 @@
 
 [![License: Apache-2.0](https://img.shields.io/github/license/depak7/forgerun)](LICENSE)
 [![Go version](https://img.shields.io/github/go-mod/go-version/depak7/forgerun)](go.mod)
-[![CI](https://github.com/depak7/forgerun/actions/workflows/ci.yml/badge.svg)](https://github.com/depak7/forgerun/actions/workflows/ci.yml)
 [![GitHub stars](https://img.shields.io/github/stars/depak7/forgerun?style=flat)](https://github.com/depak7/forgerun/stargazers)
 [![Live Demo](https://img.shields.io/badge/demo-forgerun.depak.dev-4ADE9B)](https://forgerun.depak.dev)
 
