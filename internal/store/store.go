@@ -30,6 +30,9 @@ var ErrSnapshotNotFound = errors.New("snapshot not found")
 // given ID.
 var ErrFolderNotFound = errors.New("folder not found")
 
+// ErrTokenNotFound is returned when a user has no token with the given ID.
+var ErrTokenNotFound = errors.New("token not found")
+
 // ErrThreadBusy means the thread already has a queued or running task.
 var ErrThreadBusy = errors.New("the thread already has a queued or running task")
 
@@ -145,6 +148,16 @@ type Folder struct {
 	CreatedAt time.Time
 }
 
+// APIToken is a personal token: it acts as its user from tools that have
+// no browser to sign in with. Only a hash of the token itself is stored.
+type APIToken struct {
+	ID         int64
+	UserID     int64
+	Name       string // what it's for, e.g. "laptop MCP"
+	CreatedAt  time.Time
+	LastUsedAt *time.Time // nil if never used
+}
+
 // User is someone who signed in with GitHub.
 type User struct {
 	ID        int64
@@ -239,6 +252,17 @@ type Store interface {
 	LoginUser(ctx context.Context, id string) (User, error)
 	// DeleteLogin signs a browser out. Deleting it twice is not an error.
 	DeleteLogin(ctx context.Context, id string) error
+	// CreateToken saves a token (t.UserID, Name) under the hash of its
+	// value and returns it with its ID and creation time.
+	CreateToken(ctx context.Context, t APIToken, hash string) (APIToken, error)
+	// ListTokens returns a user's tokens, newest first.
+	ListTokens(ctx context.Context, userID int64) ([]APIToken, error)
+	// DeleteToken revokes one of a user's tokens, or returns
+	// ErrTokenNotFound if they have none with that ID.
+	DeleteToken(ctx context.Context, userID, id int64) error
+	// TokenUser returns the user of the token with this hash, and records
+	// that it was used; ErrUserNotFound if there's none.
+	TokenUser(ctx context.Context, hash string) (User, error)
 	// GetAgent returns one agent, or ErrAgentNotFound.
 	GetAgent(ctx context.Context, id string) (Agent, error)
 	// ListAgents returns every enabled agent, sorted by id.

@@ -41,9 +41,10 @@ const (
 
 // viewer is who a request acts for.
 type viewer struct {
-	ID    int64 // 0 in local mode
-	Login string
-	Admin bool
+	ID      int64 // 0 in local mode
+	Login   string
+	Admin   bool
+	ByToken bool // signed in with a personal token, not a browser login
 }
 
 type viewerKey struct{}
@@ -66,12 +67,23 @@ func (v viewer) owner() int64 {
 func (v viewer) canSee(rec store.Record) bool { return v.Admin || (v.ID != 0 && rec.Owner == v.ID) }
 
 // withViewer resolves who's signed in and guards the API: in sign-in mode,
-// every /api/ request but /api/me needs a login, and requests that change
-// something must come from forgerun's own pages.
+// every /api/ request but /api/me needs a login or a personal token, and
+// requests that change something with a login must come from forgerun's
+// own pages. (A token isn't sent by browsers on their own, so it needs no
+// such check.)
 func (s *Server) withViewer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.auth == nil {
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), viewerKey{}, viewer{Login: "local", Admin: true})))
+			return
+		}
+		if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+			v, ok := s.tokenViewer(r, tok)
+			if !ok {
+				writeError(w, http.StatusUnauthorized, "that token isn't valid: it may have been revoked")
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), viewerKey{}, v)))
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && !s.sameOrigin(r) {

@@ -105,7 +105,7 @@ function Sidebar({ me }: { me: Me }) {
         >
           tasks
         </NavLink>
-        {me.admin && (
+        {(me.admin || me.sign_in) && (
           <NavLink
             to="/settings"
             className={({ isActive }) => linkClass(isActive)}

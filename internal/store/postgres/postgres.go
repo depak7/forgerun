@@ -663,6 +663,48 @@ func (s *Store) DeleteLogin(ctx context.Context, id string) error {
 	return err
 }
 
+func (s *Store) CreateToken(ctx context.Context, t store.APIToken, hash string) (store.APIToken, error) {
+	err := s.pool.QueryRow(ctx, `INSERT INTO api_tokens (user_id, name, hash) VALUES ($1, $2, $3) RETURNING id, created_at`,
+		t.UserID, t.Name, hash).Scan(&t.ID, &t.CreatedAt)
+	if err != nil {
+		return store.APIToken{}, fmt.Errorf("creating a token: %w", err)
+	}
+	return t, nil
+}
+
+func (s *Store) ListTokens(ctx context.Context, userID int64) ([]store.APIToken, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, user_id, name, created_at, last_used_at FROM api_tokens
+		WHERE user_id = $1 ORDER BY created_at DESC, id DESC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("listing tokens: %w", err)
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.APIToken, error) {
+		var t store.APIToken
+		return t, row.Scan(&t.ID, &t.UserID, &t.Name, &t.CreatedAt, &t.LastUsedAt)
+	})
+}
+
+func (s *Store) DeleteToken(ctx context.Context, userID, id int64) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM api_tokens WHERE id = $1 AND user_id = $2`, id, userID)
+	if err != nil {
+		return fmt.Errorf("deleting a token: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %d", store.ErrTokenNotFound, id)
+	}
+	return nil
+}
+
+func (s *Store) TokenUser(ctx context.Context, hash string) (store.User, error) {
+	u, err := scanUser(s.pool.QueryRow(ctx, `WITH used AS (
+			UPDATE api_tokens SET last_used_at = now() WHERE hash = $1 RETURNING user_id)
+		SELECT `+prefixed("u.", userColumns)+` FROM used JOIN users u ON u.id = used.user_id`, hash))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.User{}, store.ErrUserNotFound
+	}
+	return u, err
+}
+
 const userColumns = `id, github_id, login, name, avatar_url, github_token, created_at`
 
 // prefixed qualifies each of a comma-separated column list, e.g. "u.id, u.login".

@@ -220,3 +220,14 @@
 .button:disabled {
   opacity: 0.5;
 }
+.input {
+  flex: 1 1 260px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}

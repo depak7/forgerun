@@ -119,6 +119,16 @@ export interface Session {
 }
 
 // Who's signed in (GET /api/me).
+// A personal token (GET/POST /api/tokens). token, its value, is only in the
+// response that created it.
+export interface ApiToken {
+  id: number;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+  token?: string;
+}
+
 export interface Me {
   signed_in: boolean;
   sign_in: boolean; // the server uses GitHub sign-in (false = local mode, no accounts)

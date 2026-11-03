@@ -1,7 +1,8 @@
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { useAgents, useMe, useModels, useSnapshots, useStatus, useWorkers } from "../api/queries";
-import type { Agent, CapacityReport, Snapshot, Status, WorkerInfo } from "../api/types";
+import { useAgents, useMe, useModels, useSnapshots, useStatus, useTokens, useWorkers } from "../api/queries";
+import type { Agent, ApiToken, CapacityReport, Snapshot, Status, WorkerInfo } from "../api/types";
 import { formatBytes, formatDuration, formatMiB, formatWhen, repoName } from "../format";
 import styles from "./Settings.module.css";
 
@@ -14,7 +15,16 @@ export function SettingsPage() {
   const { data: status } = useStatus();
   const { data: me } = useMe();
   if (me && !me.admin) {
-    return <p style={{ color: "var(--muted)" }}>Only an admin can see the server's settings.</p>;
+    return (
+      <div className={styles.page}>
+        <div className={styles.headText}>
+          <span className="label">03 | Settings</span>
+          <h1 className={styles.title}>Your tokens</h1>
+          <p className={styles.lede}>Only an admin can see the server's settings.</p>
+        </div>
+        <TokensSection />
+      </div>
+    );
   }
 
   return (
@@ -43,6 +53,8 @@ export function SettingsPage() {
         </h2>
         <div className={styles.card}>{status && <PullRequests status={status} />}</div>
       </section>
+
+      {me?.sign_in && <TokensSection />}
 
       {status?.remote_workers && (
         <section className={styles.section} aria-labelledby="workers">
@@ -247,6 +259,86 @@ function Workers() {
         </div>
       ))}
     </div>
+  );
+}
+
+// TokensSection is the signed-in user's personal tokens: they let a tool
+// without a browser (forgerun's MCP server) act as the user.
+function TokensSection() {
+  const queryClient = useQueryClient();
+  const { data: tokens } = useTokens(true);
+  const [name, setName] = useState("");
+  const [made, setMade] = useState<ApiToken | null>(null);
+  const create = useMutation({
+    mutationFn: (n: string) => api<ApiToken>("/api/tokens", { method: "POST", body: JSON.stringify({ name: n }) }),
+    onSuccess: (t) => {
+      setMade(t);
+      setName("");
+      queryClient.invalidateQueries({ queryKey: ["tokens"] });
+    },
+  });
+  const revoke = useMutation({
+    mutationFn: (id: number) => api<object>(`/api/tokens/${id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tokens"] }),
+  });
+  return (
+    <section className={styles.section} aria-labelledby="tokens">
+      <h2 id="tokens" className="label">
+        Personal tokens
+      </h2>
+      <div className={styles.card}>
+        <p className={styles.note}>
+          A token lets a tool act as you without a browser: forgerun's MCP server, which hands work from your local agent
+          to forgerun. Give each tool its own, and revoke one you no longer use.
+        </p>
+        <form
+          className={styles.facts}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) create.mutate(name.trim());
+          }}
+        >
+          <input
+            className={styles.input}
+            aria-label="Token name"
+            placeholder="what it's for, e.g. laptop MCP"
+            value={name}
+            maxLength={100}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <button type="submit" className={styles.button} disabled={create.isPending || !name.trim()}>
+            [ create token ]
+          </button>
+          {create.error && <span className={styles.badText}>{create.error.message}</span>}
+        </form>
+        {made?.token && (
+          <p className={styles.note}>
+            Copy it now, it won't be shown again: <code>{made.token}</code>
+          </p>
+        )}
+      </div>
+      {tokens && tokens.length > 0 && (
+        <div className={styles.list}>
+          {tokens.map((t) => (
+            <div key={t.id} className={styles.row}>
+              <div className={styles.agentName}>
+                <span className="mono">{t.name}</span>
+                <span className={styles.sub}>created {formatWhen(t.created_at)}</span>
+              </div>
+              <div className={styles.agentKey}>
+                <span className={styles.sub}>{t.last_used_at ? `last used ${formatWhen(t.last_used_at)}` : "never used"}</span>
+              </div>
+              <div className={styles.agentState}>
+                <button type="button" className={styles.button} disabled={revoke.isPending} onClick={() => revoke.mutate(t.id)}>
+                  [ revoke ]
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {revoke.error && <span className={styles.badText}>{revoke.error.message}</span>}
+    </section>
   );
 }
 

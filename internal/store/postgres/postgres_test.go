@@ -26,7 +26,7 @@ func cfgDatabase(url string) string {
 }
 
 // openTest connects to FORGERUN_TEST_DATABASE_URL and empties the tasks,
-// snapshots and folders tables. Tests are skipped when the variable is unset.
+// snapshots, folders and api_tokens tables. Tests are skipped when the variable is unset.
 func openTest(t *testing.T) *Store {
 	t.Helper()
 	url := os.Getenv("FORGERUN_TEST_DATABASE_URL")
@@ -44,7 +44,7 @@ func openTest(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	if _, err := s.pool.Exec(ctx, `TRUNCATE tasks, snapshots, folders`); err != nil {
+	if _, err := s.pool.Exec(ctx, `TRUNCATE tasks, snapshots, folders, api_tokens`); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -1040,5 +1040,38 @@ func TestFolders(t *testing.T) {
 	s.Create(ctx, repo, "cursor")
 	if rec, _ := s.Get(ctx, repo.ID); rec.FolderID != "" {
 		t.Errorf("a repo task has folder %q", rec.FolderID)
+	}
+}
+
+// A token is found by its hash and records its use; only its owner can
+// delete it.
+func TestAPITokens(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	u, err := s.SaveUser(ctx, store.User{GitHubID: 990001, Login: "tok-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := s.CreateToken(ctx, store.APIToken{UserID: u.ID, Name: "laptop"}, "hash1")
+	if err != nil || tok.ID == 0 || tok.CreatedAt.IsZero() {
+		t.Fatalf("CreateToken = %+v, %v", tok, err)
+	}
+	if got, err := s.TokenUser(ctx, "hash1"); err != nil || got.ID != u.ID {
+		t.Errorf("TokenUser = %+v, %v", got, err)
+	}
+	if _, err := s.TokenUser(ctx, "nope"); !errors.Is(err, store.ErrUserNotFound) {
+		t.Errorf("unknown hash: %v", err)
+	}
+	list, err := s.ListTokens(ctx, u.ID)
+	if err != nil || len(list) != 1 || list[0].Name != "laptop" || list[0].LastUsedAt == nil {
+		t.Errorf("ListTokens = %+v, %v", list, err)
+	}
+	if err := s.DeleteToken(ctx, u.ID+1, tok.ID); !errors.Is(err, store.ErrTokenNotFound) {
+		t.Errorf("someone else's token: %v", err)
+	}
+	if err := s.DeleteToken(ctx, u.ID, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TokenUser(ctx, "hash1"); !errors.Is(err, store.ErrUserNotFound) {
+		t.Errorf("revoked: %v", err)
 	}
 }

@@ -295,3 +295,25 @@ func TestFolders(t *testing.T) {
 		t.Errorf("follow-up folder %q", rec.FolderID)
 	}
 }
+
+func TestAPITokens(t *testing.T) {
+	s, ctx := New(fakeDefault), context.Background()
+	if _, err := s.CreateToken(ctx, store.APIToken{UserID: 1, Name: "x"}, "h"); !errors.Is(err, store.ErrUserNotFound) {
+		t.Errorf("no such user: %v", err)
+	}
+	u, _ := s.SaveUser(ctx, store.User{GitHubID: 5, Login: "u"})
+	tok, _ := s.CreateToken(ctx, store.APIToken{UserID: u.ID, Name: "x"}, "h")
+	if got, err := s.TokenUser(ctx, "h"); err != nil || got.ID != u.ID {
+		t.Errorf("TokenUser = %+v, %v", got, err)
+	}
+	if list, _ := s.ListTokens(ctx, u.ID); len(list) != 1 || list[0].LastUsedAt == nil {
+		t.Errorf("ListTokens = %+v", list)
+	}
+	if err := s.DeleteToken(ctx, u.ID+1, tok.ID); !errors.Is(err, store.ErrTokenNotFound) {
+		t.Errorf("someone else's: %v", err)
+	}
+	s.DeleteToken(ctx, u.ID, tok.ID)
+	if _, err := s.TokenUser(ctx, "h"); !errors.Is(err, store.ErrUserNotFound) {
+		t.Errorf("revoked: %v", err)
+	}
+}

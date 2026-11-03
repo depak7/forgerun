@@ -30,7 +30,9 @@ type Store struct {
 	models    map[modelKey]models.Variant
 	snapshots map[int64]*store.Snapshot
 	folders   map[string]folder
-	lastID    int64 // the last snapshot id handed out
+	tokens    map[string]*store.APIToken // by hash
+	lastToken int64                      // the last token id handed out
+	lastID    int64                      // the last snapshot id handed out
 }
 
 var _ store.Store = (*Store)(nil)
@@ -40,7 +42,7 @@ var _ store.Store = (*Store)(nil)
 // to it, and its default is the variant marked AgentDefault.
 func New(vs ...models.Variant) *Store {
 	s := &Store{tasks: map[string]*store.Record{}, diffs: map[string]string{}, users: map[int64]*store.User{}, logins: map[string]login{}, models: map[modelKey]models.Variant{},
-		snapshots: map[int64]*store.Snapshot{}, folders: map[string]folder{}}
+		snapshots: map[int64]*store.Snapshot{}, folders: map[string]folder{}, tokens: map[string]*store.APIToken{}}
 	for _, v := range vs {
 		s.models[modelKey{v.AgentID, v.ID}] = v
 	}
@@ -587,4 +589,53 @@ func (s *Store) DeleteLogin(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	delete(s.logins, id)
 	return nil
+}
+
+func (s *Store) CreateToken(_ context.Context, t store.APIToken, hash string) (store.APIToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[t.UserID]; !ok { // mirrors the Postgres foreign key
+		return store.APIToken{}, fmt.Errorf("creating a token: %w", store.ErrUserNotFound)
+	}
+	s.lastToken++
+	t.ID, t.CreatedAt, t.LastUsedAt = s.lastToken, time.Now(), nil
+	s.tokens[hash] = &t
+	return t, nil
+}
+
+func (s *Store) ListTokens(_ context.Context, userID int64) ([]store.APIToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.APIToken
+	for _, t := range s.tokens {
+		if t.UserID == userID {
+			out = append(out, *t)
+		}
+	}
+	slices.SortFunc(out, func(a, b store.APIToken) int { return cmp.Compare(b.ID, a.ID) })
+	return out, nil
+}
+
+func (s *Store) DeleteToken(_ context.Context, userID, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for hash, t := range s.tokens {
+		if t.ID == id && t.UserID == userID {
+			delete(s.tokens, hash)
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %d", store.ErrTokenNotFound, id)
+}
+
+func (s *Store) TokenUser(_ context.Context, hash string) (store.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tokens[hash]
+	if !ok {
+		return store.User{}, store.ErrUserNotFound
+	}
+	now := time.Now()
+	t.LastUsedAt = &now
+	return *s.users[t.UserID], nil
 }

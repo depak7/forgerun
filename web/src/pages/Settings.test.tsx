@@ -152,4 +152,33 @@ describe("SettingsPage", () => {
     renderPage(<SettingsPage />);
     expect(await screen.findByText(/Every task starts cold/)).toBeTruthy();
   });
+
+  it("lets a signed-in user make, see and revoke their personal tokens", async () => {
+    const listed = [{ id: 3, name: "old laptop", created_at: "2026-11-01T10:00:00Z", last_used_at: null }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const data =
+        url === "/api/me" ? { signed_in: true, sign_in: true, login: "alice", name: "", avatar_url: "", admin: false }
+        : url === "/api/tokens" && init?.method === "POST" ? { id: 4, name: "laptop MCP", created_at: "2026-11-04T10:00:00Z", last_used_at: null, token: "frt_secret" }
+        : url === "/api/tokens" ? listed
+        : url === "/api/tokens/3" ? {}
+        : undefined;
+      if (data === undefined) return new Response("not found", { status: 404 });
+      return new Response(JSON.stringify({ success: true, data }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage(<SettingsPage />);
+    expect(await screen.findByText("Only an admin can see the server's settings.")).toBeTruthy();
+    expect(await screen.findByText("old laptop")).toBeTruthy();
+    expect(screen.getByText("never used")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Token name"), { target: { value: "laptop MCP" } });
+    fireEvent.click(screen.getByRole("button", { name: /create token/ }));
+    expect(await screen.findByText("frt_secret")).toBeTruthy();
+    const post = fetchMock.mock.calls.find(([u, i]) => u.toString() === "/api/tokens" && i?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ name: "laptop MCP" });
+
+    fireEvent.click(screen.getByRole("button", { name: /revoke/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u, i]) => u.toString() === "/api/tokens/3" && i?.method === "DELETE")).toBe(true));
+  });
 });

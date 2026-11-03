@@ -47,13 +47,13 @@ describe("Layout", () => {
     expect(screen.queryByRole("link", { name: /sign in/ })).toBeNull();
   });
 
-  it("shows the signed-in user, without settings unless they're an admin", async () => {
+  it("shows the signed-in user, with settings for their tokens but not the server's credentials", async () => {
     fakeServer({ "/api/me": me({}), "/api/status": status, "/api/threads": [], "/api/agents": [] });
     renderLayout();
     expect(await screen.findByText("the page")).toBeTruthy();
     expect(screen.getByText("alice")).toBeTruthy();
     expect(screen.getByRole("button", { name: "sign out" })).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "settings" })).toBeNull();
+    expect(screen.getByRole("link", { name: "settings" })).toBeTruthy();
     expect(screen.queryByText("Credentials")).toBeNull();
   });
 
