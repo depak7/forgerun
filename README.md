@@ -282,13 +282,55 @@ To deploy it for other people (orchestrator on a server with HTTPS and sign-in, 
 your machine), see [docs/deploying.md](docs/deploying.md): a Dockerfile and a compose file
 with automatic HTTPS are included (`deploy/`).
 
+## Hand off from a local agent
+
+Partway through a task with an agent on your machine, you can send the rest to forgerun:
+`forgerun mcp` is an MCP server your local agent starts, with three tools.
+
+| Tool | |
+|---|---|
+| `forgerun_handoff` | sends a copy of the folder and starts a thread whose first message is the agent's summary of the session (what you asked, what's done, what's left) |
+| `forgerun_status` | how the thread is doing: running, finished, failed, or waiting for your answer |
+| `forgerun_diff` | its changes as one patch, to `git apply` in your folder |
+
+Add it to your agent, e.g. Claude Code:
+
+```sh
+claude mcp add forgerun --env FORGERUN_URL=https://forgerun.example.com --env FORGERUN_TOKEN=frt_… -- forgerun mcp
+```
+
+or in any MCP client's config:
+
+```json
+{"mcpServers": {"forgerun": {"command": "forgerun", "args": ["mcp"],
+  "env": {"FORGERUN_URL": "https://forgerun.example.com", "FORGERUN_TOKEN": "frt_…"}}}}
+```
+
+`FORGERUN_URL` defaults to `http://localhost:8080`. On a server with sign-in, create the token in
+**Settings → Personal tokens** (one per tool; revoke it there). A server in local mode needs none.
+Then ask your agent to "hand the rest off to forgerun".
+
+**What's sent.** In a git repo, the repo's top folder: its files as they are now, uncommitted work
+included, but not what `.gitignore` ignores, and only the current commit of its history, without its
+remotes, credentials or hooks. Secret files git doesn't track (`.env`, `.env.*` but `.example`,
+keys like `*.pem` or `id_rsa`, `.npmrc`, `.netrc`) never leave your machine. A plain folder is sent
+whole but for those; a single file works too. Uploads are capped (`serve -max-folder`, 50 MiB
+compressed by default). Your folder is never changed: apply the diff when you want it.
+
+**Pushing.** When the folder is a GitHub repo and the commit it's on is on GitHub, its thread can
+be pushed like any other: a new `forgerun/…` branch on that commit with your uncommitted work and
+then the agent's, and a pull request to the branch you were on. Unpushed local commits can't be
+built on: push them first, or take the diff.
+
 ## API
 
 The UI uses the same JSON API (`{"success": true, "data": …}`):
 
 | | |
 |---|---|
-| `POST /api/tasks` | start a thread: `{repo, prompt, agent?, model?, effort?}` |
+| `POST /api/tasks` | start a thread: `{repo, prompt, agent?, model?, effort?}`, or `{folder, …}` for an uploaded folder |
+| `POST /api/folders?name=…` | upload a folder (a gzipped tar) to start threads on; `&repo=…&base=…&branch=…` for a GitHub repo's |
+| `GET`/`POST /api/tokens`, `DELETE /api/tokens/{id}` | personal tokens (from a browser login); send one as `Authorization: Bearer frt_…` |
 | `POST /api/tasks/{id}/followups` | the next message in a thread |
 | `POST /api/tasks/{id}/cancel` | stop a queued or running turn |
 | `GET /api/tasks/{id}/thread` | every turn of a thread |
