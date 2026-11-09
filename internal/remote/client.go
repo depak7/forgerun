@@ -28,6 +28,9 @@ type Client struct {
 	Token   string
 	Name    string // this worker's name in the orchestrator's settings
 	Sandbox string // its sandbox backend, reported in heartbeats
+	// Version is this build's version, reported in heartbeats; "" when
+	// it's unknown (the orchestrator then lists no version).
+	Version string
 	Log     *slog.Logger
 
 	http *http.Client
@@ -265,7 +268,7 @@ func (u *logUpload) Close() error {
 func (c *Client) Heartbeats(ctx context.Context, pool *worker.Pool, runner *task.Runner, agents, adapters []string, maxSessions int) {
 	connected := false
 	for {
-		hb := Heartbeat{Worker: c.Name, Agents: agents, Adapters: adapters, Sandbox: c.Sandbox, MaxSessions: maxSessions, Sessions: runner.Sessions(), Running: pool.Running()}
+		hb := Heartbeat{Worker: c.Name, Agents: agents, Adapters: adapters, Sandbox: c.Sandbox, MaxSessions: maxSessions, Sessions: runner.Sessions(), Running: pool.Running(), Version: c.Version}
 		if c, ok := runner.Capacity(); ok {
 			hb.Capacity = &c
 		}
