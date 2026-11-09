@@ -8,6 +8,9 @@
 #
 # Run it again to update: it pulls, rebuilds and restarts, keeping your settings.
 #
+# Run it with FORGERUN_UNINSTALL=1 to remove forgerun instead: it stops the
+# background service and asks before deleting your data.
+#
 # Every question can be answered ahead with a variable (needed without a terminal):
 #   FORGERUN_ROLE=worker|serve        what this machine is for
 #   FORGERUN_SERVER, FORGERUN_WORKER_TOKEN     the orchestrator, for a worker
@@ -17,6 +20,9 @@
 #   FORGERUN_SANDBOX=gvisor           on Linux without KVM: gVisor sandboxes (installs Docker + gVisor)
 #   FORGERUN_DIR (~/forgerun), FORGERUN_REPO, FORGERUN_BRANCH (main)
 #   FORGERUN_DOCTOR_FLAGS             extra flags for forgerun doctor, e.g. -quick
+#   FORGERUN_UNINSTALL=1                remove forgerun from this machine
+#   FORGERUN_DELETE_SETTINGS=yes|no     uninstall: delete ~/.forgerun-worker.env (default no)
+#   FORGERUN_DELETE_DIR=yes|no          uninstall: delete FORGERUN_DIR (default no)
 # shellcheck disable=SC2034,SC2154 # variables set and read through eval in ask()
 set -eu
 
@@ -169,6 +175,7 @@ gvisor_setup() {
 			die "install Docker (https://docs.docker.com/engine/install/), then run this again"
 		fi
 	fi
+	# shellcheck disable=SC2015 # Docker not starting here isn't fatal; configure_serve warns about it
 	have systemctl && $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
 	if ! have runsc; then
 		say "installing gVisor (runsc)"
@@ -449,9 +456,125 @@ EOF
 	fi
 }
 
+# uninstall removes forgerun from this machine: it stops the background
+# service and deletes its unit file or plist, then asks before deleting the
+# settings file and DIR. Go, Node and microsandbox's data stay. It fails
+# closed: when a service can't be confirmed stopped, nothing is deleted.
+uninstall() {
+	found=no
+	stop_failed=no
+	for role in worker serve; do
+		if [ "$GOOS" = darwin ]; then
+			label=dev.forgerun.$role
+			plist=$HOME/Library/LaunchAgents/$label.plist
+			log=$HOME/Library/Logs/forgerun-$role.log
+			if [ -f "$plist" ]; then
+				found=yes
+				say "stopping the $role service (launchd: $label)"
+				if launchctl bootout "gui/$(id -u)/$label" 2>/dev/null; then
+					rm -f "$plist" "$log"
+				else
+					# bootout also fails when the service simply isn't loaded.
+					# Proceed only on a known not-found answer: any other error
+					# leaves everything alone.
+					out=$(launchctl print "gui/$(id -u)/$label" 2>&1 || true)
+					case $out in
+					*"Could not find service"*) rm -f "$plist" "$log" ;;
+					*)
+						warn "couldn't stop $label: it may still be running"
+						stop_failed=yes ;;
+					esac
+				fi
+			fi
+		else
+			name=forgerun-$role
+			unit=$HOME/.config/systemd/user/$name.service
+			if [ -f "$unit" ]; then
+				found=yes
+				if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+					say "stopping the $role service (systemd: $name)"
+					if systemctl --user disable --now "$name" 2>/dev/null; then
+						rm -f "$unit"
+						systemctl --user daemon-reload 2>/dev/null || true
+					else
+						# A failed disable --now can still mean stopped. Proceed only
+						# on a known-inactive state: any other answer, including an
+						# error, leaves everything alone.
+						state=$(systemctl --user is-active "$name" 2>/dev/null || true)
+						if [ "$state" = inactive ]; then
+							rm -f "$unit"
+							systemctl --user daemon-reload 2>/dev/null || true
+						else
+							warn "couldn't stop $name (state: ${state:-unknown}): it may still be running"
+							stop_failed=yes
+						fi
+					fi
+				else
+					warn "no systemd user session here: can't check whether $name is running"
+					stop_failed=yes
+				fi
+			fi
+		fi
+	done
+	if [ "$stop_failed" = yes ]; then
+		die "a forgerun service may still be running, so no data was deleted. Stop it (see the warnings above), then run this again"
+	fi
+	[ "$found" = yes ] || note "no background service found (nothing to stop)"
+
+	# The worker's settings live outside DIR; serve's .env is inside it, so it
+	# goes with DIR's question below rather than asking twice.
+	if [ -f "$WORKER_ENV" ]; then
+		yes_no FORGERUN_DELETE_SETTINGS "Delete the settings file $WORKER_ENV (your worker token and agent keys)?" no
+		if [ "$FORGERUN_DELETE_SETTINGS" = yes ]; then
+			rm -f "$WORKER_ENV"
+			say "deleted $WORKER_ENV"
+		else
+			note "keeping $WORKER_ENV (delete it yourself when you're sure)"
+		fi
+	fi
+
+	dir=$DIR
+	while [ "$dir" != "${dir%/}" ]; do dir=${dir%/}; done
+	home=$HOME
+	while [ "$home" != "${home%/}" ]; do home=${home%/}; done
+	[ -n "$home" ] || home=/
+	case $dir in "" | / | "$home") die "not deleting $dir: set FORGERUN_DIR to forgerun's own directory" ;; esac
+	serve_data=no
+	if [ -L "$dir" ]; then
+		warn "not deleting $dir: it's a symlink (remove it yourself)"
+	elif [ -d "$dir" ]; then
+		real=$(cd "$dir" 2>/dev/null && pwd -P) || die "can't enter $dir"
+		home_real=$(cd "$home" 2>/dev/null && pwd -P) || home_real=$home
+		case $real in / | "$home" | "$home_real") die "not deleting $dir: it resolves to $real" ;; esac
+		what=$dir
+		if [ -f "$dir/.env" ]; then
+			serve_data=yes
+			what="$dir, including its .env settings file"
+		fi
+		yes_no FORGERUN_DELETE_DIR "Delete $what?" no
+		if [ "$FORGERUN_DELETE_DIR" = yes ]; then
+			rm -rf "$dir"
+			say "deleted $dir"
+		else
+			note "keeping $dir (delete it yourself when you're sure)"
+		fi
+	fi
+
+	say "forgerun is uninstalled"
+	msb=${MSB_HOME:-$HOME/.microsandbox}
+	note "left alone: your Go and Node toolchains and microsandbox's data ($msb)"
+	if [ "$serve_data" = yes ]; then
+		note "Docker, and the Postgres container and volume forgerun used, were left alone too"
+	fi
+}
+
 main() {
 	detect
 	say "forgerun installer ($GOOS/$ARCH)"
+	if [ "${FORGERUN_UNINSTALL:-}" = 1 ]; then
+		uninstall
+		return
+	fi
 	if [ -z "${FORGERUN_ROLE:-}" ] && tty_ok; then
 		printf '\nWhat is this machine for?\n  1) a worker: runs the microVMs for a forgerun server elsewhere\n  2) everything here: the web UI, the database and the VMs\n' >/dev/tty
 		ask choice "Choose" 1
