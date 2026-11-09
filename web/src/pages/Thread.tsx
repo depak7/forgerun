@@ -123,6 +123,7 @@ function Header({ steps, latest }: { steps: Task[]; latest: Task }) {
     onSettled: refresh,
   });
   const { data: session } = useSession(threadId);
+  const [copiedBranch, setCopiedBranch] = useState(false);
   const pr = latest.pr;
   const unpushed = steps.filter((s) => s.state === "succeeded" && s.has_diff && !s.pushed).length;
   const idle = !isLive(latest) && !push.isPending;
@@ -177,9 +178,28 @@ function Header({ steps, latest }: { steps: Task[]; latest: Task }) {
           )}
           {push.isPending && <span className={styles.pending}>pushing…</span>}
           {pr.branch && (
-            <a className={styles.btn} href={branchURL(latest.repo, pr.branch)} target="_blank" rel="noreferrer" title={pr.branch}>
-              [ branch ↗ ]
-            </a>
+            <>
+              <a className={styles.btn} href={branchURL(latest.repo, pr.branch)} target="_blank" rel="noreferrer" title={pr.branch}>
+                [ branch ↗ ]
+              </a>
+              {/* Copy the branch name, for `git fetch` and checkout; same pattern as the landing page's install command. */}
+              <button
+                type="button"
+                className={styles.btn}
+                title={pr.branch}
+                onClick={() => {
+                  navigator.clipboard?.writeText(pr.branch).then(
+                    () => {
+                      setCopiedBranch(true);
+                      setTimeout(() => setCopiedBranch(false), 2000);
+                    },
+                    () => {},
+                  );
+                }}
+              >
+                {copiedBranch ? "[ copied ]" : "[ copy ]"}
+              </button>
+            </>
           )}
           {pr.url && (
             <a className={`${styles.btn} ${styles.btnPrimary}`} href={pr.url} target="_blank" rel="noreferrer">
