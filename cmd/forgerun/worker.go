@@ -100,7 +100,7 @@ func workerCmd(args []string) error {
 		return fmt.Errorf("microsandbox runtime: %w", err)
 	}
 
-	client := &remote.Client{URL: *server, Token: token, Name: *name, Sandbox: backend.Name(), Log: log}
+	client := &remote.Client{URL: *server, Token: token, Name: *name, Sandbox: backend.Name(), Version: version(), Log: log}
 	runner := &task.Runner{Agents: agents, Sandboxes: backend, DefaultAgent: cmp.Or(firstOf(ids), "cursor"), OutDir: *out, CPUs: 2, MemMiB: 2048,
 		Timeout: *timeout, AgentIdle: *agentIdle, Stdout: io.Discard, Log: log, SessionIdle: *sessionIdle, MaxSessions: *maxSessions,
 		LogSink: client.LogSink, VMPrefix: workerVMPrefix, Reserve: reserve()}

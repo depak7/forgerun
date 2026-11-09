@@ -20,6 +20,7 @@ import (
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/memory"
 	"github.com/depak7/forgerun/internal/task"
+	"github.com/depak7/forgerun/internal/worker"
 )
 
 const token = "worker-token-0123456789"
@@ -280,6 +281,57 @@ func TestHeartbeatCapacity(t *testing.T) {
 	if got["old"] != nil {
 		t.Errorf("old: %+v, want none", got["old"])
 	}
+}
+
+// A worker's forgerun version reaches the orchestrator's worker list; an
+// older worker that sends none is listed without one.
+func TestHeartbeatVersion(t *testing.T) {
+	rs, _, url := setup(t)
+	beat(t, url, Heartbeat{Worker: "new", Version: "v0.4.2"})
+	beat(t, url, Heartbeat{Worker: "old"})
+	got := map[string]string{}
+	for _, w := range rs.Workers() {
+		got[w.Name] = w.Version
+	}
+	if got["new"] != "v0.4.2" {
+		t.Errorf("new: %q", got["new"])
+	}
+	if got["old"] != "" {
+		t.Errorf("old: %q, want none", got["old"])
+	}
+	// The version is in the JSON the settings page reads, absent when unknown.
+	b, _ := json.Marshal(rs.Workers())
+	if !strings.Contains(string(b), `"version":"v0.4.2"`) {
+		t.Errorf("workers JSON = %s", b)
+	}
+	if strings.Count(string(b), `"version"`) != 1 {
+		t.Errorf("an old worker's version should be omitted, not empty: %s", b)
+	}
+}
+
+// The whole path over HTTP: a real client's heartbeat loop carries its
+// version to the orchestrator's worker list (no sandbox needed: the
+// heartbeat never touches one).
+func TestHeartbeatVersionOverWire(t *testing.T) {
+	rs, _, url := setup(t)
+	c := client(url, "wire")
+	c.Version = "v0.4.2"
+	runner := &task.Runner{Log: c.Log}
+	pool := worker.New(c, runner, 1, c.Log)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Heartbeats(ctx, pool, runner, nil, nil, 4); close(done) }()
+	defer func() { cancel(); <-done }()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, w := range rs.Workers() {
+			if w.Name == "wire" && w.Version == "v0.4.2" && w.MaxSessions == 4 {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("the version never arrived over the wire: %+v", rs.Workers())
 }
 
 // A worker downloads a folder's thread's folder from the orchestrator,

@@ -253,6 +253,7 @@ function Workers() {
               {w.running} running · {w.sessions} session{w.sessions === 1 ? "" : "s"} open
               {w.max_sessions > 0 ? ` of ${w.max_sessions}` : ""}
               {w.sandbox ? ` · sandboxes: ${w.sandbox === "gvisor" ? "gVisor" : "microVMs"}` : ""}
+              {w.version ? ` · forgerun ${w.version}` : ""}
             </span>
             {w.capacity && <span className={styles.sub}>{capacityLine(w.capacity)}</span>}
           </div>

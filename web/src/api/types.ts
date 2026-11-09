@@ -157,6 +157,7 @@ export interface WorkerInfo {
   max_sessions: number;
   running: number;
   capacity?: CapacityReport; // missing from a worker too old to report it
+  version?: string; // its forgerun version; missing from a worker too old to report it
 }
 
 // Resources is an amount of CPUs and memory.

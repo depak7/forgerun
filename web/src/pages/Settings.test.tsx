@@ -138,6 +138,22 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("no agent keys · models that need none")).toBeTruthy();
   });
 
+  it("shows a worker's forgerun version, and none for a worker too old to report it", async () => {
+    const seen = new Date().toISOString();
+    const routes = {
+      "/api/workers": [
+        { name: "new-mac", last_seen: seen, agents: ["cursor"], adapters: ["cursor"], sandbox: "microsandbox", sessions: 0, max_sessions: 4, running: 0, version: "v0.4.2" },
+        { name: "old-mac", last_seen: seen, agents: ["cursor"], adapters: ["cursor"], sandbox: "microsandbox", sessions: 0, max_sessions: 4, running: 0 },
+      ],
+    };
+    serve(status({ remote_workers: true }), routes);
+    renderPage(<SettingsPage />);
+    const newRow = (await screen.findByText("new-mac")).closest("div")!.parentElement!;
+    expect(within(newRow).getByText(/forgerun v0\.4\.2/)).toBeTruthy();
+    const oldRow = (await screen.findByText("old-mac")).closest("div")!.parentElement!;
+    expect(within(oldRow).queryByText(/forgerun v/)).toBeNull();
+  });
+
   it("shows the limits and pauses new tasks", async () => {
     serve(status());
     renderPage(<SettingsPage />);

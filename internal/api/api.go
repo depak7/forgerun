@@ -80,6 +80,9 @@ type WorkerInfo struct {
 	// Capacity is what the worker can give sandboxes; omitted when it
 	// doesn't report one (an older worker).
 	Capacity *capacity.Report `json:"capacity,omitempty"`
+	// Version is the forgerun build the worker runs; omitted when it
+	// doesn't report one (an older worker).
+	Version string `json:"version,omitempty"`
 }
 
 // Capacity is what the machine running sandboxes in this process can

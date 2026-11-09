@@ -45,6 +45,9 @@ type Heartbeat struct {
 	// Capacity is the machine's CPUs and memory for sandboxes; nil from a
 	// worker that doesn't know its own, or predates capacity reports.
 	Capacity *capacity.Report `json:"capacity,omitempty"`
+	// Version is the forgerun build the worker runs; "" from a worker that
+	// predates version reports.
+	Version string `json:"version,omitempty"`
 }
 
 // Command is something the orchestrator asks a worker to do.
