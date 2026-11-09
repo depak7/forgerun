@@ -295,6 +295,102 @@ func TestReport(t *testing.T) {
 	}
 }
 
+func TestDocker(t *testing.T) {
+	ctx := context.Background()
+	e := healthy()
+	e.Docker = func(context.Context) error { return nil }
+	if r := docker(ctx, e); r.Status != Pass {
+		t.Errorf("running: %+v", r)
+	}
+	e.Docker = func(context.Context) error {
+		return errors.New("Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?")
+	}
+	r := docker(ctx, e)
+	if r.Status != Warn || !strings.Contains(r.Detail, "not running") || !strings.Contains(r.Fix, "systemctl start docker") {
+		t.Errorf("not running: %+v", r)
+	}
+	e.GOOS = "darwin"
+	if r := docker(ctx, e); !strings.Contains(r.Fix, "Docker Desktop") {
+		t.Errorf("not running on a Mac: %+v", r)
+	}
+	e.Docker = func(context.Context) error { return ErrDockerNotInstalled }
+	if r := docker(ctx, e); r.Status != Warn || !strings.Contains(r.Fix, "install Docker") {
+		t.Errorf("not installed: %+v", r)
+	}
+}
+
+// A database on localhost doesn't prove Docker runs it: with a healthy
+// native Postgres and no Docker, serve works, so the check can only warn.
+func TestDockerWarnsBesideHealthyDatabase(t *testing.T) {
+	e := healthy()
+	e.Docker = func(context.Context) error { return ErrDockerNotInstalled }
+	rs := Run(context.Background(), RoleServe, e)
+	if r := find(t, rs, "docker"); r.Status != Warn {
+		t.Errorf("docker beside a healthy native database: %+v", r)
+	}
+	if Failed(rs) {
+		t.Errorf("a working setup must not newly fail: %+v", rs)
+	}
+}
+
+func TestLocalDatabase(t *testing.T) {
+	e := healthy()
+	local := func(url string) bool {
+		e.Getenv = func(string) string { return url }
+		return localDatabase(e)
+	}
+	for _, url := range []string{"", "postgres://forgerun:forgerun@localhost:5433/forgerun?sslmode=disable", "postgres://127.0.0.1/db", "host=localhost port=5432"} {
+		if !local(url) {
+			t.Errorf("%q is a database on this machine", url)
+		}
+	}
+	for _, url := range []string{"postgres://db.internal:5432/forgerun", "postgres://10.0.0.5/db", "host=db.internal user=forgerun"} {
+		if local(url) {
+			t.Errorf("%q is a remote database", url)
+		}
+	}
+}
+
+// The docker check belongs to serve with a database on this machine: the
+// server and worker roles don't get it, and neither does serve with a
+// remote database.
+func TestDockerOnlyForLocalServe(t *testing.T) {
+	e := healthy()
+	e.Docker = func(context.Context) error { return nil }
+
+	rs := Run(context.Background(), RoleServe, e)
+	if r := find(t, rs, "docker"); r.Status != Pass {
+		t.Errorf("docker: %+v", r)
+	}
+	if got := names(rs); !strings.Contains(got, "docker, database") {
+		t.Errorf("docker should come right before database: %s", got)
+	}
+
+	get := e.Getenv
+	e.Getenv = func(k string) string {
+		if k == "FORGERUN_DATABASE_URL" {
+			return "postgres://forgerun@db.internal:5432/forgerun"
+		}
+		return get(k)
+	}
+	for _, role := range []Role{RoleServe, RoleServer, RoleWorker} {
+		for _, r := range Run(context.Background(), role, e) {
+			if r.Name == "docker" {
+				t.Errorf("%s with a remote database: %+v", role, r)
+			}
+		}
+	}
+
+	e.Getenv = func(string) string { return "" } // local defaults
+	for _, role := range []Role{RoleServer, RoleWorker} {
+		for _, r := range Run(context.Background(), role, e) {
+			if r.Name == "docker" {
+				t.Errorf("%s: docker check present: %+v", role, r)
+			}
+		}
+	}
+}
+
 func TestOrchestratorOutdated(t *testing.T) {
 	e := healthy()
 	e.Hello = func(context.Context, string, string) error { return ErrOutdated }

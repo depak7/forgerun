@@ -167,6 +167,23 @@ func realEnv(kind string) doctor.Env {
 			defer cancel()
 			return postgres.MigrationStatus(ctx, cmp.Or(dbURL, defaultDatabaseURL))
 		},
+		Docker: func(ctx context.Context) error {
+			if _, err := exec.LookPath("docker"); err != nil {
+				return doctor.ErrDockerNotInstalled
+			}
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, "docker", "info").CombinedOutput()
+			if err != nil {
+				// The daemon's own first line says it best ("Cannot
+				// connect to the Docker daemon at ...").
+				if msg, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n"); msg != "" {
+					return errors.New(msg)
+				}
+				return err
+			}
+			return nil
+		},
 		GitHub: func(ctx context.Context, token string) (string, time.Time, error) {
 			id, err := (&forge.GitHub{}).WhoAmI(ctx, forge.NewToken(token))
 			return id.Login, id.Expires, err
