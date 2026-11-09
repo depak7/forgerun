@@ -20,7 +20,7 @@ var (
 )
 
 // Builtin returns every agent forgerun has an adapter for.
-func Builtin() []Agent { return []Agent{&Cursor{}, &ClaudeCode{}, &OpenCode{}, &Pi{}} }
+func Builtin() []Agent { return []Agent{&Cursor{}, &ClaudeCode{}, &OpenCode{}, &Pi{}, &Codex{}} }
 
 // Credentials gives an agent's credential when a task needs it. The value
 // isn't kept: a key added or changed later is used by the next task.

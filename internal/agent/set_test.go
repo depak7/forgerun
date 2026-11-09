@@ -11,7 +11,7 @@ import (
 func TestSet(t *testing.T) {
 	ctx := context.Background()
 	s := NewSet(StaticCredentials{"CURSOR_API_KEY": "k"}, Builtin()...)
-	if ids := s.IDs(); !slices.Equal(ids, []string{"claude-code", "cursor", "opencode", "pi"}) {
+	if ids := s.IDs(); !slices.Equal(ids, []string{"claude-code", "codex", "cursor", "opencode", "pi"}) {
 		t.Errorf("IDs = %v", ids)
 	}
 	if _, err := s.Get("nope"); !errors.Is(err, ErrUnknownAgent) {

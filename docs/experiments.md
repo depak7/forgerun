@@ -508,6 +508,82 @@ rest), its CA given to the sandbox. microsandbox stays the default where KVM or 
 Silicon is available. Snapshots for warm starts: `docker commit` of the session's
 container (to design).
 
+## 14. Codex, OpenAI's CLI
+
+**Question.** Can OpenAI's Codex CLI run unattended in our VM on an API key that never
+enters the VM (the secret proxy swaps it in)? Do follow-ups, read-only turns and
+summaries work like the other agents?
+
+**Test** (`out/codex-exp-vm.sh` runs the VM half): `@openai/codex@0.167.0` probed on the
+host (no VM here, so no microsandbox phase yet): runs in a network namespace with no
+network, and full runs against a fake loopback `POST /v1/responses` endpoint (a custom
+provider in `~/.codex/config.toml`; the built-in `openai` provider can't be pointed
+elsewhere). The real `api.openai.com` was not called; the wire claims below are what the
+fake endpoint captured, and the real-key, real-VM acceptance checklist is pending.
+
+**Result.**
+- **Unattended:** `codex exec` with `-c approval_policy="never" -c
+  sandbox_mode="workspace-write"` edits and runs commands with no questions and stdin
+  closed. Plain `exec` defaults to read-only; `sandbox_mode="read-only"` states it.
+  `--full-auto` is gone in 0.167.
+- **The key comes from the environment:** `OPENAI_API_KEY` becomes
+  `Authorization: Bearer <value>` on `POST /v1/responses` (captured), and beats
+  `auth.json` when both are set. With no key at all exec still makes the call (no
+  fail-fast), so forgerun's credential gate is what stops keyless runs. API-key mode
+  only talks to `api.openai.com` — the ChatGPT sign-in path (`chatgpt.com/backend-api`)
+  can't be used with the proxy swap — so `AllowHosts` is that one host, which the key
+  shares with pi's OpenAI models.
+- **Follow-ups:** `codex exec resume --last` continues the latest session in the
+  directory: same thread id, and the request body carried the earlier turn's history.
+  `resume` has no `--sandbox` flag; the `-c sandbox_mode=...` override works.
+- **Models and effort:** `-m <slug>` and `-c model_reasoning_effort=<level>`. The model
+  catalog is built into the binary: `gpt-6.1-sol` (the default, at effort `low`),
+  `gpt-6-astra` (frontier), `gpt-6.1-terra` (needs CLI >= 0.159), `gpt-6-sol`,
+  `gpt-6-luna` (fast); levels `low`/`medium`/`high`/`xhigh`/`max`/`ultra`. Probed
+  per family against the fake endpoint: `low`..`max` are sent verbatim in
+  `reasoning.effort` for all three; `ultra` is clamped client-side to the model's
+  highest single-agent level (`xhigh` for sol/astra, `max` for luna) and means
+  subagent delegation, so forgerun's models leave it out. Which levels an account
+  may actually use depends on the model and plan (OpenAI's docs: "Available levels
+  depend on the model and client"). `gpt-5.x` entries remain as upgrade pointers;
+  GPT-5.5 is retiring.
+- **Events:** `--json` streams one JSON object per line: `thread.started`,
+  `turn.started`, `item.started`/`item.completed` (an `agent_message`'s `text` verified
+  against a live response; the `command_execution` and `file_change` shapes are from the
+  docs and the binary, not yet seen live), recoverable `error` events
+  (`Reconnecting... n/5`) that a completed turn overrides, `turn.completed` with token
+  usage, and a fatal `turn.failed`.
+- **State** is all under `$CODEX_HOME` (`~/.codex`): session rollouts, history and
+  state databases, shell snapshots, an auto-written `config.toml` trusting the project
+  directory, and auto-installed skills. Wiping `/root/.codex` between tasks covers it.
+  Inside a git repo exec trusts the project automatically; outside one it refuses
+  without `--skip-git-repo-check`.
+- **WebSocket first, SSE after:** 0.167 opens a Responses WebSocket to `api.openai.com`
+  before falling back to plain HTTPS SSE (~5 retries, ~35 s with no network; the
+  `responses_websockets` switches are compiled out). Our secret proxy is HTTP/1.1 and
+  won't carry the upgrade, so expect the fallback — and a start-up delay to measure in
+  the VM.
+- `OPENAI_BASE_URL` is not honoured in 0.167.0, and the built-in `openai` provider
+  can't be overridden (`reserved built-in provider IDs`); pointing the CLI elsewhere
+  takes a custom provider in `config.toml`.
+
+**Decision.**
+- Adapter `codex`: an image with the CLI pinned (`npm install -g @openai/codex@0.167.0`
+  on node:22-bookworm-slim with git); run `codex exec --json --color never -c
+  approval_policy="never" -c sandbox_mode="workspace-write" [-m <family>] [-c
+  model_reasoning_effort="<effort>"] -- <prompt>` with `HOME=/root` and stdin closed;
+  `read-only` for read-only turns; `exec resume --last` for follow-ups and the summary.
+- Credential `OPENAI_API_KEY`, a placeholder swapped by the proxy for `api.openai.com`
+  only (the variable pi's OpenAI models already use).
+- The adapter turns the events into the same plain log as OpenCode's (`$ command` and
+  its output, `→ edit file`, the agent's words), takes the last `agent_message` as the
+  reply, and fails the turn on `turn.failed`'s reason or on a reconnect that never
+  completes.
+- **Still to verify in a real VM with the real key** (`out/codex-exp-vm.sh`): the proxy
+  swap end-to-end against `api.openai.com`; the `command_execution`/`file_change` event
+  shapes from a live run; the WebSocket-to-SSE fallback delay; migration `0018_codex.sql`
+  applying on Postgres; the image building; gVisor.
+
 ## Researched, not yet tested: Claude Code authentication
 
 Based on community guides and issue reports (not official docs), to be confirmed by
