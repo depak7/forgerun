@@ -89,7 +89,7 @@ When you want to run coding agents off your laptop, you have four ways to do it:
 
 | Setup | Isolation per thread | API keys & GitHub tokens | Task start & workflow | Agents & cost |
 |---|---|---|---|---|
-| **forgerun (on your Mac or Linux VM)** | A microVM (`libkrun`) per thread, or a `gVisor` user-space kernel on Linux without KVM | **Never inside the sandbox:** placeholders swapped by a host TLS proxy; host pushes only when you click push | **2.8 s** from a rolling repo disk snapshot; review the diff in the web UI before pushing a branch or PR | `claude-code` (Pro/Max subscription), `cursor`, `opencode` (free or paid), `pi` — switch agents mid-thread |
+| **forgerun (on your Mac or Linux VM)** | A microVM (`libkrun`) per thread, or a `gVisor` user-space kernel on Linux without KVM | **Never inside the sandbox:** placeholders swapped by a host TLS proxy; host pushes only when you click push | **2.8 s** from a rolling repo disk snapshot; review the diff in the web UI before pushing a branch or PR | `claude-code` (Pro/Max subscription), `cursor`, `opencode` (free or paid), `pi`, `prime` — switch agents mid-thread |
 | **CLI on your laptop** (`claude`, `cursor`, `opencode`) | Shares your machine (or an OS-level shell sandbox); stops when you close the lid | Local keys, `~/.ssh`, `.env` files, and `git` credentials live on the same machine | Ties up your local working tree and branch | Your own subscriptions and keys, one terminal at a time |
 | **CLI in `tmux` or plain Docker on a VPS** | Shared host kernel; tasks share a container or clone from scratch | **Exported in the environment:** readable by prompt injection or `postinstall` scripts | Cold `git clone` + dependency install (~27 s) on every clean run; no built-in diff gate | Your own keys; DIY scripts for logs, sessions, and PRs |
 | **Vendor-hosted cloud agents** | Cloud VM on the vendor's infrastructure (shared host on self-hosted runners) | Managed on vendor cloud; env secrets are often readable by the agent or left to you on self-hosted runners | Runs in the vendor's cloud | Locked to a single vendor's agent and cloud compute billing |
@@ -191,7 +191,8 @@ first start; the agent images are pulled the first time an agent runs.
 | `CURSOR_API_KEY` | For the `cursor` agent. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | For `claude-code`; the output of `claude setup-token` (Pro/Max subscription). |
 | `OPENCODE_API_KEY` | Optional, for `opencode`'s paid models: a key from an [OpenCode Console](https://opencode.ai/console) service account ("Inference only"). Its free models need no key. |
-| `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | For `pi`: the API key of each provider whose models you'll pick (an `openrouter/…` model needs `OPENROUTER_API_KEY`, and so on). pi's subscription logins can't be used. Each key is sent only to its provider's API. |
+| `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | For `pi` and `prime`: the API key of each provider whose models you'll pick (an `openrouter/…` model needs `OPENROUTER_API_KEY`, and so on). Subscription logins can't be used. Each key is sent only to its provider's API. |
+| `GEMINI_API_KEY`, `XAI_API_KEY`, `PRIME_API_KEY` | For `prime` only: Google Gemini, xAI, and Prime Inference. |
 
 An agent without its key is still listed; only its tasks are refused, except on models that need no key.
 
@@ -376,7 +377,7 @@ docs/experiments.md what each experiment showed, and why things are the way they
 <summary><b>What is forgerun?</b></summary>
 <br />
 
-forgerun is an open-source (Apache-2.0), self-hosted coding agent runner packaged as a single Go binary with an embedded React web UI. It executes coding agents (`claude-code`, `cursor`, `opencode`, `pi`) on your GitHub repositories inside hardware-isolated `libkrun` microVMs or gVisor user-space kernel sandboxes, keeps warm disk snapshots for 2.8-second task starts, and proxies API keys outside the sandbox.
+forgerun is an open-source (Apache-2.0), self-hosted coding agent runner packaged as a single Go binary with an embedded React web UI. It executes coding agents (`claude-code`, `cursor`, `opencode`, `pi`, `prime`) on your GitHub repositories inside hardware-isolated `libkrun` microVMs or gVisor user-space kernel sandboxes, keeps warm disk snapshots for 2.8-second task starts, and proxies API keys outside the sandbox.
 
 </details>
 

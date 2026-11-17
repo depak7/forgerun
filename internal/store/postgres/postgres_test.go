@@ -320,7 +320,10 @@ func TestSeededModelsAreReachable(t *testing.T) {
 	if len(vs) < 200 {
 		t.Fatalf("only %d models; is the seed migration applied?", len(vs))
 	}
-	wantDefault := map[string]string{"cursor": "auto", "claude-code": "sonnet", "opencode": "big-pickle"} // agents.default_model_id
+	wantDefault := map[string]string{
+		"cursor": "auto", "claude-code": "sonnet", "opencode": "big-pickle",
+		"pi": "openrouter/anthropic/claude-sonnet-5.5", "prime": "openrouter/anthropic/claude-sonnet-4.5",
+	} // agents.default_model_id
 	for agentID, want := range wantDefault {
 		cat := models.NewCatalog(agentID, vs)
 		if cat.DefaultFamily() != want {

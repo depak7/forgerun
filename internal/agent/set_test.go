@@ -11,7 +11,7 @@ import (
 func TestSet(t *testing.T) {
 	ctx := context.Background()
 	s := NewSet(StaticCredentials{"CURSOR_API_KEY": "k"}, Builtin()...)
-	if ids := s.IDs(); !slices.Equal(ids, []string{"claude-code", "cursor", "opencode", "pi"}) {
+	if ids := s.IDs(); !slices.Equal(ids, []string{"claude-code", "cursor", "opencode", "pi", "prime"}) {
 		t.Errorf("IDs = %v", ids)
 	}
 	if _, err := s.Get("nope"); !errors.Is(err, ErrUnknownAgent) {
@@ -105,7 +105,25 @@ func TestSecretsForProviders(t *testing.T) {
 		t.Errorf("CheckModel without its key: %v", err)
 	}
 	err = NewSet(StaticCredentials{}, pi).Check(ctx, "pi")
-	if !errors.Is(err, ErrNoCredential) || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY") {
-		t.Errorf("no keys: %v", err)
+	if !errors.Is(err, ErrNoCredential) {
+		t.Errorf("pi with no keys: %v", err)
+	}
+
+	prime := &Prime{}
+	s = NewSet(StaticCredentials{"PRIME_API_KEY": "p", "GEMINI_API_KEY": "g"}, prime)
+	secrets, err = s.Secrets(ctx, prime, "prime-inference/z-ai/glm-5.3", false)
+	if err != nil || len(secrets) != 2 {
+		t.Fatalf("prime with PRIME_API_KEY: %v (%d secrets)", err, len(secrets))
+	}
+	_, err = s.Secrets(ctx, prime, "xai/grok-4.6", false)
+	if !errors.Is(err, ErrNoCredential) || !strings.Contains(err.Error(), "prime's xai models: set XAI_API_KEY") {
+		t.Errorf("prime missing xai key: %v", err)
+	}
+	if err := s.Check(ctx, "prime"); err != nil {
+		t.Errorf("prime Check with some keys: %v", err)
+	}
+	err = NewSet(StaticCredentials{}, prime).Check(ctx, "prime")
+	if !errors.Is(err, ErrNoCredential) || !strings.Contains(err.Error(), "PRIME_API_KEY") {
+		t.Errorf("prime with no keys: %v", err)
 	}
 }

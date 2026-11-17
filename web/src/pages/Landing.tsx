@@ -185,7 +185,7 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
                   <td>Dedicated microVM (libkrun) or gVisor kernel (0.34s boot)</td>
                   <td>Never inside the sandbox: host TLS proxy swaps placeholders</td>
                   <td>2.8s warm disk snapshots; review diff before pushing branch/PR</td>
-                  <td>claude-code (Pro/Max), cursor, opencode (free/paid), pi</td>
+                  <td>claude-code (Pro/Max), cursor, opencode (free/paid), pi, prime</td>
                 </tr>
                 <tr>
                   <td>CLI on your laptop</td>

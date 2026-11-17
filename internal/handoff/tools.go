@@ -35,7 +35,7 @@ Returns the thread's ID and link. Check on it later with forgerun_status, and fe
     "path": {"type": "string", "description": "Absolute path of the folder (or one file) to hand off: usually the project you're working in."},
     "title": {"type": "string", "description": "The task in a few words, e.g. 'Add retries to the payment client': it names the thread, its branch and pull request."},
     "summary": {"type": "string", "description": "The handoff summary: Requested, Done, Left (see the tool's description)."},
-    "agent": {"type": "string", "description": "forgerun agent to carry on with, e.g. claude-code, cursor, opencode, pi. Omit for the server's default."},
+    "agent": {"type": "string", "description": "forgerun agent to carry on with, e.g. claude-code, cursor, opencode, pi, prime. Omit for the server's default."},
     "model": {"type": "string", "description": "Model for that agent, as forgerun names it. Omit for the agent's default."},
     "effort": {"type": "string", "description": "Reasoning effort, e.g. low, medium, high. Omit for the default."},
     "plan": {"type": "boolean", "description": "Plan first: the agent proposes a plan and waits for the user's approval in forgerun."}

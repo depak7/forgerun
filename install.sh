@@ -12,7 +12,8 @@
 #   FORGERUN_ROLE=worker|serve        what this machine is for
 #   FORGERUN_SERVER, FORGERUN_WORKER_TOKEN     the orchestrator, for a worker
 #   CURSOR_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, OPENCODE_API_KEY, GITHUB_TOKEN
-#   OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY  pi's providers
+#   OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY  pi / Prime Agent providers
+#   GEMINI_API_KEY, XAI_API_KEY, PRIME_API_KEY             Prime Agent also
 #   FORGERUN_SERVICE=yes|no           run it in the background, now and at boot (default yes)
 #   FORGERUN_SANDBOX=gvisor           on Linux without KVM: gVisor sandboxes (installs Docker + gVisor)
 #   FORGERUN_DIR (~/forgerun), FORGERUN_REPO, FORGERUN_BRANCH (main)
@@ -308,7 +309,7 @@ configure_worker() {
 		return
 	fi
 	(umask 077 && : >"$ENV_FILE")
-	for k in FORGERUN_SERVER FORGERUN_WORKER_TOKEN FORGERUN_SANDBOX CURSOR_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENCODE_API_KEY OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY; do
+	for k in FORGERUN_SERVER FORGERUN_WORKER_TOKEN FORGERUN_SANDBOX CURSOR_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENCODE_API_KEY OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY XAI_API_KEY PRIME_API_KEY; do
 		set_env "$ENV_FILE" "$k"
 	done
 	say "saved the settings to $ENV_FILE (only you can read it)"
@@ -320,7 +321,7 @@ configure_serve() {
 		set_env "$ENV_FILE" FORGERUN_SANDBOX
 	else
 		(umask 077 && cp "$DIR/.env.example" "$ENV_FILE")
-		for k in GITHUB_TOKEN FORGERUN_SANDBOX CURSOR_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENCODE_API_KEY OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY; do
+		for k in GITHUB_TOKEN FORGERUN_SANDBOX CURSOR_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENCODE_API_KEY OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY XAI_API_KEY PRIME_API_KEY; do
 			set_env "$ENV_FILE" "$k"
 		done
 		say "saved the settings to $ENV_FILE (only you can read it)"
@@ -337,7 +338,7 @@ configure_serve() {
 # terminal, the keys come from the environment.
 agent_keys() {
 	tty_ok || return 0
-	printf '\nWhich coding agents will you use? Their numbers, e.g. 1 4\n  1) Cursor\n  2) Claude Code\n  3) OpenCode (its free models need no key)\n  4) pi (models from OpenRouter, OpenAI or Anthropic)\n' >/dev/tty
+	printf '\nWhich coding agents will you use? Their numbers, e.g. 1 4\n  1) Cursor\n  2) Claude Code\n  3) OpenCode (its free models need no key)\n  4) pi (models from OpenRouter, OpenAI or Anthropic)\n  5) Prime Agent (OpenRouter, OpenAI, Anthropic, Gemini, xAI, Prime Inference)\n' >/dev/tty
 	ask agents "Agents" "1 2 3 4"
 	# shellcheck disable=SC2086 # the numbers are words
 	for a in $(echo $agents | tr , ' '); do
@@ -346,6 +347,7 @@ agent_keys() {
 		2) ask_secret CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CODE_OAUTH_TOKEN (Claude Code: the output of claude setup-token)" ;;
 		3) ask_secret OPENCODE_API_KEY "OPENCODE_API_KEY (OpenCode's paid models; its free ones need none)" ;;
 		4) pi_keys ;;
+		5) prime_keys ;;
 		*) warn "no agent $a: skipped" ;;
 		esac
 	done
@@ -362,6 +364,25 @@ pi_keys() {
 		1) ask_secret OPENROUTER_API_KEY "OPENROUTER_API_KEY (from openrouter.ai/keys)" ;;
 		2) ask_secret OPENAI_API_KEY "OPENAI_API_KEY (an OpenAI API key, not a ChatGPT login)" ;;
 		3) ask_secret ANTHROPIC_API_KEY "ANTHROPIC_API_KEY (an Anthropic API key, from console.anthropic.com)" ;;
+		*) warn "no provider $p: skipped" ;;
+		esac
+	done
+}
+
+# prime_keys asks which providers Prime Agent will use. Subscription /login
+# can't be used (tokens would refresh inside the sandbox).
+prime_keys() {
+	printf '\nPrime Agent: which model providers? Their numbers, e.g. 1 6\n  1) OpenRouter\n  2) OpenAI\n  3) Anthropic\n  4) Google Gemini\n  5) xAI\n  6) Prime Inference\n' >/dev/tty
+	ask providers "Providers" 1
+	# shellcheck disable=SC2086
+	for p in $(echo $providers | tr , ' '); do
+		case $p in
+		1) ask_secret OPENROUTER_API_KEY "OPENROUTER_API_KEY (from openrouter.ai/keys)" ;;
+		2) ask_secret OPENAI_API_KEY "OPENAI_API_KEY (an OpenAI API key, not a ChatGPT login)" ;;
+		3) ask_secret ANTHROPIC_API_KEY "ANTHROPIC_API_KEY (an Anthropic API key, from console.anthropic.com)" ;;
+		4) ask_secret GEMINI_API_KEY "GEMINI_API_KEY (from aistudio.google.com / Google AI Studio)" ;;
+		5) ask_secret XAI_API_KEY "XAI_API_KEY (from console.x.ai)" ;;
+		6) ask_secret PRIME_API_KEY "PRIME_API_KEY (Prime Inference, from app.primeintellect.ai)" ;;
 		*) warn "no provider $p: skipped" ;;
 		esac
 	done

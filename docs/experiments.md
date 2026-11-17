@@ -508,6 +508,62 @@ rest), its CA given to the sandbox. microsandbox stays the default where KVM or 
 Silicon is available. Snapshots for warm starts: `docker commit` of the session's
 container (to design).
 
+## 14. Prime Agent headless in a sandbox
+
+**Question.** Can Prime Intellect's `prime-agent` (v0.10.3, Rust CLI; pi-mono lineage)
+run unattended with API keys only, `--mode json`, continue, and no interactive `/login`?
+Where does state live, and which hosts need proxy allowlists?
+
+**Test** (`out/prime-exp/`): downloaded and checksummed
+`prime-agent-0.10.3-darwin-arm64.tar.gz`, ran with `HOME` under that directory and a
+dummy `ANTHROPIC_API_KEY`. No microsandbox this pass (host process); proxy hosts taken
+from the CLI's bundled model catalog / binary and Prime Inference docs.
+
+**Result.**
+- Headless works: `prime-agent --mode json --provider anthropic --model claude-sonnet-4-5
+  --offline --no-skills -- "…"`. Env API keys are enough; `/login` is not required.
+- A bad key produces `message_end` with `stopReason: "error"` and
+  `errorMessage: "Provider authentication failed … 401 …"`. **Exit code is still 0** —
+  the adapter must fail the run from the JSON stream (same idea as pi).
+- `-c` / `--continue` resumes the latest session under `~/.prime/agent/sessions/`.
+- State: `~/.prime/agent/` (sessions, auth.json, session-artifacts, kernel-venv). First
+  runs without a prebuilt kernel also write `~/.local` / `~/.cache/uv` while downloading
+  CPython — the guest image must ship Python + `ipykernel` and set
+  `PRIME_AGENT_KERNEL_PYTHON` so tasks don't bloat snapshots.
+- Built-in tool is `ipython` (Python REPL; shell via `bash(...)` inside it). Rust CLI
+  **0.10.3 has no `--tools` flag** (`Unknown option`). Read-only / plan-first uses
+  `--append-system-prompt` (forgerun still discards any file changes on plan turns).
+- Do not use `--autonomous` for forgerun turns. Prefer `--offline` / no telemetry env
+  so the agent does not phone home for updates during a task.
+- Providers for forgerun (env → host):
+  - `anthropic` → `ANTHROPIC_API_KEY` → `api.anthropic.com`
+  - `openai` → `OPENAI_API_KEY` → `api.openai.com`
+  - `openrouter` → `OPENROUTER_API_KEY` → `openrouter.ai`
+  - `google` → `GEMINI_API_KEY` → `generativelanguage.googleapis.com`
+  - `xai` → `XAI_API_KEY` → `api.x.ai`
+  - `prime-inference` → `PRIME_API_KEY` → `api.pinference.ai`
+  Model family is `<provider>/<model>` (first slash splits), e.g.
+  `openrouter/anthropic/claude-sonnet-4.5`, `prime-inference/z-ai/glm-5.3`.
+  Thinking levels: `off|minimal|low|medium|high|xhigh|max` via `--thinking`.
+- `prime-agent model list` with no login prints nothing useful; seed models from the
+  bundled catalog (and a few known `prime-inference/…` ids from the binary / docs).
+  Subscription OAuth stays out (same reason as pi: refresh inside the VM).
+
+**Decision.** Add agent `prime` as a `Providers` + `Continuer` + `Replier` adapter
+mirroring pi: JSON event log, `-c` continue, API keys only, image
+`depak7/forgerun-agent-prime:dev` with pinned 0.10.3 + Python kernel. No `--autonomous`.
+
+**forgerun smoke (2026-11-18).** Guest image from `python:3.11-slim-bookworm` with
+`prime-agent-runtime`, default data packages, and skill wheels in
+`/opt/prime-kernel` (`PRIME_AGENT_KERNEL_PYTHON`). Multi-arch tag
+`depak7/forgerun-agent-prime:dev`. After renewing `OPENROUTER_API_KEY`,
+`forgerun run -agent prime -model openrouter/anthropic/claude-sonnet-4.5` on
+playground created `prime_smoke.txt` (`hello from prime`). Earlier failures:
+expired key (adapter caught exit-0 JSON error); incomplete kernel (msb cache
+held an old image — `msb pull -f` / `docker save | msb load -t …` after rebuild).
+
+---
+
 ## Researched, not yet tested: Claude Code authentication
 
 Based on community guides and issue reports (not official docs), to be confirmed by
