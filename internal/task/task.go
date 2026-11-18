@@ -232,10 +232,8 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 		// records no changes, so it keeps none.
 		cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer done()
-		if _, rerr := git(cleanup, "reset", "-q", "--hard"); rerr != nil {
-			r.broken(ss, rerr)
-		} else if _, cerr := git(cleanup, "clean", "-fdq"); cerr != nil {
-			r.broken(ss, cerr)
+		if derr := discardChanges(cleanup, sb, repoDir, res.BaseCommit); derr != nil {
+			r.broken(ss, derr)
 		}
 		step("the turn's changes were discarded")
 		return res, fmt.Errorf("agent: %w", err)
@@ -244,11 +242,7 @@ func (r *Runner) Run(ctx context.Context, t Task) (Result, error) {
 	ss.continued = continuer
 	if t.Plan {
 		// A plan changes nothing, whatever the agent did.
-		if _, err := git(ctx, "reset", "-q", "--hard"); err != nil {
-			r.broken(ss, err)
-			return res, fmt.Errorf("discarding a plan's changes: %w", err)
-		}
-		if _, err := git(ctx, "clean", "-fdq"); err != nil {
+		if err := discardChanges(ctx, sb, repoDir, res.BaseCommit); err != nil {
 			r.broken(ss, err)
 			return res, fmt.Errorf("discarding a plan's changes: %w", err)
 		}
@@ -473,7 +467,33 @@ func (r *Runner) Summarize(ctx context.Context, thread string) (string, error) {
 	if !ok || !ss.continued {
 		return "", nil
 	}
-	return c.Continue(ctx, ss.sb, repoDir, SummaryPrompt)
+	head, err := ss.sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"-C", repoDir, "rev-parse", "HEAD"}})
+	if err != nil {
+		r.broken(ss, err)
+		return "", fmt.Errorf("reading the session's commit: %w", err)
+	}
+	reply, err := c.Continue(ctx, ss.sb, repoDir, SummaryPrompt)
+	// A summary is read-only, but not every agent can enforce that (prime has
+	// no tool allowlist): undo anything it changed, so the next turn's diff
+	// holds only that turn's work.
+	cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer done()
+	if derr := discardChanges(cleanup, ss.sb, repoDir, strings.TrimSpace(head)); derr != nil {
+		r.broken(ss, derr)
+	}
+	return reply, err
+}
+
+// discardChanges puts the repository at dir back to commit, undoing whatever
+// a run that must keep nothing (a failed turn, a plan, a summary) changed:
+// edits, new files, and commits the agent made itself, which a plain
+// reset to HEAD would keep.
+func discardChanges(ctx context.Context, sb sandbox.Sandbox, dir, commit string) error {
+	if _, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"-C", dir, "reset", "-q", "--hard", commit}}); err != nil {
+		return err
+	}
+	_, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"-C", dir, "clean", "-fdq"}})
+	return err
 }
 
 // closeSession saves the session's VM as the repo's snapshot (the work in

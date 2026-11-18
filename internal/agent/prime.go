@@ -137,8 +137,8 @@ func primeCmd(dir string, args []string) sandbox.Cmd {
 }
 
 // primeReadOnlyPrompt is appended on plan / summary turns. Rust prime-agent
-// 0.10.3 has no --tools allowlist; forgerun also discards any file changes
-// on read-only runs.
+// 0.10.3 has no --tools allowlist, so this is only a request; the runner
+// resets the repository to its starting commit after every read-only run.
 const primeReadOnlyPrompt = "Do not create, edit, delete, or overwrite any files. Do not run commands that change the repository. Read and answer only."
 
 // primeArgs builds the CLI arguments. The family is "<provider>/<model>";

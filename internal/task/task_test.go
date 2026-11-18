@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -148,5 +149,34 @@ func TestRunsTheTasksAgent(t *testing.T) {
 	}
 	if took := time.Since(start); took > 2*time.Second {
 		t.Errorf("took %s: a missing credential should fail before booting a VM", took)
+	}
+}
+
+// A run that must keep nothing leaves the repository at its starting
+// commit, even when the agent edited, added and committed files itself.
+func TestDiscardChangesUndoesCommits(t *testing.T) {
+	dir := t.TempDir()
+	commit := func(msg string) {
+		hostRun(t, dir, "git", "add", "-A")
+		hostRun(t, dir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg)
+	}
+	hostRun(t, dir, "git", "init", "-q")
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o600)
+	commit("start")
+	start := hostRun(t, dir, "git", "rev-parse", "HEAD")
+
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("two\n"), 0o600)
+	commit("the agent's own commit")
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("three\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "new.txt"), []byte("x\n"), 0o600)
+
+	if err := discardChanges(context.Background(), hostSandbox{}, dir, start); err != nil {
+		t.Fatal(err)
+	}
+	if head := hostRun(t, dir, "git", "rev-parse", "HEAD"); head != start {
+		t.Errorf("HEAD %s, want %s", head, start)
+	}
+	if st := hostRun(t, dir, "git", "status", "--porcelain"); st != "" {
+		t.Errorf("tree not clean:\n%s", st)
 	}
 }
