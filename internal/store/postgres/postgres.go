@@ -346,6 +346,15 @@ func (s *Store) SaveFolder(ctx context.Context, f store.Folder, data []byte) err
 	return nil
 }
 
+func (s *Store) DeleteUnusedFolders(ctx context.Context, cutoff time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM folders f WHERE created_at < $1
+		AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.folder_id = f.id)`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("deleting unused folders: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (s *Store) GetFolder(ctx context.Context, id string) (store.Folder, error) {
 	f := store.Folder{ID: id}
 	var owner *int64

@@ -244,6 +244,9 @@ type Store interface {
 	GetFolder(ctx context.Context, id string) (Folder, error)
 	// FolderData returns an uploaded folder's data, or ErrFolderNotFound.
 	FolderData(ctx context.Context, id string) ([]byte, error)
+	// DeleteUnusedFolders deletes the folders uploaded before cutoff that no
+	// task uses (a refused task, an abandoned handoff), and says how many.
+	DeleteUnusedFolders(ctx context.Context, cutoff time.Time) (int64, error)
 	// FolderDiff returns a folder's uncommitted work at handoff, as a
 	// turn reported it (Outcome.FolderDiff); "" until then.
 	FolderDiff(ctx context.Context, id string) (string, error)

@@ -201,6 +201,7 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 		pool.Fetchers = repoFetchers(db, auth, publisher, log)
 	}
 	pool.Folders = db.FolderData
+	go sweepFolders(ctx, db, log)
 	srv := &http.Server{
 		Handler: routes(os.Getenv("FORGERUN_PUBLIC_URL"), os.Getenv("FORGERUN_ANALYTICS_WEBSITE_ID"), nil, api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
 			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, Capacity: runner, OutDir: *out, GitHubUser: githubUser,

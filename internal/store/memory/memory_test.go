@@ -320,3 +320,27 @@ func TestAPITokens(t *testing.T) {
 		t.Errorf("revoked: %v", err)
 	}
 }
+
+// Only folders no task uses go, and only once they're older than the cutoff.
+func TestDeleteUnusedFolders(t *testing.T) {
+	s, ctx := New(fakeDefault), context.Background()
+	s.SaveFolder(ctx, store.Folder{ID: "f-used", Name: "a"}, []byte("tgz"))
+	s.SaveFolder(ctx, store.Folder{ID: "f-unused", Name: "b"}, []byte("tgz"))
+	used := task.New("a", "p")
+	used.FolderID = "f-used"
+	if err := s.Create(ctx, used, "fake"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.DeleteUnusedFolders(ctx, time.Now().Add(-time.Hour)); err != nil || n != 0 {
+		t.Errorf("recent uploads: deleted %d, %v", n, err)
+	}
+	if n, err := s.DeleteUnusedFolders(ctx, time.Now().Add(time.Hour)); err != nil || n != 1 {
+		t.Errorf("deleted %d, %v; want 1", n, err)
+	}
+	if _, err := s.GetFolder(ctx, "f-unused"); !errors.Is(err, store.ErrFolderNotFound) {
+		t.Errorf("unused folder: %v", err)
+	}
+	if _, err := s.GetFolder(ctx, "f-used"); err != nil {
+		t.Errorf("used folder: %v", err)
+	}
+}

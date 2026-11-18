@@ -393,6 +393,23 @@ func (s *Store) SaveFolder(_ context.Context, f store.Folder, data []byte) error
 	return nil
 }
 
+func (s *Store) DeleteUnusedFolders(_ context.Context, cutoff time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	used := map[string]bool{}
+	for _, r := range s.tasks {
+		used[r.FolderID] = true
+	}
+	var n int64
+	for id, f := range s.folders {
+		if !used[id] && f.CreatedAt.Before(cutoff) {
+			delete(s.folders, id)
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (s *Store) GetFolder(_ context.Context, id string) (store.Folder, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

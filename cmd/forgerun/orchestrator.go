@@ -38,6 +38,7 @@ func orchestrate(ctx context.Context, stop context.CancelFunc, ln net.Listener, 
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go rs.Reap(ctx) // fails turns whose worker went away
+	go sweepFolders(ctx, db, log)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 	log.Info("forgerun orchestrator serving; workers connect with forgerun worker", "addr", ln.Addr().String())
@@ -57,6 +58,28 @@ func orchestrate(ctx context.Context, stop context.CancelFunc, ln net.Listener, 
 	}
 	log.Info("stopped")
 	return runErr
+}
+
+// sweepFolders deletes, every 10 minutes, uploaded folders no thread
+// started from within an hour (a refused task, an abandoned handoff); the
+// folders threads use stay, as their sessions are rebuilt from them.
+func sweepFolders(ctx context.Context, db store.Store, log *slog.Logger) {
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for {
+		n, err := db.DeleteUnusedFolders(ctx, time.Now().Add(-time.Hour))
+		switch {
+		case err != nil && ctx.Err() == nil:
+			log.Warn("deleting unused folders", "err", err)
+		case n > 0:
+			log.Info("deleted unused folders", "count", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // fetchTokens decides, per turn, whether the worker must fetch the repo on
