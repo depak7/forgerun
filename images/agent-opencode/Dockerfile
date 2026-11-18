@@ -2,7 +2,7 @@ FROM node:22-bookworm-slim
 
 # ripgrep: OpenCode's grep tool runs rg.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git curl ca-certificates ripgrep \
+ && apt-get install -y --no-install-recommends git curl ca-certificates python3 python3-venv python3-pip ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 # Pinned to the version forgerun was tested with; bump deliberately, and the

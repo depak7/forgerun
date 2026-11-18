@@ -3,7 +3,7 @@ FROM node:22-bookworm-slim
 # fd and ripgrep: pi's find and grep tools run them, and would otherwise
 # download the latest release from GitHub when first used.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git curl ca-certificates ripgrep fd-find \
+ && apt-get install -y --no-install-recommends git curl ca-certificates python3 python3-venv python3-pip ripgrep fd-find \
  && rm -rf /var/lib/apt/lists/*
 
 # Pinned to the version forgerun was tested with, with its whole dependency
