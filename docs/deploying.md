@@ -97,6 +97,26 @@ thread sticks to the worker holding its VM.
   token). Anyone with the worker token can pretend to be a worker and receive turns
   (including private repos' fetch tokens): rotate it if it leaks.
 
+## A shell on a worker
+
+Workers only dial out, so nothing on them accepts connections, SSH included. To reach a
+worker at home, put it on a private network you control (a VPN such as WireGuard or a mesh
+VPN) and SSH in over that; don't open SSH on your router. Give that access only to whoever
+runs the worker: the host holds the agent keys and every thread's VM.
+
+On the worker, a thread's sandbox can be opened directly:
+
+```sh
+msb ls                          # microVMs: a worker's are named fw-…, serve's fs-…
+msb exec fw-… -- sh
+docker ps                       # gVisor sandboxes
+docker exec -it <container> sh
+```
+
+A sandbox holds no keys, only placeholders. Anything you change in its repository becomes
+part of the thread's next turn, and can be pushed with it. An idle session's VM is saved
+and closed after `-session-idle` (30 minutes by default).
+
 ## The orchestrator on a container platform
 
 Any platform that builds and runs a Dockerfile works for the orchestrator (it runs no VMs),
