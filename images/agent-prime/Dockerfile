@@ -13,6 +13,9 @@ RUN apt-get update \
 # https://github.com/PrimeIntellect-ai/prime-agent/releases/tag/v0.10.3
 ARG PRIME_VERSION=0.10.3
 ARG TARGETARCH
+# Every kernel package is pinned with its hash (requirements.in says how to
+# re-lock); the tarball's own packages install against it, offline.
+COPY requirements.txt /tmp/requirements.txt
 RUN set -eu; \
   case "$TARGETARCH" in \
     amd64) arch=linux-x64;  sha=811d9f0ec9dff007d5bda9c8435b0e7f46ef7041fa2fc103efc9edc295cb5528 ;; \
@@ -28,14 +31,14 @@ RUN set -eu; \
   ln -s /opt/prime-agent/prime-agent /usr/local/bin/prime-agent; \
   rm -f "/tmp/$file"; \
   python3 -m venv /opt/prime-kernel; \
-  /opt/prime-kernel/bin/pip install --no-cache-dir \
-    ipykernel \
-    "/opt/prime-agent/prime-agent-runtime" \
-    requests httpx pyyaml tomli python-dotenv \
-    pandas numpy scipy beautifulsoup4 lxml; \
+  /opt/prime-kernel/bin/pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt; \
+  rm -f /tmp/requirements.txt; \
+  /opt/prime-kernel/bin/pip install --no-cache-dir --no-deps --no-build-isolation \
+    "/opt/prime-agent/prime-agent-runtime"; \
   for d in /opt/prime-agent/skills/*/pyproject.toml; do \
-    /opt/prime-kernel/bin/pip install --no-cache-dir "$(dirname "$d")"; \
-  done
+    /opt/prime-kernel/bin/pip install --no-cache-dir --no-deps --no-build-isolation "$(dirname "$d")"; \
+  done; \
+  /opt/prime-kernel/bin/pip check
 
 ENV PRIME_AGENT_KERNEL_PYTHON=/opt/prime-kernel/bin/python \
     PI_OFFLINE=1 \

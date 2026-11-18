@@ -1,0 +1,21 @@
+# The Python kernel prime-agent runs its REPL in. Lock it with:
+#   docker run --rm -v "$PWD":/w -w /w python:3.11-slim-bookworm sh -c \
+#     'pip install -q pip-tools && pip-compile -q --generate-hashes --allow-unsafe requirements.in'
+# prime-agent-runtime's own dependencies (it ships in the release tarball):
+mcp>=2,<3
+tyro
+# The REPL and the default packages prime-agent expects in it:
+ipykernel
+requests
+httpx
+pyyaml
+tomli
+python-dotenv
+pandas
+numpy
+scipy
+beautifulsoup4
+lxml
+# Bundled skills: attach-image needs pillow; all of them build with hatchling.
+pillow
+hatchling

@@ -562,6 +562,14 @@ playground created `prime_smoke.txt` (`hello from prime`). Earlier failures:
 expired key (adapter caught exit-0 JSON error); incomplete kernel (msb cache
 held an old image — `msb pull -f` / `docker save | msb load -t …` after rebuild).
 
+**Kernel packages and skills (2026-11-18).** `--no-skills` only stops skill discovery: the
+request prime-agent sends is the same with or without it, and its harness prompt still
+tells the model to use bundled skill packages (`agent_message.send(...)` for subagent
+replies). So the image keeps installing them. Every kernel package is now locked with
+hashes (`images/agent-prime/requirements.txt`, from `requirements.in`, scanned with
+`pip-audit`); the runtime and skills from the tarball install against that lock with
+`--no-deps --no-build-isolation`, so a build downloads nothing unpinned.
+
 ---
 
 ## Researched, not yet tested: Claude Code authentication
