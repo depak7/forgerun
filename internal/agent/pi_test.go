@@ -72,7 +72,7 @@ const piRun = `{"type":"message_end","message":{"role":"user","content":"fix add
 
 func TestPiEventsLog(t *testing.T) {
 	var logs strings.Builder
-	ev := &piEvents{logs: &logs}
+	ev := &piEvents{agent: "pi", logs: &logs}
 	// Written in odd pieces, as a stream arrives: lines are split anywhere.
 	for i := 0; i < len(piRun); i += 7 {
 		ev.Write([]byte(piRun[i:min(i+7, len(piRun))]))
@@ -106,7 +106,7 @@ func TestPiRetries(t *testing.T) {
 	retry := `{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"Connection error."}` + "\n"
 
 	var logs strings.Builder
-	ok := &piEvents{logs: &logs}
+	ok := &piEvents{agent: "pi", logs: &logs}
 	ok.Write([]byte(failed + retry +
 		`{"type":"auto_retry_end","success":true,"attempt":1}` + "\n" +
 		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}}` + "\n"))
@@ -117,7 +117,7 @@ func TestPiRetries(t *testing.T) {
 		t.Errorf("log:\n%s", logs.String())
 	}
 
-	gaveUp := &piEvents{logs: &logs}
+	gaveUp := &piEvents{agent: "pi", logs: &logs}
 	gaveUp.Write([]byte(failed + retry + failed +
 		`{"type":"auto_retry_end","success":false,"attempt":3,"finalError":"Connection error."}` + "\n"))
 	for _, exit := range []error{nil, &sandbox.ExitError{Code: 1}} {
@@ -131,7 +131,7 @@ func TestPiRetries(t *testing.T) {
 	}
 
 	// A failure pi doesn't retry ends the run with no auto_retry_end.
-	once := &piEvents{logs: &logs}
+	once := &piEvents{agent: "pi", logs: &logs}
 	once.Write([]byte(`{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"401 invalid key"}}`))
 	once.flush()
 	if err := once.result(nil); err == nil || err.Error() != "pi: 401 invalid key" {
@@ -141,7 +141,7 @@ func TestPiRetries(t *testing.T) {
 
 func TestPiNonEventLinesPassThrough(t *testing.T) {
 	var logs strings.Builder
-	ev := &piEvents{logs: &logs}
+	ev := &piEvents{agent: "pi", logs: &logs}
 	ev.Write([]byte("\x1b[33mwarning: something\x1b[0m\n"))
 	if logs.String() != "warning: something\n" {
 		t.Errorf("log = %q", logs.String())

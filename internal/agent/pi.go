@@ -57,26 +57,13 @@ func (p *Pi) StatePaths() []string { return []string{"/root/.pi/agent"} }
 func (p *Pi) ActivityPaths() []string { return []string{"/root/.pi/agent/sessions"} }
 
 func (p *Pi) Run(ctx context.Context, sb sandbox.Sandbox, req Request, logs io.Writer) error {
-	ev := &piEvents{logs: logs}
-	err := sb.Stream(ctx, piCmd(req.Dir, piArgs(req)), ev)
-	ev.flush()
-	if req.Reply != nil {
-		io.WriteString(req.Reply, ev.reply)
-	}
-	return ev.result(err)
+	return runEvents(ctx, sb, "pi", piCmd(req.Dir, piArgs(req)), req.Reply, logs)
 }
 
 // Continue sends prompt to the latest session in dir with read-only tools,
 // and returns the reply.
 func (p *Pi) Continue(ctx context.Context, sb sandbox.Sandbox, dir, prompt string) (string, error) {
-	out, err := sb.Run(ctx, piCmd(dir, piArgs(Request{Prompt: prompt, Continue: true, ReadOnly: true})))
-	ev := &piEvents{logs: io.Discard}
-	ev.Write([]byte(out))
-	ev.flush()
-	if err := ev.result(err); err != nil {
-		return "", err
-	}
-	return ev.reply, nil
+	return continueEvents(ctx, sb, "pi", piCmd(dir, piArgs(Request{Prompt: prompt, Continue: true, ReadOnly: true})))
 }
 
 // piCmd runs pi with stdin closed and nothing fetched at startup: no update
@@ -118,8 +105,32 @@ func piArgs(req Request) []string {
 	return append(args, "--", req.Prompt)
 }
 
-// piEvent is one line of `pi --mode json`: a finished message, a tool
-// call, or a retried model call.
+// runEvents runs cmd, an agent speaking pi's JSON events (pi, and
+// prime-agent, which comes from pi), logging them as they arrive.
+func runEvents(ctx context.Context, sb sandbox.Sandbox, agent string, cmd sandbox.Cmd, reply, logs io.Writer) error {
+	ev := &piEvents{agent: agent, logs: logs}
+	err := sb.Stream(ctx, cmd, ev)
+	ev.flush()
+	if reply != nil {
+		io.WriteString(reply, ev.reply)
+	}
+	return ev.result(err)
+}
+
+// continueEvents runs cmd like runEvents, and returns only the reply.
+func continueEvents(ctx context.Context, sb sandbox.Sandbox, agent string, cmd sandbox.Cmd) (string, error) {
+	out, err := sb.Run(ctx, cmd)
+	ev := &piEvents{agent: agent, logs: io.Discard}
+	ev.Write([]byte(out))
+	ev.flush()
+	if err := ev.result(err); err != nil {
+		return "", err
+	}
+	return ev.reply, nil
+}
+
+// piEvent is one line of `pi --mode json` (or prime-agent's): a finished
+// message, a tool call, or a retried model call.
 type piEvent struct {
 	Type    string `json:"type"`
 	Message struct {
@@ -149,10 +160,11 @@ type piPart struct {
 // piEvents turns pi's JSON events into a readable log, and keeps what the
 // agent said last as the reply.
 type piEvents struct {
+	agent string // its name in errors: "pi", "prime"
 	logs  io.Writer
 	buf   []byte
 	reply string
-	err   string // why the run failed, from pi's own events
+	err   string // why the run failed, from the agent's own events
 	// failed is the last model call's error, until a later call succeeds:
 	// pi retries a failed call, and only the last attempt decides the run.
 	failed string
@@ -230,14 +242,23 @@ func (e *piEvents) message(ev piEvent) {
 }
 
 // toolStart logs one tool call: "$ go test ./..." for a shell command,
-// "→ edit main.go" for the rest.
+// the start of the code for prime-agent's Python REPL, "→ edit main.go"
+// for the rest.
 func (e *piEvents) toolStart(ev piEvent) {
-	if ev.ToolName == "bash" {
+	switch {
+	case ev.ToolName == "bash":
 		fmt.Fprintf(e.logs, "$ %s\n", str(ev.Args["command"]))
-		return
+	case isREPL(ev.ToolName):
+		code := strings.ReplaceAll(str(ev.Args["code"]), "\n", " ")
+		fmt.Fprintf(e.logs, "→ %s %s\n", ev.ToolName, cut(code, 120, "…"))
+	default:
+		fmt.Fprintf(e.logs, "→ %s %s\n", ev.ToolName, cmp.Or(str(ev.Args["path"]), str(ev.Args["pattern"]), str(ev.Args["glob"])))
 	}
-	fmt.Fprintf(e.logs, "→ %s %s\n", ev.ToolName, cmp.Or(str(ev.Args["path"]), str(ev.Args["pattern"]), str(ev.Args["glob"])))
 }
+
+// isREPL tells prime-agent's Python REPL tools, whose output is logged
+// like a shell command's.
+func isREPL(tool string) bool { return tool == "ipython" || tool == "python_repl" }
 
 // toolEnd logs a shell command's output, and any tool's failure.
 func (e *piEvents) toolEnd(ev piEvent) {
@@ -247,14 +268,11 @@ func (e *piEvents) toolEnd(ev piEvent) {
 			out = append(out, p.Text)
 		}
 	}
-	text := strings.TrimRight(strings.Join(out, "\n"), "\n")
-	if len(text) > maxToolOutput {
-		text = text[:maxToolOutput] + "\n… (output cut)"
-	}
+	text := cut(strings.TrimRight(strings.Join(out, "\n"), "\n"), maxToolOutput, "\n… (output cut)")
 	switch {
 	case ev.IsError:
 		fmt.Fprintf(e.logs, "✗ %s: %s\n", ev.ToolName, cmp.Or(text, "failed"))
-	case ev.ToolName == "bash" && text != "":
+	case (ev.ToolName == "bash" || isREPL(ev.ToolName)) && text != "":
 		fmt.Fprintf(e.logs, "%s\n", text)
 	}
 }
@@ -266,18 +284,19 @@ func (e *piEvents) fail(why string) {
 	}
 }
 
-// result is the run's error: pi's own reason explains a failed exit better
-// than the exit code does, and fails the run even if the exit code didn't.
+// result is the run's error: the agent's own reason explains a failed exit
+// better than the exit code does, and fails the run even if the exit code
+// didn't (prime-agent exits 0 after a failed model call).
 func (e *piEvents) result(err error) error {
 	if e.err == "" && e.failed != "" {
-		e.err = e.failed // its last model call failed, and pi gave up
+		e.err = e.failed // its last model call failed, and it gave up
 	}
 	if e.err == "" {
 		return err
 	}
 	var exit *sandbox.ExitError
 	if err == nil || errors.As(err, &exit) {
-		return fmt.Errorf("pi: %s", e.err)
+		return fmt.Errorf("%s: %s", e.agent, e.err)
 	}
-	return fmt.Errorf("pi: %s: %w", e.err, err)
+	return fmt.Errorf("%s: %s: %w", e.agent, e.err, err)
 }

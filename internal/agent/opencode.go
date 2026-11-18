@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/depak7/forgerun/internal/sandbox"
 )
@@ -91,10 +92,7 @@ func lastLoggedError(sb sandbox.Sandbox) string {
 	}
 	why := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(out), `error.error="`), `"`)
 	why = strings.TrimPrefix(why, "AI_APICallError: ")
-	if len(why) > 300 {
-		why = why[:300] + "…"
-	}
-	return why
+	return cut(why, 300, "…")
 }
 
 // Continue sends prompt to the latest session in dir with the read-only
@@ -173,6 +171,18 @@ type opencodeEvent struct {
 
 // maxToolOutput is how much of a shell command's output reaches the log.
 const maxToolOutput = 2000
+
+// cut keeps the first n bytes of s, without splitting a character, and
+// adds more where it cut.
+func cut(s string, n int, more string) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + more
+}
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
@@ -302,10 +312,7 @@ func (e *opencodeEvents) tool(ev opencodeEvent) {
 	}
 	fmt.Fprintf(e.logs, "$ %s\n", cmp.Or(str(s.Input["command"]), what))
 	if out := strings.TrimRight(s.Output, "\n"); out != "" {
-		if len(out) > maxToolOutput {
-			out = out[:maxToolOutput] + "\n… (output cut)"
-		}
-		fmt.Fprintf(e.logs, "%s\n", out)
+		fmt.Fprintf(e.logs, "%s\n", cut(out, maxToolOutput, "\n… (output cut)"))
 	}
 }
 

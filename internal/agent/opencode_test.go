@@ -190,3 +190,16 @@ func TestOpenCodeStopsAfterRepeatedFailures(t *testing.T) {
 		t.Errorf("stopped = %q, want %q", stopped, want)
 	}
 }
+
+// A cut never splits a character, so logs stay valid UTF-8.
+func TestCutKeepsCharactersWhole(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"abc", "abc"},
+		{"abcd", "abc…"},
+		{"ab✓cd", "ab…"}, // ✓ is 3 bytes; byte 3 is inside it
+	} {
+		if got := cut(c.in, 3, "…"); got != c.want {
+			t.Errorf("cut(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

@@ -40,9 +40,6 @@ RUN set -eu; \
   done; \
   /opt/prime-kernel/bin/pip check
 
-ENV PRIME_AGENT_KERNEL_PYTHON=/opt/prime-kernel/bin/python \
-    PI_OFFLINE=1 \
-    PRIME_AGENT_TELEMETRY=0 \
-    DO_NOT_TRACK=1
-
+# forgerun's adapter (internal/agent/prime.go) sets the runtime env:
+# PRIME_AGENT_KERNEL_PYTHON=/opt/prime-kernel/bin/python, offline, no telemetry.
 WORKDIR /work

@@ -1,12 +1,7 @@
 package agent
 
 import (
-	"bytes"
-	"cmp"
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"strings"
 
@@ -59,31 +54,18 @@ func (p *Prime) ActivityPaths() []string {
 }
 
 func (p *Prime) Run(ctx context.Context, sb sandbox.Sandbox, req Request, logs io.Writer) error {
-	ev := &primeEvents{logs: logs}
-	err := sb.Stream(ctx, primeCmd(req.Dir, primeArgs(req)), ev)
-	ev.flush()
-	if req.Reply != nil {
-		io.WriteString(req.Reply, ev.reply)
-	}
-	return ev.result(err)
+	return runEvents(ctx, sb, "prime", primeCmd(req.Dir, primeArgs(req)), req.Reply, logs)
 }
 
 // Continue sends prompt to the latest session in dir with a read-only
 // system addendum, and returns the reply.
 func (p *Prime) Continue(ctx context.Context, sb sandbox.Sandbox, dir, prompt string) (string, error) {
-	out, err := sb.Run(ctx, primeCmd(dir, primeArgs(Request{Prompt: prompt, Continue: true, ReadOnly: true})))
-	ev := &primeEvents{logs: io.Discard}
-	ev.Write([]byte(out))
-	ev.flush()
-	if err := ev.result(err); err != nil {
-		return "", err
-	}
-	return ev.reply, nil
+	return continueEvents(ctx, sb, "prime", primeCmd(dir, primeArgs(Request{Prompt: prompt, Continue: true, ReadOnly: true})))
 }
 
-// primeCmd runs prime-agent with stdin closed. The image's
-// PRIME_AGENT_KERNEL_PYTHON supplies the REPL; PI_OFFLINE / telemetry off
-// stop update checks and analytics during a task.
+// primeCmd runs prime-agent with stdin closed, its REPL on the image's
+// prebuilt kernel (so it never bootstraps one into the session), and no
+// update checks or analytics during a task.
 func primeCmd(dir string, args []string) sandbox.Cmd {
 	return sandbox.Cmd{
 		Name: "sh",
@@ -122,168 +104,4 @@ func primeArgs(req Request) []string {
 	}
 	// "--": a prompt that starts with "-" is the prompt, not an option.
 	return append(args, "--", req.Prompt)
-}
-
-// primeEvent is one line of `prime-agent --mode json`: a finished message,
-// a tool call, or a retried model call (same shape as pi).
-type primeEvent struct {
-	Type    string `json:"type"`
-	Message struct {
-		Role         string          `json:"role"`
-		Content      json.RawMessage `json:"content"`
-		StopReason   string          `json:"stopReason"`
-		ErrorMessage string          `json:"errorMessage"`
-	} `json:"message"`
-	ToolName string         `json:"toolName"`
-	Args     map[string]any `json:"args"`
-	Result   struct {
-		Content []primePart `json:"content"`
-	} `json:"result"`
-	IsError      bool   `json:"isError"`
-	Attempt      int    `json:"attempt"`
-	MaxAttempts  int    `json:"maxAttempts"`
-	ErrorMessage string `json:"errorMessage"`
-	Success      bool   `json:"success"`
-	FinalError   string `json:"finalError"`
-}
-
-type primePart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-// primeEvents turns prime-agent's JSON events into a readable log, and
-// keeps what the agent said last as the reply.
-type primeEvents struct {
-	logs   io.Writer
-	buf    []byte
-	reply  string
-	err    string // why the run failed, from its own events
-	failed string // last model-call error until a later call succeeds
-}
-
-func (e *primeEvents) Write(p []byte) (int, error) {
-	e.buf = append(e.buf, p...)
-	for {
-		i := bytes.IndexByte(e.buf, '\n')
-		if i < 0 {
-			return len(p), nil
-		}
-		e.line(e.buf[:i])
-		e.buf = e.buf[i+1:]
-	}
-}
-
-func (e *primeEvents) flush() {
-	if len(e.buf) > 0 {
-		e.line(e.buf)
-		e.buf = nil
-	}
-}
-
-func (e *primeEvents) line(b []byte) {
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 {
-		return
-	}
-	var ev primeEvent
-	if b[0] != '{' || json.Unmarshal(b, &ev) != nil || ev.Type == "" {
-		fmt.Fprintf(e.logs, "%s\n", ansi.ReplaceAll(b, nil))
-		return
-	}
-	switch ev.Type {
-	case "message_end":
-		e.message(ev)
-	case "tool_execution_start":
-		e.toolStart(ev)
-	case "tool_execution_end":
-		e.toolEnd(ev)
-	case "auto_retry_start":
-		fmt.Fprintf(e.logs, "  retrying (attempt %d of %d)\n", ev.Attempt, ev.MaxAttempts)
-	case "auto_retry_end":
-		if !ev.Success {
-			e.fail(cmp.Or(ev.FinalError, "model calls kept failing"))
-		}
-	}
-}
-
-func (e *primeEvents) message(ev primeEvent) {
-	if ev.Message.Role != "assistant" {
-		return
-	}
-	var parts []primePart
-	json.Unmarshal(ev.Message.Content, &parts)
-	var text []string
-	for _, p := range parts {
-		if t := strings.TrimSpace(p.Text); p.Type == "text" && t != "" {
-			text = append(text, t)
-		}
-	}
-	if t := strings.Join(text, "\n\n"); t != "" {
-		fmt.Fprintf(e.logs, "%s\n\n", t)
-		e.reply = t
-	}
-	if ev.Message.StopReason != "error" && ev.Message.StopReason != "aborted" {
-		e.failed = ""
-		return
-	}
-	e.failed = cmp.Or(ev.Message.ErrorMessage, "the model call "+ev.Message.StopReason)
-	fmt.Fprintf(e.logs, "! model call failed: %s\n", e.failed)
-}
-
-func (e *primeEvents) toolStart(ev primeEvent) {
-	switch ev.ToolName {
-	case "bash":
-		fmt.Fprintf(e.logs, "$ %s\n", str(ev.Args["command"]))
-	case "ipython", "python_repl":
-		code := str(ev.Args["code"])
-		if len(code) > 120 {
-			code = code[:120] + "…"
-		}
-		fmt.Fprintf(e.logs, "→ %s %s\n", ev.ToolName, strings.ReplaceAll(code, "\n", " "))
-	default:
-		fmt.Fprintf(e.logs, "→ %s %s\n", ev.ToolName, cmp.Or(str(ev.Args["path"]), str(ev.Args["pattern"]), str(ev.Args["glob"])))
-	}
-}
-
-func (e *primeEvents) toolEnd(ev primeEvent) {
-	var out []string
-	for _, p := range ev.Result.Content {
-		if p.Type == "text" {
-			out = append(out, p.Text)
-		}
-	}
-	text := strings.TrimRight(strings.Join(out, "\n"), "\n")
-	if len(text) > maxToolOutput {
-		text = text[:maxToolOutput] + "\n… (output cut)"
-	}
-	switch {
-	case ev.IsError:
-		fmt.Fprintf(e.logs, "✗ %s: %s\n", ev.ToolName, cmp.Or(text, "failed"))
-	case (ev.ToolName == "bash" || ev.ToolName == "ipython" || ev.ToolName == "python_repl") && text != "":
-		fmt.Fprintf(e.logs, "%s\n", text)
-	}
-}
-
-func (e *primeEvents) fail(why string) {
-	fmt.Fprintf(e.logs, "Error: %s\n", why)
-	if e.err == "" {
-		e.err = why
-	}
-}
-
-// result is the run's error: prime-agent can exit 0 after a failed model
-// call, so its own reason must fail the run.
-func (e *primeEvents) result(err error) error {
-	if e.err == "" && e.failed != "" {
-		e.err = e.failed
-	}
-	if e.err == "" {
-		return err
-	}
-	var exit *sandbox.ExitError
-	if err == nil || errors.As(err, &exit) {
-		return fmt.Errorf("prime: %s", e.err)
-	}
-	return fmt.Errorf("prime: %s: %w", e.err, err)
 }

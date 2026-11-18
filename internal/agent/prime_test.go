@@ -84,7 +84,7 @@ const primeRun = `{"type":"message_end","message":{"role":"user","content":"fix 
 
 func TestPrimeEventsLog(t *testing.T) {
 	var logs strings.Builder
-	ev := &primeEvents{logs: &logs}
+	ev := &piEvents{agent: "prime", logs: &logs}
 	for i := 0; i < len(primeRun); i += 7 {
 		ev.Write([]byte(primeRun[i:min(i+7, len(primeRun))]))
 	}
@@ -111,7 +111,7 @@ Fixed add in math.js.
 
 func TestPrimeAuthFailureDespiteExitZero(t *testing.T) {
 	var logs strings.Builder
-	ev := &primeEvents{logs: &logs}
+	ev := &piEvents{agent: "prime", logs: &logs}
 	ev.Write([]byte(`{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"Provider authentication failed (authentication_error, 401): invalid x-api-key"}}`))
 	ev.flush()
 	for _, exit := range []error{nil, &sandbox.ExitError{Code: 0}, &sandbox.ExitError{Code: 1}} {
@@ -127,7 +127,7 @@ func TestPrimeAuthFailureDespiteExitZero(t *testing.T) {
 
 func TestPrimeNonEventLinesPassThrough(t *testing.T) {
 	var logs strings.Builder
-	ev := &primeEvents{logs: &logs}
+	ev := &piEvents{agent: "prime", logs: &logs}
 	ev.Write([]byte("› setting up python kernel\n"))
 	if logs.String() != "› setting up python kernel\n" {
 		t.Errorf("log = %q", logs.String())
