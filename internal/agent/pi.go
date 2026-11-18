@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	"github.com/depak7/forgerun/internal/sandbox"
@@ -30,14 +29,8 @@ var (
 	_ Watched   = (*Pi)(nil)
 )
 
-// piProviders are the providers pi may use: the key pi reads for each, and
-// the host that key may be sent to. Adding one is a line here and its
-// models' rows in the models table.
-var piProviders = []struct{ name, key, host string }{
-	{"anthropic", "ANTHROPIC_API_KEY", "api.anthropic.com"},
-	{"openai", "OPENAI_API_KEY", "api.openai.com"},
-	{"openrouter", "OPENROUTER_API_KEY", "openrouter.ai"},
-}
+// piKeys are the providers pi supports (see providers).
+var piKeys = providerKeys{"anthropic", "openai", "openrouter"}
 
 func (p *Pi) ID() string    { return "pi" }
 func (p *Pi) Image() string { return "depak7/forgerun-agent-pi:dev" }
@@ -49,37 +42,10 @@ func (p *Pi) Credential() string { return "" }
 // Secrets is unused: a Providers agent's come from SecretFor.
 func (p *Pi) Secrets(string) []sandbox.Secret { return nil }
 
-// CredentialFor is the key of the model's provider, the part of its ID
-// before the first slash.
-func (p *Pi) CredentialFor(modelID string) string {
-	provider, _, _ := strings.Cut(modelID, "/")
-	for _, pr := range piProviders {
-		if pr.name == provider {
-			return pr.key
-		}
-	}
-	return ""
-}
-
-func (p *Pi) Credentials() []string {
-	var names []string
-	for _, pr := range piProviders {
-		names = append(names, pr.key)
-	}
-	slices.Sort(names)
-	return names
-}
-
-// SecretFor: pi reads each key from its environment, where it's a
-// placeholder; the proxy adds the key for its provider's host only.
+func (p *Pi) CredentialFor(modelID string) string { return piKeys.CredentialFor(modelID) }
+func (p *Pi) Credentials() []string               { return piKeys.Credentials() }
 func (p *Pi) SecretFor(name, value string) sandbox.Secret {
-	s := sandbox.Secret{EnvVar: name, Value: value}
-	for _, pr := range piProviders {
-		if pr.key == name {
-			s.AllowHosts = []string{pr.host}
-		}
-	}
-	return s
+	return piKeys.SecretFor(name, value)
 }
 
 // StatePaths: pi's whole home (sessions, settings, caches); it makes it

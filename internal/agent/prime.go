@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	"github.com/depak7/forgerun/internal/sandbox"
@@ -30,17 +29,8 @@ var (
 	_ Watched   = (*Prime)(nil)
 )
 
-// primeProviders are the providers prime-agent may use: the key it reads
-// for each, and the host that key may be sent to. Adding one is a line
-// here and its models' rows in the models table.
-var primeProviders = []struct{ name, key, host string }{
-	{"anthropic", "ANTHROPIC_API_KEY", "api.anthropic.com"},
-	{"openai", "OPENAI_API_KEY", "api.openai.com"},
-	{"openrouter", "OPENROUTER_API_KEY", "openrouter.ai"},
-	{"google", "GEMINI_API_KEY", "generativelanguage.googleapis.com"},
-	{"xai", "XAI_API_KEY", "api.x.ai"},
-	{"prime-inference", "PRIME_API_KEY", "api.pinference.ai"},
-}
+// primeKeys are the providers prime supports (see providers).
+var primeKeys = providerKeys{"anthropic", "openai", "openrouter", "google", "xai", "prime-inference"}
 
 func (p *Prime) ID() string    { return "prime" }
 func (p *Prime) Image() string { return "depak7/forgerun-agent-prime:dev" }
@@ -52,37 +42,10 @@ func (p *Prime) Credential() string { return "" }
 // Secrets is unused: a Providers agent's come from SecretFor.
 func (p *Prime) Secrets(string) []sandbox.Secret { return nil }
 
-// CredentialFor is the key of the model's provider, the part of its ID
-// before the first slash.
-func (p *Prime) CredentialFor(modelID string) string {
-	provider, _, _ := strings.Cut(modelID, "/")
-	for _, pr := range primeProviders {
-		if pr.name == provider {
-			return pr.key
-		}
-	}
-	return ""
-}
-
-func (p *Prime) Credentials() []string {
-	var names []string
-	for _, pr := range primeProviders {
-		names = append(names, pr.key)
-	}
-	slices.Sort(names)
-	return names
-}
-
-// SecretFor: prime-agent reads each key from its environment, where it's a
-// placeholder; the proxy adds the key for its provider's host only.
+func (p *Prime) CredentialFor(modelID string) string { return primeKeys.CredentialFor(modelID) }
+func (p *Prime) Credentials() []string               { return primeKeys.Credentials() }
 func (p *Prime) SecretFor(name, value string) sandbox.Secret {
-	s := sandbox.Secret{EnvVar: name, Value: value}
-	for _, pr := range primeProviders {
-		if pr.key == name {
-			s.AllowHosts = []string{pr.host}
-		}
-	}
-	return s
+	return primeKeys.SecretFor(name, value)
 }
 
 // StatePaths: ~/.prime holds sessions, auth, and the kernel venv; wiping

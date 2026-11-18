@@ -339,40 +339,26 @@ configure_serve() {
 agent_keys() {
 	tty_ok || return 0
 	printf '\nWhich coding agents will you use? Their numbers, e.g. 1 4\n  1) Cursor\n  2) Claude Code\n  3) OpenCode (its free models need no key)\n  4) pi (models from OpenRouter, OpenAI or Anthropic)\n  5) Prime Agent (OpenRouter, OpenAI, Anthropic, Gemini, xAI, Prime Inference)\n' >/dev/tty
-	ask agents "Agents" "1 2 3 4"
+	ask agents "Agents" "1 2 3 4 5"
 	# shellcheck disable=SC2086 # the numbers are words
 	for a in $(echo $agents | tr , ' '); do
 		case $a in
 		1) ask_secret CURSOR_API_KEY "CURSOR_API_KEY (Cursor)" ;;
 		2) ask_secret CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CODE_OAUTH_TOKEN (Claude Code: the output of claude setup-token)" ;;
 		3) ask_secret OPENCODE_API_KEY "OPENCODE_API_KEY (OpenCode's paid models; its free ones need none)" ;;
-		4) pi_keys ;;
-		5) prime_keys ;;
+		4 | 5) providers_wanted=yes ;;
 		*) warn "no agent $a: skipped" ;;
 		esac
 	done
+	[ -z "${providers_wanted:-}" ] || provider_keys
 }
 
-# pi_keys asks which providers pi will use, then each one's API key (pi's
-# subscription logins can't be used).
-pi_keys() {
-	printf '\npi: which model providers? Their numbers, e.g. 1 2\n  1) OpenRouter (many providers'"'"' models with one key)\n  2) OpenAI\n  3) Anthropic\n' >/dev/tty
-	ask providers "Providers" 1
-	# shellcheck disable=SC2086
-	for p in $(echo $providers | tr , ' '); do
-		case $p in
-		1) ask_secret OPENROUTER_API_KEY "OPENROUTER_API_KEY (from openrouter.ai/keys)" ;;
-		2) ask_secret OPENAI_API_KEY "OPENAI_API_KEY (an OpenAI API key, not a ChatGPT login)" ;;
-		3) ask_secret ANTHROPIC_API_KEY "ANTHROPIC_API_KEY (an Anthropic API key, from console.anthropic.com)" ;;
-		*) warn "no provider $p: skipped" ;;
-		esac
-	done
-}
-
-# prime_keys asks which providers Prime Agent will use. Subscription /login
-# can't be used (tokens would refresh inside the sandbox).
-prime_keys() {
-	printf '\nPrime Agent: which model providers? Their numbers, e.g. 1 6\n  1) OpenRouter\n  2) OpenAI\n  3) Anthropic\n  4) Google Gemini\n  5) xAI\n  6) Prime Inference\n' >/dev/tty
+# provider_keys asks once which model providers pi and Prime Agent will use,
+# then each one's API key: a key serves every agent that supports its
+# provider. Subscription logins can't be used (their tokens refresh inside
+# the sandbox).
+provider_keys() {
+	printf '\npi / Prime Agent: which model providers? Their numbers, e.g. 1 4\n  1) OpenRouter (many providers'"'"' models with one key)\n  2) OpenAI\n  3) Anthropic\n  4) Google Gemini (Prime Agent only)\n  5) xAI (Prime Agent only)\n  6) Prime Inference (Prime Agent only)\n' >/dev/tty
 	ask providers "Providers" 1
 	# shellcheck disable=SC2086
 	for p in $(echo $providers | tr , ' '); do
