@@ -12,9 +12,10 @@ import (
 	"github.com/depak7/forgerun/internal/mcp"
 )
 
-// mcpCmd serves forgerun's MCP tools on stdin and stdout, for a local agent
-// that starts it: handing work off to a forgerun server, checking on it,
-// and fetching its changes. The token comes from the environment, so it's
+// mcpCmd serves forgerun's MCP tools on stdin and stdout, for an agent that
+// starts it: handing its work off to a forgerun server, or orchestrating
+// threads there (start, follow, review, steer, push). The token comes from
+// the environment, so it's
 // never on a command line other users of the machine can see.
 func mcpCmd(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)

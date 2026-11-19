@@ -283,16 +283,30 @@ To deploy it for other people (orchestrator on a server with HTTPS and sign-in, 
 your machine), see [docs/deploying.md](docs/deploying.md): a Dockerfile and a compose file
 with automatic HTTPS are included (`deploy/`).
 
-## Hand off from a local agent
+## Drive forgerun from another agent (MCP)
 
-Partway through a task with an agent on your machine, you can send the rest to forgerun:
-`forgerun mcp` is an MCP server your local agent starts, with three tools.
+`forgerun mcp` is an MCP server any agent can start (Claude Code, Cursor, Codex, or your own):
+it can hand off what it's doing, or act as an orchestrator, starting threads on your repos,
+following them, reviewing and steering them, and pushing the result. The agents do the coding
+in forgerun's sandboxes; the one driving them never gets your keys or GitHub token.
 
 | Tool | |
 |---|---|
-| `forgerun_handoff` | sends a copy of the folder and starts a thread whose first message is the agent's summary of the session (what you asked, what's done, what's left) |
-| `forgerun_status` | how the thread is doing: running, finished, failed, or waiting for your answer |
-| `forgerun_diff` | its changes as one patch, to `git apply` in your folder |
+| `forgerun_agents` | the agents forgerun can run and whether each has its key; with `agent`, its models and efforts |
+| `forgerun_branches` | a repo's default branch and its branches |
+| `forgerun_start` | start a thread on a repo: prompt, optional branch, agent, model, effort, plan first |
+| `forgerun_handoff` | send a copy of the local folder and start a thread whose first message is the agent's summary of the session (what you asked, what's done, what's left) |
+| `forgerun_threads` | your threads, and which need attention |
+| `forgerun_status` | how a thread is doing: running, finished, failed, or waiting for an answer or approval; `wait` returns once the turn finishes |
+| `forgerun_log` | the end of the latest turn's log |
+| `forgerun_diff` | the thread's changes as one patch |
+| `forgerun_followup` | the next message: ask for changes, answer questions, or `approve` the plan; may switch agent or model |
+| `forgerun_cancel` | stop the running turn |
+| `forgerun_push` | push the thread's branch, and with `pr` open a pull request into the branch it started from |
+
+A typical loop: `forgerun_start` with `plan`, `forgerun_status` with `wait`, `forgerun_followup`
+with `approve`, `forgerun_status` with `wait` again, review `forgerun_diff`, a follow-up for
+anything to fix, then `forgerun_push` with `pr`.
 
 Add it to your agent, e.g. Claude Code:
 
@@ -309,7 +323,7 @@ or in any MCP client's config:
 
 `FORGERUN_URL` defaults to `http://localhost:8080`. On a server with sign-in, create the token in
 **Settings → Personal tokens** (one per tool; revoke it there). A server in local mode needs none.
-Then ask your agent to "hand the rest off to forgerun".
+Then ask your agent to "hand the rest off to forgerun", or to "use forgerun to fix the failing tests in owner/repo and open a PR".
 
 **What's sent.** In a git repo, the repo's top folder: its files as they are now, uncommitted work
 included, but not what `.gitignore` ignores, and only the current commit of its history, without its

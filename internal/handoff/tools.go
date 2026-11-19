@@ -1,11 +1,13 @@
 package handoff
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/depak7/forgerun/internal/mcp"
 )
@@ -15,9 +17,10 @@ import (
 // thread, its branch and its pull request.
 const handoffNote = `(Handed off from a coding session on the user's machine: the repo here is their folder as it was then, uncommitted work included. The summary above is that session's.)`
 
-// Tools are the MCP tools a local agent hands work off with.
+// Tools are forgerun's MCP tools: a local agent hands work off with them,
+// and any agent can orchestrate threads (orchestrateTools).
 func Tools(c *Client) []mcp.Tool {
-	return []mcp.Tool{
+	return append([]mcp.Tool{
 		{
 			Name: "forgerun_handoff",
 			Description: `Hand the rest of the current task to forgerun, which carries it on in a sandbox on the user's own workers. Use it when the user asks to hand off, delegate, or continue the work in the cloud or in forgerun.
@@ -60,19 +63,28 @@ Returns the thread's ID and link. Check on it later with forgerun_status, and fe
 		},
 		{
 			Name:        "forgerun_status",
-			Description: "How a handed-off forgerun thread is doing: whether its latest turn is running, finished, failed, or waiting for the user (questions or a plan to approve), and what the agent said.",
-			InputSchema: threadSchema,
+			Description: "How a forgerun thread is doing: whether its latest turn is queued, running, finished, failed, or waiting (questions, or a plan to approve), and what the agent said. With wait, it returns as soon as the latest turn stops running, or after that many seconds: use it instead of calling again and again.",
+			InputSchema: json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "thread": {"type": "string", "description": "The thread's ID, or any of its turns'."},
+    "wait": {"type": "integer", "description": "Seconds to wait for a queued or running turn to finish, at most 120. Omit to answer at once."}
+  },
+  "required": ["thread"]
+}`),
 			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
 				id, err := threadArg(args)
 				if err != nil {
 					return "", err
 				}
-				return c.status(ctx, id)
+				var a struct{ Wait int }
+				json.Unmarshal(args, &a)
+				return c.status(ctx, id, time.Duration(min(max(a.Wait, 0), 120))*time.Second)
 			},
 		},
 		{
 			Name:        "forgerun_diff",
-			Description: "The changes a handed-off forgerun thread made, as one patch: every finished turn's changes, oldest first. Apply it in the folder that was handed off with `git apply` (check first with `git apply --check`).",
+			Description: "The changes a forgerun thread made, as one patch: every finished turn's changes, oldest first. Review it; for a handed-off folder, apply it there with `git apply` (check first with `git apply --check`).",
 			InputSchema: threadSchema,
 			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
 				id, err := threadArg(args)
@@ -82,12 +94,12 @@ Returns the thread's ID and link. Check on it later with forgerun_status, and fe
 				return c.threadDiff(ctx, id)
 			},
 		},
-	}
+	}, orchestrateTools(c)...)
 }
 
 var threadSchema = json.RawMessage(`{
   "type": "object",
-  "properties": {"thread": {"type": "string", "description": "The thread's ID (forgerun_handoff returned it), or any of its turns'."}},
+  "properties": {"thread": {"type": "string", "description": "The thread's ID (forgerun_start or forgerun_handoff returned it), or any of its turns'."}},
   "required": ["thread"]
 }`)
 
@@ -108,7 +120,8 @@ func (c *Client) handoff(ctx context.Context, path string, s Start) (string, err
 	if err != nil {
 		return "", err
 	}
-	t, err := c.StartThread(ctx, folder, s)
+	s.Folder = folder
+	t, err := c.StartThread(ctx, s)
 	if err != nil {
 		return "", err
 	}
@@ -129,8 +142,19 @@ func (c *Client) handoff(ctx context.Context, path string, s Start) (string, err
 	return b.String(), nil
 }
 
-func (c *Client) status(ctx context.Context, id string) (string, error) {
+// status reports on a thread, after waiting up to wait for its latest turn
+// to stop running.
+func (c *Client) status(ctx context.Context, id string, wait time.Duration) (string, error) {
+	deadline := time.Now().Add(wait)
 	turns, err := c.Thread(ctx, id)
+	for err == nil && len(turns) > 0 && running(turns[len(turns)-1]) && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(cmp.Or(c.Poll, 3*time.Second)):
+		}
+		turns, err = c.Thread(ctx, id)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -139,16 +163,16 @@ func (c *Client) status(ctx context.Context, id string) (string, error) {
 	}
 	last := turns[len(turns)-1]
 	var b strings.Builder
-	fmt.Fprintf(&b, "Thread %s on %s: %d turn(s). %s\n", last.ThreadID, last.Repo, len(turns), c.ThreadURL(last.ThreadID))
+	fmt.Fprintf(&b, "Thread %s on %s: %d turn(s). %s\n", last.ThreadID, where(last), len(turns), c.ThreadURL(last.ThreadID))
 	switch {
-	case last.State == "queued" || last.State == "running":
+	case running(last):
 		fmt.Fprintf(&b, "The latest turn is %s (%s, model %s).", last.State, last.Agent, last.ModelID)
 	case last.State == "failed" || last.State == "cancelled":
 		fmt.Fprintf(&b, "The latest turn %s: %s", last.State, last.Error)
 	case last.Plan:
-		b.WriteString("The agent wrote a plan and waits for the user to approve it in forgerun.")
+		b.WriteString("The agent wrote a plan and waits for approval: forgerun_followup with approve, or a message asking for changes.")
 	case last.Asked:
-		b.WriteString("The agent asked the user questions; answer them in forgerun.")
+		b.WriteString("The agent asked questions: answer them with forgerun_followup.")
 	default:
 		b.WriteString("The latest turn finished.")
 	}
@@ -189,6 +213,17 @@ func (c *Client) threadDiff(ctx context.Context, id string) (string, error) {
 		return "The thread hasn't changed any files yet.", nil
 	}
 	return b.String(), nil
+}
+
+// running reports whether a turn hasn't finished yet.
+func running(t Task) bool { return t.State == "queued" || t.State == "running" }
+
+// where is a thread's repo, with the branch it started from.
+func where(t Task) string {
+	if t.BaseBranch != "" {
+		return t.Repo + " (from " + t.BaseBranch + ")"
+	}
+	return t.Repo
 }
 
 func slicesCount[T any](s []T, f func(T) bool) int {
