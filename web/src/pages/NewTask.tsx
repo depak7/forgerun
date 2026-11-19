@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import { useAgents, useModels, useRepos, useSnapshots, useStatus, useThreads } from "../api/queries";
+import { useAgents, useBranches, useModels, useRepos, useSnapshots, useStatus, useThreads } from "../api/queries";
 import { blockedByKey, keyLabel, keyState } from "../lib/keys";
 import type { Agent, ModelFamily, NewTask, Task } from "../api/types";
 import { checkRepo, isGitHub, normalizeRepo } from "../format";
@@ -21,6 +21,7 @@ export function NewTaskPage() {
   const { data: repos } = useRepos();
 
   const [repo, setRepo] = useState(params.get("repo") ?? "");
+  const [branch, setBranch] = useState("");
   const [prompt, setPrompt] = useState(params.get("prompt") ?? "");
   const [agentId, setAgentId] = useState("");
   const [family, setFamily] = useState("");
@@ -55,6 +56,7 @@ export function NewTaskPage() {
 
   const agent = agents?.find((a) => a.id === agentId);
   const repoProblem = checkRepo(repo);
+  const { data: branches } = useBranches(repo.trim(), repo !== "" && repoProblem === "" && isGitHub(repo));
   const warm = useMemo(
     () => !!snapshots?.some((s) => s.state === "current" && s.agent === agentId && s.repo === normalizeRepo(repo)),
     [snapshots, agentId, repo],
@@ -69,6 +71,7 @@ export function NewTaskPage() {
     ...(thinking ? { thinking: true } : {}),
     ...(fast ? { fast: true } : {}),
     ...(planFirst ? { plan: true } : {}),
+    ...(branch.trim() ? { branch: branch.trim() } : {}),
   };
 
   const create = useMutation({
@@ -119,7 +122,10 @@ export function NewTaskPage() {
                   className={styles.repoInput}
                   type="url"
                   value={repo}
-                  onChange={(e) => setRepo(e.target.value)}
+                  onChange={(e) => {
+                    setRepo(e.target.value);
+                    setBranch(""); // another repo has other branches
+                  }}
                   placeholder="https://github.com/owner/name"
                   aria-describedby="repo-hint"
                   aria-invalid={repo !== "" && repoProblem !== ""}
@@ -137,6 +143,24 @@ export function NewTaskPage() {
                 <span className={`${styles.badge} ${repoProblem ? styles.badgeBad : warm ? styles.badgeWarm : ""}`}>
                   {repoProblem ? "INVALID" : warm ? "● WARM SNAPSHOT" : "COLD START"}
                 </span>
+              </div>
+              <div className={styles.repoRow}>
+                <label htmlFor="branch">branch</label>
+                <input
+                  id="branch"
+                  className={styles.repoInput}
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  placeholder={branches?.default ? `${branches.default} (default)` : "the default branch"}
+                  list="branch-choices"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <datalist id="branch-choices">
+                  {branches?.branches.map((b) => (
+                    <option key={b} value={b} />
+                  ))}
+                </datalist>
               </div>
               <label htmlFor="prompt" className="sr-only">
                 Task for the agent

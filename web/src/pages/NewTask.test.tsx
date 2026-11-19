@@ -50,6 +50,7 @@ function server() {
       if (url.startsWith("/api/status")) return ok(status);
       if (url.startsWith("/api/snapshots")) return ok(snapshots);
       if (url.startsWith("/api/threads")) return ok([]);
+      if (url.startsWith("/api/repos/branches")) return ok({ default: "main", branches: ["dev", "main"] });
       if (url.startsWith("/api/repos")) return ok([{ full_name: "alice/secret-app", url: "https://github.com/alice/secret-app", private: true }]);
       return new Response("", { status: 404 });
     }),
@@ -153,6 +154,21 @@ describe("NewTaskPage", () => {
     fireEvent.click(runButton());
     expect(await screen.findByText("thread page")).toBeTruthy();
     expect(posted).toEqual([{ repo: "https://github.com/depak7/playground", prompt: "Add a test", agent: "cursor", model: "auto", plan: true }]);
+  });
+
+  it("suggests the repo's branches and sends the one chosen", async () => {
+    const posted = server();
+    renderNew("/tasks/new?prompt=Add%20a%20test&repo=https://github.com/depak7/playground");
+    const branch = (await screen.findByLabelText("branch")) as HTMLInputElement;
+    await waitFor(() => expect(branch.placeholder).toBe("main (default)"));
+    expect([...document.querySelectorAll("#branch-choices option")].map((o) => (o as HTMLOptionElement).value)).toEqual(["dev", "main"]);
+    fireEvent.change(branch, { target: { value: "dev" } });
+    const model = screen.getByLabelText("Model") as HTMLSelectElement;
+    await waitFor(() => expect(model.value).toBe("auto"));
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+    fireEvent.click(runButton());
+    expect(await screen.findByText("thread page")).toBeTruthy();
+    expect(posted).toEqual([{ repo: "https://github.com/depak7/playground", prompt: "Add a test", agent: "cursor", model: "auto", branch: "dev" }]);
   });
 
   it("suggests the repos the user can push to", async () => {

@@ -125,7 +125,7 @@ func (s *Server) pushThread(w http.ResponseWriter, r *http.Request) {
 		ids, patches = append(ids, t.ID), append(patches, diff)
 	}
 	pr := latest.PR
-	base, prBase := thread[0].BaseCommit, ""
+	base, prBase := thread[0].BaseCommit, thread[0].BaseBranch
 	if f := thread[0].FolderID; f != "" {
 		var handoff string
 		var ok bool

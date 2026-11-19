@@ -12,7 +12,7 @@ afterEach(() => {
 
 function task(over: Partial<Task>): Task {
   return {
-    id: "t-1", repo: "https://github.com/depak7/playground", prompt: "Add a test", agent: "cursor", model: "auto",
+    id: "t-1", repo: "https://github.com/depak7/playground", base_branch: "", prompt: "Add a test", agent: "cursor", model: "auto",
     effort: "", thinking: false, fast: false, model_id: "auto", state: "succeeded", error: "", has_diff: true,
     snapshot_id: null, parent_id: null, thread_id: "t-1",
     pr: { requested: true, url: "https://github.com/depak7/playground/pull/5", number: 5, branch: "forgerun/add-a-test-t1", error: "" },

@@ -66,7 +66,7 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 	if _, ok := s.folders[t.FolderID]; t.FolderID != "" && !ok {
 		return fmt.Errorf("creating task %s: %w: %s", t.ID, store.ErrFolderNotFound, t.FolderID)
 	}
-	rec := &store.Record{ID: t.ID, Repo: t.Repo, FolderID: t.FolderID, Prompt: t.Prompt, AgentID: agentID,
+	rec := &store.Record{ID: t.ID, Repo: t.Repo, FolderID: t.FolderID, BaseBranch: t.BaseBranch, Prompt: t.Prompt, AgentID: agentID,
 		Model: m, State: task.Queued, Plan: t.Plan, Owner: t.Owner, ThreadID: t.ID, CreatedAt: time.Now()}
 	if t.ParentID != "" { // mirrors the Postgres thread rules and indexes
 		parent, ok := s.tasks[t.ParentID]
@@ -81,7 +81,7 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 				return fmt.Errorf("creating task %s: %w", t.ID, store.ErrThreadBusy)
 			}
 		}
-		rec.ParentID, rec.ThreadID, rec.FolderID = parent.ID, parent.ThreadID, parent.FolderID
+		rec.ParentID, rec.ThreadID, rec.FolderID, rec.BaseBranch = parent.ID, parent.ThreadID, parent.FolderID, parent.BaseBranch
 		rec.PR = parent.PR // the thread's branch and pull request
 		rec.PR.Error = ""
 	}

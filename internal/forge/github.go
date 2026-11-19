@@ -125,6 +125,21 @@ func (g *GitHub) HasBranch(ctx context.Context, tok Token, repo Repo, branch str
 	return err == nil, err
 }
 
+// Branches lists up to 100 of repo's branch names.
+func (g *GitHub) Branches(ctx context.Context, tok Token, repo Repo) ([]string, error) {
+	var bs []struct {
+		Name string `json:"name"`
+	}
+	if err := g.call(ctx, tok, http.MethodGet, "/repos/"+repo.Owner+"/"+repo.Name+"/branches?per_page=100", nil, &bs); err != nil {
+		return nil, err
+	}
+	names := make([]string, len(bs))
+	for i, b := range bs {
+		names[i] = b.Name
+	}
+	return names, nil
+}
+
 // Access is what a token may do with a repo.
 type Access struct {
 	Private       bool

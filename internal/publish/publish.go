@@ -348,17 +348,47 @@ func (p *Publisher) token(ctx context.Context, repo forge.Repo, user forge.Token
 	return p.Tokens.Token(ctx, repo)
 }
 
-// Access reports what a token (the user's, or the server's) may do with a repo.
-func (p *Publisher) Access(ctx context.Context, repoURL string, user forge.Token) (forge.Access, error) {
+// repoToken parses a repo URL and picks the token for it: the user's, or
+// the server's.
+func (p *Publisher) repoToken(ctx context.Context, repoURL string, user forge.Token) (forge.Repo, forge.Token, error) {
 	repo, err := forge.ParseRepo(repoURL)
 	if err != nil {
-		return forge.Access{}, err
+		return forge.Repo{}, forge.Token{}, err
 	}
 	tok, err := p.token(ctx, repo, user)
+	return repo, tok, err
+}
+
+// Access reports what a token (the user's, or the server's) may do with a repo.
+func (p *Publisher) Access(ctx context.Context, repoURL string, user forge.Token) (forge.Access, error) {
+	repo, tok, err := p.repoToken(ctx, repoURL, user)
 	if err != nil {
 		return forge.Access{}, err
 	}
 	return p.GitHub.RepoAccess(ctx, tok, repo)
+}
+
+// HasBranch reports whether a repo has a branch.
+func (p *Publisher) HasBranch(ctx context.Context, repoURL, branch string, user forge.Token) (bool, error) {
+	repo, tok, err := p.repoToken(ctx, repoURL, user)
+	if err != nil {
+		return false, err
+	}
+	return p.GitHub.HasBranch(ctx, tok, repo, branch)
+}
+
+// Branches returns a repo's default branch and up to 100 branch names.
+func (p *Publisher) Branches(ctx context.Context, repoURL string, user forge.Token) (string, []string, error) {
+	repo, tok, err := p.repoToken(ctx, repoURL, user)
+	if err != nil {
+		return "", nil, err
+	}
+	def, err := p.GitHub.DefaultBranch(ctx, tok, repo)
+	if err != nil {
+		return "", nil, err
+	}
+	names, err := p.GitHub.Branches(ctx, tok, repo)
+	return def, names, err
 }
 
 // Repos lists the repos a token (the user's, or the server's) can push to.

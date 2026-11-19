@@ -33,6 +33,7 @@ export interface Agent {
 export interface Task {
   id: string;
   repo: string;
+  base_branch: string; // the branch a repo's thread started from; "" = the default branch
   prompt: string;
   agent: string;
   model: string; // family, e.g. "claude-opus-5-5" or "auto"
@@ -109,6 +110,13 @@ export interface NewTask {
   thinking?: boolean;
   fast?: boolean;
   plan?: boolean; // plan first: the agent proposes and waits for approval
+  branch?: string; // the repo's branch to start from; absent = its default branch
+}
+
+// A repo's branches, for the New task picker.
+export interface Branches {
+  default: string;
+  branches: string[];
 }
 
 // A thread's session: its VM, kept between messages.

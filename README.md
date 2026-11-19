@@ -329,7 +329,8 @@ The UI uses the same JSON API (`{"success": true, "data": …}`):
 
 | | |
 |---|---|
-| `POST /api/tasks` | start a thread: `{repo, prompt, agent?, model?, effort?}`, or `{folder, …}` for an uploaded folder |
+| `POST /api/tasks` | start a thread: `{repo, prompt, branch?, agent?, model?, effort?}` (`branch`: start from it, and its pull request goes into it; default: the repo's default branch), or `{folder, …}` for an uploaded folder |
+| `GET /api/repos/branches?repo=…` | a repo's default branch and up to 100 of its branches |
 | `POST /api/folders?name=…` | upload a folder (a gzipped tar) to start threads on; `&repo=…&base=…&branch=…` for a GitHub repo's |
 | `GET`/`POST /api/tokens`, `DELETE /api/tokens/{id}` | personal tokens (from a browser login); send one as `Authorization: Bearer frt_…` |
 | `POST /api/tasks/{id}/followups` | the next message in a thread |

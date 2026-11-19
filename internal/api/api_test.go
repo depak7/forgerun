@@ -557,6 +557,17 @@ func (f fakePRs) Repos(_ context.Context, tok forge.Token) ([]forge.RepoInfo, er
 	return []forge.RepoInfo{r}, nil
 }
 
+// The fake repo has branches main (its default) and dev.
+func (f fakePRs) HasBranch(_ context.Context, _, branch string, tok forge.Token) (bool, error) {
+	f.saw(tok)
+	return branch == "main" || branch == "dev", nil
+}
+
+func (f fakePRs) Branches(_ context.Context, _ string, tok forge.Token) (string, []string, error) {
+	f.saw(tok)
+	return "main", []string{"dev", "main"}, nil
+}
+
 func (f fakePRs) saw(tok forge.Token) {
 	if f.tokens != nil {
 		*f.tokens = append(*f.tokens, tok.Reveal())
@@ -1006,5 +1017,49 @@ func TestProviderKeyPerModel(t *testing.T) {
 	_, apiErr := decode(t, do(h, "POST", "/api/tasks", `{"repo":"https://x.com/r","prompt":"p","agent":"pi","model":"openai/gpt-5.5"}`), http.StatusBadRequest)
 	if !strings.Contains(apiErr.Message, "set OPENAI_API_KEY") {
 		t.Errorf("model without its provider's key: %q", apiErr.Message)
+	}
+}
+
+// A thread can start from a branch: it's checked on GitHub first, every
+// turn carries it, and the pull request goes into it.
+func TestThreadOnABranch(t *testing.T) {
+	var got []task.PublishRequest
+	h, s, _ := setup(t, func(c *Config) {
+		c.PRs, c.Sessions = fakePRs{open: true, got: &got}, fakeSessions{}
+	})
+	var branches struct {
+		Default  string   `json:"default"`
+		Branches []string `json:"branches"`
+	}
+	json.Unmarshal(mustData(t, do(h, "GET", "/api/repos/branches?repo=https://github.com/o/r", ""), http.StatusOK), &branches)
+	if branches.Default != "main" || !slices.Equal(branches.Branches, []string{"dev", "main"}) {
+		t.Errorf("branches = %+v", branches)
+	}
+	for body, msg := range map[string]string{
+		`{"repo":"https://github.com/o/r","prompt":"p","branch":"nope"}`: `no branch "nope"`,
+		`{"repo":"https://github.com/o/r","prompt":"p","branch":"-x"}`:   "isn't a branch name",
+		`{"folder":"f-1","prompt":"p","branch":"dev"}`:                   "branch is for repos",
+	} {
+		if _, apiErr := decode(t, do(h, "POST", "/api/tasks", body), http.StatusBadRequest); !strings.Contains(apiErr.Message, msg) {
+			t.Errorf("%s: %q, want %q", body, apiErr.Message, msg)
+		}
+	}
+
+	first := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks", `{"repo":"https://github.com/o/r","prompt":"p","branch":"dev"}`), http.StatusCreated))
+	if first.BaseBranch != "dev" {
+		t.Fatalf("base_branch = %q", first.BaseBranch)
+	}
+	ctx := context.Background()
+	s.Claim(ctx)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded, BaseCommit: "base0", Diff: "+a\n"})
+	next := decodeTask(t, mustData(t, do(h, "POST", "/api/tasks/"+first.ID+"/followups", `{"prompt":"more"}`), http.StatusCreated))
+	if next.BaseBranch != "dev" {
+		t.Errorf("follow-up base_branch = %q", next.BaseBranch)
+	}
+	s.Claim(ctx)
+	s.Finish(ctx, next.ID, store.Outcome{State: task.Succeeded, Diff: "+b\n"})
+	mustData(t, do(h, "POST", "/api/threads/"+first.ID+"/push", `{"pr":true}`), http.StatusOK)
+	if len(got) != 1 || got[0].PRBase != "dev" || got[0].BaseCommit != "base0" {
+		t.Errorf("published %+v", got)
 	}
 }

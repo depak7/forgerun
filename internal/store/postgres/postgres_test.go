@@ -1121,3 +1121,30 @@ func TestDeleteUnusedFolders(t *testing.T) {
 		t.Errorf("used folder: %v", err)
 	}
 }
+
+// A thread's base branch is on every turn: follow-ups inherit it.
+func TestBaseBranch(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	first := task.New("https://github.com/o/r", "p")
+	first.BaseBranch = "dev"
+	if err := s.Create(ctx, first, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	s.Start(ctx, first.ID)
+	s.Finish(ctx, first.ID, store.Outcome{State: task.Succeeded})
+	next := task.New("https://github.com/o/r", "more")
+	next.ParentID, next.BaseBranch = first.ID, "ignored"
+	if err := s.Create(ctx, next, "cursor"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{first.ID, next.ID} {
+		if rec, err := s.Get(ctx, id); err != nil || rec.BaseBranch != "dev" {
+			t.Errorf("%s: base branch %q, %v", id, rec.BaseBranch, err)
+		}
+	}
+	plain := task.New("https://github.com/o/r", "p")
+	s.Create(ctx, plain, "cursor")
+	if rec, _ := s.Get(ctx, plain.ID); rec.BaseBranch != "" {
+		t.Errorf("no branch: %q", rec.BaseBranch)
+	}
+}

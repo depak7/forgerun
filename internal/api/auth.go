@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -328,6 +329,63 @@ func (s *Server) checkPush(w http.ResponseWriter, r *http.Request, repo string) 
 		return false
 	}
 	return true
+}
+
+// checkBranch makes sure a branch a thread is to start from exists ("" is
+// the default branch, which always does).
+func (s *Server) checkBranch(w http.ResponseWriter, r *http.Request, repo, branch string) bool {
+	if branch == "" {
+		return true
+	}
+	tok, err := s.userToken(r)
+	if err != nil {
+		s.internalError(w, r, err)
+		return false
+	}
+	ok, err := s.prs.HasBranch(r.Context(), repo, branch, tok)
+	switch {
+	case err != nil:
+		writeError(w, http.StatusBadGateway, "checking the branch on GitHub: "+err.Error())
+		return false
+	case !ok:
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("there's no branch %q in %s", branch, repo))
+		return false
+	}
+	return true
+}
+
+// listBranches serves GET /api/repos/branches?repo=…: the repo's default
+// branch and up to 100 of its branches, to start a thread from.
+func (s *Server) listBranches(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if err := validateRepo(repo); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out := struct {
+		Default  string   `json:"default"`
+		Branches []string `json:"branches"`
+	}{Branches: []string{}}
+	if s.prs == nil {
+		writeData(w, http.StatusOK, out)
+		return
+	}
+	tok, err := s.userToken(r)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	def, names, err := s.prs.Branches(r.Context(), repo, tok)
+	switch {
+	case errors.Is(err, forge.ErrNoRepo):
+		writeError(w, http.StatusBadRequest, "GitHub doesn't show you this repo: check the URL, or that it's shared with you")
+		return
+	case err != nil:
+		writeError(w, http.StatusBadGateway, "listing the repo's branches on GitHub: "+err.Error())
+		return
+	}
+	out.Default, out.Branches = def, append(out.Branches, names...)
+	writeData(w, http.StatusOK, out)
 }
 
 // repoJSON is a repo the user can push to.

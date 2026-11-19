@@ -53,16 +53,17 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	// branch and pull request; if the parent doesn't exist, nothing is inserted.
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id, pr_requested,
-		                   parent_id, thread_id, pr_url, pr_number, pr_branch, plan, owner_id, folder_id)
+		                   parent_id, thread_id, pr_url, pr_number, pr_branch, plan, owner_id, folder_id, base_branch)
 		SELECT $1, $2, $3, $4, $5,
 		       COALESCE(NULLIF($6, ''), (SELECT default_model_id FROM agents WHERE id = $4)),
 		       COALESCE(p.pr_requested, false),
 		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch, $8, $9,
-		       COALESCE(p.folder_id, NULLIF($10, ''))
+		       COALESCE(p.folder_id, NULLIF($10, '')),
+		       CASE WHEN p.id IS NULL THEN NULLIF($11, '') ELSE p.base_branch END
 		FROM (SELECT NULLIF($7::text, '') AS parent) want
 		LEFT JOIN tasks p ON p.id = want.parent
 		WHERE want.parent IS NULL OR p.id IS NOT NULL`,
-		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID, t.Plan, nullableID(t.Owner), t.FolderID)
+		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID, t.Plan, nullableID(t.Owner), t.FolderID, t.BaseBranch)
 	if err != nil {
 		return fmt.Errorf("creating task %s: %w", t.ID, threadError(err)) // includes the FK error for an unknown model
 	}
@@ -312,7 +313,7 @@ const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, 
 // selectColumns is the task (aliased t) plus its model.
 const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.diff IS NOT NULL,
 	t.snapshot_id, t.pr_requested, t.pr_url, t.pr_error, t.base_commit, t.summary,
-	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.plan, t.asked, t.owner_id, t.folder_id, t.created_at, t.started_at, t.finished_at, ` + modelColumns
+	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.plan, t.asked, t.owner_id, t.folder_id, t.base_branch, t.created_at, t.started_at, t.finished_at, ` + modelColumns
 
 const fromTasks = ` FROM tasks t
 	JOIN models m ON m.agent_id = t.agent_id AND m.id = t.model_id
@@ -586,6 +587,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		errMsg, logPath                     *string // nil = NULL
 		prURL, prError, baseCommit, summary *string
 		parentID, prBranch, reply, folderID *string
+		baseBranch                          *string
 		owner                               *int64
 		prNumber                            *int
 		startedAt, finishedAt               *time.Time
@@ -593,7 +595,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
 		&errMsg, &logPath, &rec.HasDiff, &rec.SnapshotID,
 		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary,
-		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &owner, &folderID, &rec.CreatedAt, &startedAt, &finishedAt,
+		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &owner, &folderID, &baseBranch, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
 		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR, &rec.Model.Keyless)
 	if err != nil {
@@ -606,7 +608,7 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	rec.Error, rec.LogPath = deref(errMsg), deref(logPath)
 	rec.PR.URL, rec.PR.Error = deref(prURL), deref(prError)
 	rec.BaseCommit, rec.Summary, rec.Reply = deref(baseCommit), deref(summary), deref(reply)
-	rec.ParentID, rec.PR.Branch, rec.FolderID = deref(parentID), deref(prBranch), deref(folderID)
+	rec.ParentID, rec.PR.Branch, rec.FolderID, rec.BaseBranch = deref(parentID), deref(prBranch), deref(folderID), deref(baseBranch)
 	if prNumber != nil {
 		rec.PR.Number = *prNumber
 	}

@@ -53,6 +53,7 @@ type Record struct {
 	ID         string
 	Repo       string // git URL; for a folder's thread, the folder's name
 	FolderID   string // the uploaded folder the thread works on; "" for a repo's thread
+	BaseBranch string // the branch a repo's thread started from; "" = the default branch
 	Prompt     string
 	AgentID    string
 	Model      models.Variant // the model the task runs on (from the models table)

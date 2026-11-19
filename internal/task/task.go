@@ -41,12 +41,15 @@ type Task struct {
 	// FolderID is the uploaded folder the thread works on, instead of
 	// cloning Repo; "" for a repo. Follow-ups inherit it.
 	FolderID string
-	Prompt   string
-	AgentID  string // which agent runs it; "" = Runner.DefaultAgent
-	ModelID  string // exact agent model id; "" or "auto" lets the agent choose
-	Family   string // the model's family, e.g. "opus"; "" if unknown
-	Effort   string // the model's effort, e.g. "high"; "" = the agent's default
-	Keyless  bool   // the model runs without the agent's credential
+	// BaseBranch is the branch a repo's thread starts from; "" = the
+	// default branch. Follow-ups inherit it.
+	BaseBranch string
+	Prompt     string
+	AgentID    string // which agent runs it; "" = Runner.DefaultAgent
+	ModelID    string // exact agent model id; "" or "auto" lets the agent choose
+	Family     string // the model's family, e.g. "opus"; "" if unknown
+	Effort     string // the model's effort, e.g. "high"; "" = the agent's default
+	Keyless    bool   // the model runs without the agent's credential
 	// Plan makes this a plan-only turn: the agent reads and proposes, and
 	// any changes it makes are discarded.
 	Plan bool
@@ -357,6 +360,12 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 			return nil, err
 		}
 	}
+	if t.BaseBranch != "" && t.ThreadBase == "" && t.Folder == nil {
+		step("checking out branch %s", t.BaseBranch)
+		if err := checkoutBranch(ctx, ss.sb, t, repoDir); err != nil {
+			return nil, err
+		}
+	}
 	var history []Turn
 	if t.History != nil {
 		if history, err = t.History(ctx); err != nil {
@@ -375,6 +384,27 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 	}
 	step("session ready in %s (%s)", time.Since(start).Round(100*time.Millisecond), mode)
 	return history, nil
+}
+
+// checkoutBranch puts the checkout at dir, a clone or a restored snapshot
+// on the default branch, on the latest commit of the thread's base branch.
+// A later rebuild starts from the commit this gives (the thread's base), so
+// it needs no branch.
+func checkoutBranch(ctx context.Context, sb sandbox.Sandbox, t Task, dir string) error {
+	ref := "FETCH_HEAD"
+	if t.Fetch != nil {
+		commit, err := HostFetch(ctx, sb, t.Fetch, t.Repo, t.BaseBranch, dir)
+		if err != nil {
+			return fmt.Errorf("fetching branch %s: %w", t.BaseBranch, err)
+		}
+		ref = commit
+	} else if _, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"-C", dir, "fetch", "-q", "--depth=1", "origin", "refs/heads/" + t.BaseBranch}}); err != nil {
+		return fmt.Errorf("fetching branch %s: %w", t.BaseBranch, err)
+	}
+	if _, err := sb.Run(ctx, sandbox.Cmd{Name: "git", Args: []string{"-C", dir, "checkout", "-q", "-B", t.BaseBranch, ref}}); err != nil {
+		return fmt.Errorf("checking out branch %s: %w", t.BaseBranch, err)
+	}
+	return nil
 }
 
 // snapshotRepo is what a thread's snapshots are kept under: its repo, or

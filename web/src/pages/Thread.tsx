@@ -131,7 +131,10 @@ function Header({ steps, latest }: { steps: Task[]; latest: Task }) {
       <div className={styles.crumbs}>
         <Link to="/">tasks</Link>
         <span aria-hidden="true">/</span>
-        <span>{repoName(steps[0].repo)}</span>
+        <span>
+          {repoName(steps[0].repo)}
+          {steps[0].base_branch ? ` (from ${steps[0].base_branch})` : ""}
+        </span>
         <span aria-hidden="true">/</span>
         <span>thread {shortID(steps[0].id)}</span>
       </div>

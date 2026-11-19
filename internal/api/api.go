@@ -65,6 +65,10 @@ type PRs interface {
 	// Access and Repos use the user's token, or the server's if it's zero.
 	Access(ctx context.Context, repo string, user forge.Token) (forge.Access, error)
 	Repos(ctx context.Context, user forge.Token) ([]forge.RepoInfo, error)
+	// HasBranch and Branches look at a repo's branches, with the user's
+	// token or the server's.
+	HasBranch(ctx context.Context, repo, branch string, user forge.Token) (bool, error)
+	Branches(ctx context.Context, repo string, user forge.Token) (def string, names []string, err error)
 }
 
 // WorkerInfo is a worker machine connected to the orchestrator.
@@ -153,6 +157,7 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("GET /api/snapshots", adminOnly(srv.listSnapshots))
 	mux.HandleFunc("GET /api/me", srv.me)
 	mux.HandleFunc("GET /api/repos", srv.listRepos)
+	mux.HandleFunc("GET /api/repos/branches", srv.listBranches)
 	mux.HandleFunc("GET /api/workers", adminOnly(srv.listWorkers))
 	mux.HandleFunc("GET /api/capacity", srv.capacityNow)
 	mux.HandleFunc("POST /api/admin/pause", adminOnly(srv.pause))
@@ -169,8 +174,9 @@ func New(cfg Config) http.Handler {
 // Every field is always present so clients get one fixed shape.
 type taskJSON struct {
 	ID         string     `json:"id"`
-	Repo       string     `json:"repo"`   // git URL; for a folder's thread, the folder's name
-	Folder     string     `json:"folder"` // the uploaded folder's ID; "" for a repo's thread
+	Repo       string     `json:"repo"`        // git URL; for a folder's thread, the folder's name
+	Folder     string     `json:"folder"`      // the uploaded folder's ID; "" for a repo's thread
+	BaseBranch string     `json:"base_branch"` // the branch a repo's thread started from; "" = the default branch
 	Prompt     string     `json:"prompt"`
 	Agent      string     `json:"agent"`
 	Model      string     `json:"model"`  // family, e.g. "claude-opus-5-5" or "auto"
@@ -197,7 +203,7 @@ type taskJSON struct {
 
 func toJSON(r store.Record) taskJSON {
 	return taskJSON{
-		ID: r.ID, Repo: r.Repo, Folder: r.FolderID, Prompt: r.Prompt, Agent: r.AgentID,
+		ID: r.ID, Repo: r.Repo, Folder: r.FolderID, BaseBranch: r.BaseBranch, Prompt: r.Prompt, Agent: r.AgentID,
 		Model: r.Model.Family, Effort: r.Model.Effort, Thinking: r.Model.Thinking, Fast: r.Model.Fast, ModelID: r.Model.ID,
 		State: r.State, Error: r.Error, HasDiff: r.HasDiff, SnapshotID: r.SnapshotID,
 		PR:      prJSON{Requested: r.PR.Requested, URL: r.PR.URL, Number: r.PR.Number, Branch: r.PR.Branch, Error: r.PR.Error},
@@ -244,8 +250,9 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Effort   string `json:"effort"`
 		Thinking *bool  `json:"thinking"` // nil = not sent
 		Fast     *bool  `json:"fast"`
-		Agent    string `json:"agent"` // "" = the server's default agent
-		Plan     bool   `json:"plan"`  // plan first: the agent proposes, changes nothing, and waits
+		Agent    string `json:"agent"`  // "" = the server's default agent
+		Plan     bool   `json:"plan"`   // plan first: the agent proposes, changes nothing, and waits
+		Branch   string `json:"branch"` // the repo's branch to start from; "" = its default branch
 	}
 	if !decodeBody(w, r, &req) {
 		return
@@ -257,6 +264,9 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case req.Folder != "" && req.Repo != "":
 		writeError(w, http.StatusBadRequest, "give a repo or a folder, not both")
+		return
+	case req.Folder != "" && req.Branch != "":
+		writeError(w, http.StatusBadRequest, "a folder's thread starts from the folder as it was; branch is for repos")
 		return
 	case req.Folder != "":
 		var ok bool
@@ -273,6 +283,10 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
+	if !validBranch(req.Branch) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("%q isn't a branch name", req.Branch))
+		return
+	}
 	// Refuse now rather than after the agent has done the work: the
 	// changes can only be pushed to a repo the user can push to.
 	if s.prs != nil && folder.ID == "" {
@@ -280,7 +294,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "forgerun pushes the changes to a branch: "+err.Error())
 			return
 		}
-		if !s.checkPush(w, r, req.Repo) {
+		if !s.checkPush(w, r, req.Repo) || !s.checkBranch(w, r, req.Repo, req.Branch) {
 			return
 		}
 	}
@@ -296,7 +310,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 	// A folder from a GitHub repo shows as that repo, like its branch will.
 	t := task.New(cmp.Or(folder.Repo, folder.Name, req.Repo), req.Prompt)
-	t.ModelID, t.Plan, t.Owner, t.FolderID = v.ID, req.Plan, viewerOf(r).ID, folder.ID
+	t.ModelID, t.Plan, t.Owner, t.FolderID, t.BaseBranch = v.ID, req.Plan, viewerOf(r).ID, folder.ID, req.Branch
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.internalError(w, r, err)
 		return

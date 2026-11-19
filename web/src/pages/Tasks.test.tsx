@@ -21,7 +21,7 @@ const agents = [
 
 function task(over: Partial<Task>): Task {
   return {
-    id: "t-20261015-000000-aaaaaa", repo: "https://github.com/depak7/playground", prompt: "p", agent: "cursor", model: "auto",
+    id: "t-20261015-000000-aaaaaa", repo: "https://github.com/depak7/playground", base_branch: "", prompt: "p", agent: "cursor", model: "auto",
     effort: "", thinking: false, fast: false, model_id: "auto", state: "succeeded", error: "", has_diff: true, snapshot_id: null,
     parent_id: null, thread_id: "t-20261015-000000-aaaaaa", pr: { requested: false, url: "", number: 0, branch: "", error: "" },
     summary: "", reply: "", pushed: false, plan: false, asked: false, created_at: new Date().toISOString(), started_at: null, finished_at: null, ...over,

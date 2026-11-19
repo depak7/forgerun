@@ -180,3 +180,37 @@ func TestDiscardChangesUndoesCommits(t *testing.T) {
 		t.Errorf("tree not clean:\n%s", st)
 	}
 }
+
+// A thread on a branch starts from that branch's latest commit, whatever
+// the clone or snapshot was on.
+func TestCheckoutBranch(t *testing.T) {
+	origin := t.TempDir()
+	commit := func(file string) {
+		os.WriteFile(filepath.Join(origin, file), []byte(file+"\n"), 0o600)
+		hostRun(t, origin, "git", "add", "-A")
+		hostRun(t, origin, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", file)
+	}
+	hostRun(t, origin, "git", "init", "-q", "-b", "main")
+	commit("main.txt")
+	hostRun(t, origin, "git", "checkout", "-q", "-b", "feature")
+	commit("feature.txt")
+	want := hostRun(t, origin, "git", "rev-parse", "HEAD")
+	hostRun(t, origin, "git", "checkout", "-q", "main")
+
+	dir := filepath.Join(t.TempDir(), "repo")
+	hostRun(t, filepath.Dir(dir), "git", "clone", "-q", "--depth=1", "file://"+origin, dir)
+	task := Task{Repo: "file://" + origin, BaseBranch: "feature"}
+	if err := checkoutBranch(context.Background(), hostSandbox{}, task, dir); err != nil {
+		t.Fatal(err)
+	}
+	if head := hostRun(t, dir, "git", "rev-parse", "HEAD"); head != want {
+		t.Errorf("HEAD %s, want feature's %s", head, want)
+	}
+	if b := hostRun(t, dir, "git", "branch", "--show-current"); b != "feature" {
+		t.Errorf("on branch %q, want feature", b)
+	}
+	task.BaseBranch = "nope"
+	if err := checkoutBranch(context.Background(), hostSandbox{}, task, dir); err == nil {
+		t.Error("a missing branch: no error")
+	}
+}
