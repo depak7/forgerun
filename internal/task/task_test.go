@@ -214,3 +214,31 @@ func TestCheckoutBranch(t *testing.T) {
 		t.Error("a missing branch: no error")
 	}
 }
+
+// What running Python leaves behind stays out of the diff, unless the repo
+// tracks it; adding the rules twice adds nothing.
+func TestIgnoreBuildOutput(t *testing.T) {
+	dir := t.TempDir()
+	hostRun(t, dir, "git", "init", "-q")
+	os.MkdirAll(filepath.Join(dir, "tracked"), 0o755)
+	os.WriteFile(filepath.Join(dir, "tracked", "keep.pyc"), []byte("x"), 0o600)
+	hostRun(t, dir, "git", "add", "-f", "tracked/keep.pyc")
+	for range 2 {
+		if err := ignoreBuildOutput(context.Background(), hostSandbox{}, dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"__pycache__/app.cpython-311.pyc", "pkg/__pycache__/m.pyc", "old.pyc", ".pytest_cache/v/cache", "app.py"} {
+		os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o600)
+	}
+	os.WriteFile(filepath.Join(dir, "tracked", "keep.pyc"), []byte("changed"), 0o600)
+	hostRun(t, dir, "git", "add", "-A")
+	if got := hostRun(t, dir, "git", "diff", "--cached", "--name-only"); got != "app.py\ntracked/keep.pyc" {
+		t.Errorf("staged:\n%s", got)
+	}
+	exclude, _ := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
+	if n := strings.Count(string(exclude), "__pycache__/"); n != 1 {
+		t.Errorf("__pycache__/ added %d times", n)
+	}
+}

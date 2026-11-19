@@ -360,6 +360,9 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 			return nil, err
 		}
 	}
+	if err := ignoreBuildOutput(ctx, ss.sb, repoDir); err != nil {
+		return nil, err
+	}
 	if t.BaseBranch != "" && t.ThreadBase == "" && t.Folder == nil {
 		step("checking out branch %s", t.BaseBranch)
 		if err := checkoutBranch(ctx, ss.sb, t, repoDir); err != nil {
@@ -384,6 +387,22 @@ func (r *Runner) openSession(ctx context.Context, ag agent.Agent, t Task, ss *se
 	}
 	step("session ready in %s (%s)", time.Since(start).Round(100*time.Millisecond), mode)
 	return history, nil
+}
+
+// buildOutput is what running a repo's code leaves behind (Python's
+// bytecode and pytest's cache) that the repo may not ignore itself: it
+// must never land in a turn's diff. Files a repo tracks stay tracked.
+var buildOutput = []string{"__pycache__/", "*.py[cod]", ".pytest_cache/"}
+
+// ignoreBuildOutput adds buildOutput to the checkout's own exclude file,
+// .git/info/exclude, which is local to it and never part of a diff.
+func ignoreBuildOutput(ctx context.Context, sb sandbox.Sandbox, dir string) error {
+	script := `set -e; f="$1/.git/info/exclude"; shift; mkdir -p "$(dirname "$f")"; touch "$f"
+for p; do grep -qxF -- "$p" "$f" || printf '%s\n' "$p" >> "$f"; done`
+	if _, err := sb.Run(ctx, sandbox.Cmd{Name: "sh", Args: append([]string{"-c", script, "ignore", dir}, buildOutput...)}); err != nil {
+		return fmt.Errorf("ignoring build output: %w", err)
+	}
+	return nil
 }
 
 // checkoutBranch puts the checkout at dir, a clone or a restored snapshot
