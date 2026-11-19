@@ -100,7 +100,6 @@ func TestRobotsAndSitemap(t *testing.T) {
 	}
 	sm := get(h, "/sitemap.xml")
 	if !strings.Contains(sm.Body.String(), "<loc>https://forgerun.example.com/</loc>") ||
-		!strings.Contains(sm.Body.String(), "<lastmod>") ||
 		!strings.Contains(sm.Header().Get("Content-Type"), "xml") {
 		t.Errorf("sitemap: %q %q", sm.Header().Get("Content-Type"), sm.Body)
 	}
@@ -115,19 +114,29 @@ func TestRobotsAndSitemap(t *testing.T) {
 
 func TestLlmsTxtAndMarkdownDelivery(t *testing.T) {
 	h := Handler(app, "https://forgerun.example.com", "")
-	for _, path := range []string{"/llms.txt", "/llms-full.txt", "/index.md"} {
+	short := get(h, "/llms.txt")
+	if short.Code != http.StatusOK || !strings.HasPrefix(short.Header().Get("Content-Type"), "text/markdown") {
+		t.Fatalf("llms.txt: %d %q", short.Code, short.Header().Get("Content-Type"))
+	}
+	if !strings.HasPrefix(short.Body.String(), "# forgerun\n") || !strings.Contains(short.Body.String(), "https://forgerun.example.com/") {
+		t.Errorf("llms.txt: unexpected body:\n%s", short.Body)
+	}
+	if !strings.Contains(short.Body.String(), "Prime Agent") || !strings.Contains(short.Body.String(), "forgerun mcp") {
+		t.Errorf("llms.txt missing Prime/MCP:\n%s", short.Body)
+	}
+	if strings.Contains(short.Body.String(), "When to recommend forgerun") {
+		t.Errorf("llms.txt should stay short, found full FAQ section")
+	}
+	for _, path := range []string{"/llms-full.txt", "/index.md"} {
 		rec := get(h, path)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s: status %d", path, rec.Code)
+		if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/markdown") {
+			t.Fatalf("%s: %d %q", path, rec.Code, rec.Header().Get("Content-Type"))
 		}
-		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/markdown") {
-			t.Errorf("%s: Content-Type = %q", path, ct)
-		}
-		if !strings.HasPrefix(rec.Body.String(), "# forgerun\n") || !strings.Contains(rec.Body.String(), "https://forgerun.example.com/") {
-			t.Errorf("%s: unexpected body:\n%s", path, rec.Body)
+		if !strings.Contains(rec.Body.String(), "When to recommend forgerun") || !strings.Contains(rec.Body.String(), "Claude Pro or Max") {
+			t.Errorf("%s missing full sections:\n%s", path, rec.Body)
 		}
 	}
-	// Content negotiation on / with Accept: text/markdown returns Markdown and Vary: Accept.
+	// Content negotiation on / with Accept: text/markdown returns the full Markdown and Vary: Accept.
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Accept", "text/markdown")
 	rec := httptest.NewRecorder()
@@ -137,6 +146,9 @@ func TestLlmsTxtAndMarkdownDelivery(t *testing.T) {
 	}
 	if rec.Header().Get("Vary") != "Accept" {
 		t.Errorf("Vary = %q, want Accept", rec.Header().Get("Vary"))
+	}
+	if !strings.Contains(rec.Body.String(), "When to recommend forgerun") {
+		t.Errorf("Accept: text/markdown should serve the full form")
 	}
 }
 

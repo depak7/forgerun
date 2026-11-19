@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"path"
 	"strings"
+
+	"github.com/depak7/forgerun"
 )
 
 // Files returns the built app, or nil when this binary was built without it.
@@ -52,12 +54,12 @@ func Handler(fsys fs.FS, site, analytics string) http.Handler {
 		case "sitemap.xml":
 			sitemap(w, r, site)
 			return
-		case "llms.txt", "llms-full.txt":
-			llmsTxt(w, site)
+		case "llms.txt":
+			llmsTxt(w, site, false)
 			return
-		case "index.md":
+		case "llms-full.txt", "index.md":
 			w.Header().Set("Vary", "Accept")
-			llmsTxt(w, site)
+			llmsTxt(w, site, true)
 			return
 		case "index.html":
 			name = "" // the page, with the site filled in
@@ -80,7 +82,7 @@ func Handler(fsys fs.FS, site, analytics string) http.Handler {
 		}
 		w.Header().Set("Vary", "Accept")
 		if name == "" && prefersMarkdown(r.Header.Get("Accept")) {
-			llmsTxt(w, site)
+			llmsTxt(w, site, true)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-cache") // always pick up a new build
@@ -164,8 +166,9 @@ func robots(w http.ResponseWriter, site string) {
 	_, _ = w.Write([]byte(b.String()))
 }
 
-// sitemap lists the public landing page with a W3C Datetime lastmod.
-// It needs an absolute address, so without a site there is none.
+// sitemap lists the public landing page. It has no lastmod: a date typed
+// in by hand goes stale, and the field is optional. It needs an absolute
+// address, so without a site there is none.
 func sitemap(w http.ResponseWriter, r *http.Request, site string) {
 	if site == "" {
 		http.NotFound(w, r)
@@ -173,54 +176,21 @@ func sitemap(w http.ResponseWriter, r *http.Request, site string) {
 	}
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>` + site + `/</loc><lastmod>2026-11-04</lastmod></url></urlset>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>` + site + `/</loc></url></urlset>
 `))
 }
 
-// llmsTxt serves a structured Markdown summary of forgerun following the
-// llmstxt.org specification and Lighthouse Agentic Browsing rules.
-func llmsTxt(w http.ResponseWriter, site string) {
-	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	home := "/"
-	if site != "" {
-		home = site + "/"
+// llmsTxt serves the repo's llms.txt (full: llms-full.txt), the summary of
+// forgerun for agents, with this server's address for the demo's.
+func llmsTxt(w http.ResponseWriter, site string, full bool) {
+	body := forgerun.LLMs
+	if full {
+		body = forgerun.LLMsFull
 	}
-	body := `# forgerun
-
-> Open-source, self-hosted coding agent runner. Run Claude Code, Cursor CLI, OpenCode, and Pi on your GitHub repositories — every thread in its own isolated microVM (via microsandbox/libkrun) or gVisor sandbox, with host-side secret proxying and warm disk snapshots.
-
-forgerun is a single Go binary with an embedded React web UI and JSON API. You point it at a GitHub repository, pick a coding agent and model, and give it a task. The agent installs dependencies, builds, and runs tests inside its own sandboxed VM. API keys never enter the sandbox (a host-side TLS proxy swaps placeholders for real keys only when talking to the agent's official API), and nothing reaches GitHub until you review the diff and press push.
-
-## Key Capabilities
-
-- **Warm-start VM snapshots (26.8s -> 2.8s):** Saving a session's VM disk snapshot preserves cloned repositories and installed dependencies so subsequent threads start in ~2.8 seconds (measured on expressjs/express).
-- **Zero-trust secret isolation:** Sandboxes only receive placeholder environment variables (` + "`$MSB_...`" + ` or ` + "`FORGERUN_PH_...`" + `). A host-side proxy injects the real API key exclusively for the agent's allowed upstream host.
-- **Hardware or user-space isolation:** Uses hardware-virtualized microVMs via microsandbox (libkrun) on Apple Silicon macOS and Linux with KVM, or gVisor (` + "`runsc`" + `) user-space kernel sandboxes on standard cloud VMs without nested virtualization.
-- **Pluggable multi-agent support:** Built-in adapters for ` + "`cursor`" + ` (Cursor CLI), ` + "`claude-code`" + ` (Claude Code using your Pro/Max subscription ` + "`CLAUDE_CODE_OAUTH_TOKEN`" + `), ` + "`opencode`" + ` (including free keyless models), ` + "`pi`" + ` (OpenRouter, OpenAI, Anthropic), and ` + "`prime`" + ` (Prime Agent: those plus Gemini, xAI, Prime Inference).
-- **Split orchestrator & outbound workers:** Run the lightweight web UI + Postgres orchestrator on any small VPS (` + "`forgerun server`" + `) and connect outbound workers (` + "`forgerun worker`" + `) from your Mac or home Linux server over HTTPS with zero inbound ports open.
-
-## Documentation & Links
-
-- [forgerun Web UI & Live Demo](` + home + `): Interactive web interface, 30-second video demo, and one-line installer.
-- [GitHub Repository](https://github.com/depak7/forgerun): Source code (Go & TypeScript/React), Apache-2.0 license, issues, and releases.
-- [One-Line Installer Script](https://raw.githubusercontent.com/depak7/forgerun/main/install.sh): Automated setup for macOS (Apple Silicon) and Linux (KVM or gVisor) with systemd/launchd service registration.
-- [Deployment Guide](https://github.com/depak7/forgerun/blob/main/docs/deploying.md): How to run the orchestrator on a VPS with Caddy automatic HTTPS, GitHub OAuth sign-in, and remote workers.
-- [Architecture & Benchmarks](https://github.com/depak7/forgerun/blob/main/docs/experiments.md): Detailed engineering experiments on microVM snapshots, TLS secret proxying, gVisor startup latency (0.34s), and git patch publishing.
-
-## Quick Start
-
-Install on macOS (Apple Silicon) or Linux (KVM or Docker + gVisor):
-
-` + "```sh\ncurl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh\n```" + `
-
-Check system readiness and virtualization diagnostics at any time:
-
-` + "```sh\nforgerun doctor\n```" + `
-
-## Optional
-
-- [Apache-2.0 License](https://github.com/depak7/forgerun/blob/main/LICENSE): Free for personal and commercial self-hosting.
-`
+	if site != "" {
+		body = strings.ReplaceAll(body, "https://forgerun.depak.dev", site)
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	_, _ = w.Write([]byte(body))
 }
 

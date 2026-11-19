@@ -43,8 +43,9 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
           <span className={styles.eyebrow}>OPEN SOURCE · APACHE-2.0 · SELF-HOSTED</span>
           <h1 className={styles.title}>Stop paying for sandboxes. Run coding agents on your own VM.</h1>
           <p className={styles.lede}>
-            forgerun runs Claude Code, Cursor CLI and OpenCode on your repo, every turn in its own sandbox: a microVM, or gVisor on
-            VMs without KVM. Bring any Linux server or a Mac, and nothing reaches your repo until you push.
+            forgerun runs Claude Code, Cursor CLI, OpenCode, pi and Prime Agent on your repo, every turn in its own sandbox: a
+            microVM, or gVisor on VMs without KVM. Drive it from another agent with <code className={styles.inline}>forgerun mcp</code>.
+            Bring any Linux server or a Mac, and nothing reaches your repo until you push.
           </p>
           <div className={styles.try} role="group" aria-labelledby="try">
             <span id="try" className={styles.tryLabel}>
@@ -156,10 +157,17 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
             </div>
             <div className={styles.agent}>
               <span className="mono">pi</span>
-              <span>Pi coding agent across OpenRouter, OpenAI and Anthropic keys</span>
+              <span>pi coding agent across OpenRouter, OpenAI and Anthropic keys</span>
+            </div>
+            <div className={styles.agent}>
+              <span className="mono">prime</span>
+              <span>Prime Agent: those providers plus Gemini, xAI, and Prime Inference</span>
             </div>
           </div>
-          <p className={styles.note}>Agents are adapters: adding another is one Go file and a list of models.</p>
+          <p className={styles.note}>
+            Agents are adapters: adding another is one Go file and a list of models. Another agent can drive forgerun with{" "}
+            <code className={styles.inline}>forgerun mcp</code>.
+          </p>
         </section>
 
         <section className={styles.section} aria-labelledby="compare">

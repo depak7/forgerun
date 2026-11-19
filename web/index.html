@@ -6,7 +6,7 @@
     <title>forgerun: Self-Hosted AI Coding Agent Runner in MicroVMs</title>
     <meta
       name="description"
-      content="Open-source, self-hosted runner for Claude Code, Cursor CLI &amp; OpenCode. Run each coding task in an isolated microVM or gVisor sandbox with 2.8s warm snapshots."
+      content="Open-source, self-hosted runner for Claude Code, Cursor CLI, OpenCode, pi &amp; Prime Agent. Each thread in its own microVM or gVisor sandbox, with 2.8s warm snapshots and an MCP server for other agents."
     />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <meta name="author" content="Deepak S (depak7)" />
@@ -24,7 +24,7 @@
     <meta property="og:title" content="forgerun: Self-Hosted AI Coding Agent Runner in MicroVMs" />
     <meta
       property="og:description"
-      content="Open-source, self-hosted runner for Claude Code, Cursor CLI &amp; OpenCode. Run each coding task in an isolated microVM or gVisor sandbox with 2.8s warm snapshots."
+      content="Open-source, self-hosted runner for Claude Code, Cursor CLI, OpenCode, pi &amp; Prime Agent. Each thread in its own microVM or gVisor sandbox, with 2.8s warm snapshots and an MCP server for other agents."
     />
     <meta property="og:image" content="%SITE%/og.png" />
     <meta property="og:image:type" content="image/png" />
@@ -35,7 +35,7 @@
     <meta name="twitter:title" content="forgerun: Self-Hosted AI Coding Agent Runner in MicroVMs" />
     <meta
       name="twitter:description"
-      content="Open-source, self-hosted runner for Claude Code, Cursor CLI &amp; OpenCode. Every turn in its own microVM or gVisor sandbox. Stop paying for sandboxes."
+      content="Open-source, self-hosted runner for Claude Code, Cursor CLI, OpenCode, pi &amp; Prime. Every turn in its own microVM or gVisor sandbox. Drive it from MCP. Stop paying for sandboxes."
     />
     <meta name="twitter:image" content="%SITE%/og.png" />
     <meta name="twitter:image:alt" content="forgerun: stop paying for sandboxes. Run coding agents on your own VM." />
@@ -71,7 +71,7 @@
             "name": "forgerun",
             "applicationCategory": "DeveloperApplication",
             "operatingSystem": "Linux, macOS (Apple Silicon)",
-            "description": "Open-source, self-hosted AI coding agent runner. Runs Claude Code, Cursor CLI, OpenCode, and Pi on your GitHub repositories inside isolated libkrun microVMs or gVisor sandboxes with host-side secret proxying and 2.8-second warm disk snapshots.",
+            "description": "Open-source, self-hosted AI coding agent runner. Runs Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent on your GitHub repositories inside isolated libkrun microVMs or gVisor sandboxes with host-side secret proxying, 2.8-second warm disk snapshots, and an MCP server so another agent can hand work off to forgerun or orchestrate threads there.",
             "url": "%SITE%/",
             "downloadUrl": "https://raw.githubusercontent.com/depak7/forgerun/main/install.sh",
             "softwareHelp": "https://github.com/depak7/forgerun#readme",
@@ -90,8 +90,11 @@
               "User-space kernel sandbox fallback via gVisor (runsc) on standard cloud VMs without KVM (0.34s cold boot)",
               "Host-side TLS secret proxy swaps placeholder tokens so API keys never enter the sandbox",
               "Warm disk snapshots cut task startup from 26.8s to 2.8s with dependencies pre-installed",
-              "Pluggable adapters for Claude Code, Cursor CLI, OpenCode, and Pi",
+              "Pluggable adapters for Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent",
+              "Agent VM images include git, Node, and Python so agents can run a repo's tests",
+              "MCP server (forgerun mcp) so Claude Code, Cursor, or any MCP client can start, follow, and push threads",
               "Diff review and squashed branch push with optional GitHub pull request creation",
+              "Threads can start from any branch; pull requests target that branch",
               "Split orchestrator and outbound HTTPS worker architecture with zero inbound ports required"
             ]
           },
@@ -141,10 +144,11 @@
           <strong>forgerun</strong> is an open-source, self-hosted AI coding agent runner that executes
           <a style="color: #4ade9b" href="https://code.claude.com/docs">Claude Code</a>,
           <a style="color: #4ade9b" href="https://cursor.com/docs/cloud-agent">Cursor CLI</a>,
-          <a style="color: #4ade9b" href="https://opencode.ai">OpenCode</a>, and Pi on your GitHub repositories.
+          <a style="color: #4ade9b" href="https://opencode.ai">OpenCode</a>, pi, and Prime Agent on your GitHub repositories.
           Every conversation thread runs in its own isolated sandbox — a hardware-virtualized microVM via
           <a style="color: #4ade9b" href="https://github.com/superradcompany/microsandbox">microsandbox</a> (libkrun) on Apple Silicon Macs and Linux with KVM, or a
           <a style="color: #4ade9b" href="https://gvisor.dev">gVisor</a> user-space kernel sandbox on any standard Linux VPS without nested virtualization.
+          Drive it from another agent with <code>forgerun mcp</code>.
         </p>
         <p style="color: #9da39e">
           Try it yourself with one command: <code>curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh</code>
@@ -170,11 +174,11 @@
         <ol style="color: #9da39e">
           <li>
             <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">01. Give it a task</h3>
-            <p style="margin-top: 0">Pick a GitHub repository, an agent (<code>cursor</code>, <code>claude-code</code>, <code>opencode</code>, <code>pi</code>, or <code>prime</code>), and a model, then describe what you want changed — or ask for a read-only plan first and approve it before any code is modified.</p>
+            <p style="margin-top: 0">Pick a GitHub repository (any branch), an agent (<code>cursor</code>, <code>claude-code</code>, <code>opencode</code>, <code>pi</code>, or <code>prime</code>), and a model, then describe what you want changed — or ask for a read-only plan first and approve it before any code is modified. Another agent can start the same flow through <code>forgerun mcp</code>.</p>
           </li>
           <li>
             <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">02. It works in an isolated microVM</h3>
-            <p style="margin-top: 0">The agent clones your repository, installs packages, builds, and runs tests inside its own dedicated VM. Warm disk snapshots reduce task startup time from <strong>26.8 seconds to 2.8 seconds</strong> (measured on <code>expressjs/express</code> with 304 npm packages pre-installed). The VM stays alive between follow-up messages so the agent retains its working tree and conversation context.</p>
+            <p style="margin-top: 0">The agent clones your repository, installs packages, builds, and runs tests inside its own dedicated VM (images include git, Node, and Python). Warm disk snapshots reduce task startup time from <strong>26.8 seconds to 2.8 seconds</strong> (measured on <code>expressjs/express</code> with 304 npm packages pre-installed). The VM stays alive between follow-up messages so the agent retains its working tree and conversation context.</p>
           </li>
           <li>
             <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">03. Review the diff, then push</h3>
@@ -215,7 +219,7 @@
               <td style="padding: 8px">Dedicated microVM (libkrun) or gVisor kernel (0.34s boot)</td>
               <td style="padding: 8px">Never inside the sandbox (host TLS proxy swaps placeholders)</td>
               <td style="padding: 8px">2.8s warm disk snapshots; review diff before pushing branch/PR</td>
-              <td style="padding: 8px">claude-code (Pro/Max), cursor, opencode (free/paid), pi, prime</td>
+              <td style="padding: 8px">claude-code (Pro/Max), cursor, opencode (free/paid), pi, prime — switch agents mid-thread; drive it over MCP</td>
             </tr>
             <tr style="border-bottom: 1px solid #1c201e">
               <td style="padding: 8px">CLI on your laptop</td>
@@ -247,7 +251,11 @@
           <li><code>claude-code</code> — Anthropic Claude Code (Sonnet, Opus, Fable) using your existing Claude Pro or Max subscription via <code>claude setup-token</code>.</li>
           <li><code>opencode</code> — OpenCode CLI, including zero-configuration free models that require no API key.</li>
           <li><code>pi</code> — Multi-provider coding agent supporting OpenRouter, OpenAI, and Anthropic keys.</li>
+          <li><code>prime</code> — Prime Agent: those providers plus Gemini, xAI, and Prime Inference.</li>
         </ul>
+        <p style="color: #9da39e">
+          Drive forgerun from Claude Code, Cursor, or any MCP client with <code>forgerun mcp</code>: start threads, follow them, review diffs, and push.
+        </p>
 
         <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">Run it yourself</h2>
         <p style="color: #9da39e">

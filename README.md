@@ -15,7 +15,8 @@
   <a href="#architecture">Architecture</a> ·
   <a href="docs/deploying.md">Deploying</a> ·
   <a href="docs/experiments.md">Benchmarks</a> ·
-  <a href="#faq">FAQ</a>
+  <a href="#faq">FAQ</a> ·
+  <a href="llms.txt">llms.txt</a>
 </p>
 
 [![forgerun demo: click to watch with sound](docs/demo.gif)](https://forgerun.depak.dev)

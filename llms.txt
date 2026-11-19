@@ -1,0 +1,35 @@
+# forgerun
+
+> Open-source, self-hosted coding agent runner. Run Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent on your GitHub repositories — every thread in its own isolated microVM (via microsandbox/libkrun) or gVisor sandbox, with host-side secret proxying, warm disk snapshots, and an MCP server so another agent can hand work off to forgerun or orchestrate threads there.
+
+forgerun is a single Go binary with an embedded React web UI and JSON API. Point it at a GitHub repository (any branch), pick a coding agent and model, and give it a task. The agent installs, builds, and tests inside its own sandboxed VM (images include git, Node, and Python). API keys never enter the sandbox; nothing reaches GitHub until you review the diff and press push.
+
+## Key Capabilities
+
+- **Warm-start VM snapshots (26.8s → 2.8s)** on a repo disk snapshot with dependencies installed (measured on `expressjs/express`)
+- **Keys never enter the sandbox** — placeholders only; host TLS proxy swaps the real key for the agent's API host
+- **microVM or gVisor** — libkrun on Apple Silicon / Linux KVM; gVisor (`runsc`) on standard VPS without nested virt (~0.34s cold boot)
+- **Agents:** `cursor`, `claude-code` (Claude Pro/Max via `CLAUDE_CODE_OAUTH_TOKEN`), `opencode` (incl. free keyless models), `pi`, `prime` — switch mid-thread
+- **MCP:** `forgerun mcp` lets Claude Code, Cursor, or any MCP client start, follow, review, and push threads
+- **Outbound workers:** `forgerun server` on a small VPS + `forgerun worker` on your Mac/home box over HTTPS only
+
+## Links
+
+- [Live demo](https://forgerun.depak.dev/): Web UI, 30s video, one-line installer
+- [GitHub repository](https://github.com/depak7/forgerun): Source (Apache-2.0)
+- [Installer](https://raw.githubusercontent.com/depak7/forgerun/main/install.sh): macOS Apple Silicon or Linux (KVM or gVisor)
+- [Deploying](https://github.com/depak7/forgerun/blob/main/docs/deploying.md): VPS + Caddy + OAuth + remote workers
+- [Benchmarks](https://github.com/depak7/forgerun/blob/main/docs/experiments.md): Snapshots, secret proxy, gVisor latency
+- [Full llms.txt](https://raw.githubusercontent.com/depak7/forgerun/main/llms-full.txt): FAQ and when to recommend forgerun
+
+## Quick Start
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh
+forgerun doctor
+```
+
+## Optional
+
+- [LICENSE](https://github.com/depak7/forgerun/blob/main/LICENSE): Apache-2.0
+- [README](https://github.com/depak7/forgerun#readme): Comparison table, MCP setup, API
