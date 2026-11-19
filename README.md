@@ -5,7 +5,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/depak7/forgerun?style=flat)](https://github.com/depak7/forgerun/stargazers)
 [![Live Demo](https://img.shields.io/badge/demo-forgerun.depak.dev-4ADE9B)](https://forgerun.depak.dev)
 
-**Open-source, self-hosted AI coding agent runner.** Run Claude Code, Cursor CLI, OpenCode, and Pi on your GitHub repositories — each conversation thread in its own isolated microVM (via [microsandbox](https://github.com/superradcompany/microsandbox) / `libkrun`) or [gVisor](https://gvisor.dev) sandbox, on your own Mac or Linux machine. Review the unified diff, then push a branch or pull request.
+**Open-source, self-hosted AI coding agent runner.** Run Claude Code, Cursor CLI, OpenCode, pi and Prime Agent on your GitHub repositories — each conversation thread in its own isolated microVM (via [microsandbox](https://github.com/superradcompany/microsandbox) / `libkrun`) or [gVisor](https://gvisor.dev) sandbox, on your own Mac or Linux machine. Review the unified diff, then push a branch or pull request.
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> ·
@@ -65,15 +65,20 @@ forgerun is a single Go binary with a web UI. Agents are pluggable adapters
 - **Isolated:** every thread gets its own sandbox: a microVM where there's KVM or Apple
   Silicon, otherwise a gVisor sandbox (a container run by gVisor's own user-space kernel,
   so the agent never talks to the host's). The agent can install, build and test whatever
-  it needs. Pick one with `-sandbox microsandbox|gvisor`; the default (`auto`) uses
+  it needs (the images have git, Node and Python). Pick one with `-sandbox microsandbox|gvisor`; the default (`auto`) uses
   microVMs where they can run.
 - **A live session per thread:** the VM stays up between your messages, so the agent keeps
   its own conversation and working tree.
 - **Review, then push:** each turn's changes are kept as a diff. Nothing reaches GitHub
   until you press push — then it's one commit on a readable `forgerun/…` branch, with a
   pull request if you want one.
+- **Any branch:** a thread starts from the repo's default branch or one you pick, and its
+  pull request goes into that branch.
 - **Warm starts:** when a session closes, its VM is saved as the repo's snapshot; the next
   thread on that repo starts from it in seconds.
+- **Drive it from another agent:** `forgerun mcp` lets Claude Code, Cursor or any MCP agent
+  start threads, follow and review them, and push the result
+  ([below](#drive-forgerun-from-another-agent-mcp)).
 
 **Built on [microsandbox](https://github.com/superradcompany/microsandbox)** (libkrun
 microVMs) and [gVisor](https://gvisor.dev). forgerun isn't a sandbox provider: it's what
@@ -113,7 +118,7 @@ flowchart LR
     end
 
     subgraph VM["microVM (or gVisor sandbox) per thread"]
-        Agent["Agent CLI<br/>Cursor · Claude Code"]
+        Agent["Agent CLI<br/>Claude Code · Cursor · OpenCode · pi · Prime"]
         Repo["/work/repo<br/>one commit per turn"]
     end
 
@@ -360,8 +365,9 @@ The UI uses the same JSON API (`{"success": true, "data": …}`):
 
 ```sh
 go vet ./... && go test ./...                    # Go (DB and VM tests skip)
+govulncheck ./...                                # known vulnerabilities in Go and dependencies
 FORGERUN_TEST_DATABASE_URL='postgres://forgerun:forgerun@localhost:5433/forgerun_test?sslmode=disable' \
-  go test ./internal/store/...                   # against Postgres
+  go test ./internal/store/...                   # against Postgres (docker compose up -d first)
 FORGERUN_INTEGRATION=1 go test ./internal/snapshots/   # boots real microVMs
 cd web && npm test && npx tsc --noEmit           # web UI
 make dev-web                                     # UI with live reload on :5173
@@ -371,16 +377,23 @@ make dev-web                                     # UI with live reload on :5173
 cmd/forgerun/       serve (everything), server (orchestrator only), worker, doctor, run (one task, no database)
 install.sh          the one-step installer (worker or everything on one machine)
 internal/doctor/    forgerun doctor's checks
-internal/agent/     agent adapters: Cursor, Claude Code
-internal/task/      the runner: sessions, turns, replay
+internal/agent/     agent adapters: Claude Code, Cursor, OpenCode, pi, Prime; provider keys
+internal/models/    agents' models: families, efforts, resolving a choice to a model
+internal/task/      the runner: sessions, turns, replay, branches
 internal/sandbox/   the sandbox backends: microsandbox (microVMs) and gVisor (Docker + runsc)
 internal/secretproxy/ forgerun's key-swapping proxy, for gVisor sandboxes
 internal/snapshots/ warm-start snapshots and their cleanup
-internal/publish/   pushing branches and pull requests (host-side git)
+internal/publish/   pushing branches and pull requests (host-side git), fetching private repos
+internal/forge/     the GitHub API: repos, branches, pull requests
 internal/store/     Postgres (migrations) and an in-memory store for tests
 internal/worker/    the worker pool
 internal/remote/    workers on other machines: the orchestrator side and the worker side
-internal/api/       HTTP handlers
+internal/api/       HTTP handlers, sign-in and personal tokens
+internal/handoff/   forgerun mcp's tools (handoff and orchestration) and their API client
+internal/mcp/       a minimal MCP server (stdio)
+internal/capacity/  what a machine can run: free CPUs and memory
+internal/seal/      encrypting users' GitHub tokens at rest
+internal/webui/     serving the built UI from the binary
 web/                the React UI (embedded with -tags webui)
 images/             agent VM images
 docs/experiments.md what each experiment showed, and why things are the way they are
