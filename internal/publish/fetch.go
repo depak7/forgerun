@@ -21,13 +21,12 @@ import (
 // rather than copied into a VM.
 const maxFetch = 1 << 30
 
-// Fetcher returns a task.Fetcher that fetches repos on this host with tok
-// (the user's, or the server's if it's zero).
-func (p *Publisher) Fetcher(tok forge.Token) task.Fetcher { return &hostFetcher{p: p, user: tok} }
+// Fetcher returns a task.Fetcher that fetches repos on this host with the
+// publisher's token.
+func (p *Publisher) Fetcher() task.Fetcher { return &hostFetcher{p: p} }
 
 type hostFetcher struct {
-	p    *Publisher
-	user forge.Token
+	p *Publisher
 }
 
 var _ task.Fetcher = (*hostFetcher)(nil)
@@ -40,7 +39,7 @@ func (f *hostFetcher) Fetch(ctx context.Context, repoURL, ref string) ([]byte, s
 	if err != nil {
 		return nil, "", err
 	}
-	tok, err := f.p.token(ctx, repo, f.user)
+	tok, err := f.p.token(ctx, repo)
 	if err != nil {
 		return nil, "", err
 	}

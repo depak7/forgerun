@@ -4,12 +4,9 @@ import styles from "./Landing.module.css";
 const repoURL = "https://github.com/depak7/forgerun";
 const installCmd = "curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh";
 
-// LandingPage is what someone sees before signing in: what forgerun is, how
-// it keeps their code and keys safe, what signing in grants, and the button.
-// GitHub sends them back to /auth/github/callback. With signInHidden (the
-// server's FORGERUN_HIDE_SIGN_IN) it leaves the sign-in buttons off.
-export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }) {
-  const error = new URLSearchParams(window.location.search).get("signin_error");
+// LandingPage is forgerun's public page (FORGERUN_LANDING_ONLY): what it is,
+// how it keeps code and keys safe, and how to run it yourself.
+export function LandingPage() {
   return (
     <div className={styles.page}>
       <header className={styles.top}>
@@ -30,11 +27,6 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
             <StarIcon />
             <span>Star on GitHub</span>
           </a>
-          {!signInHidden && (
-            <a className={styles.topSignIn} href="/auth/github/login">
-              [ sign in ]
-            </a>
-          )}
         </nav>
       </header>
 
@@ -55,21 +47,11 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
             <span className={styles.tryNote}>On any Linux VM or an Apple Silicon Mac. Then open the web UI it prints.</span>
           </div>
           <div className={styles.actions}>
-            {!signInHidden && (
-              <a className={styles.button} href="/auth/github/login">
-                [ sign in with GitHub ]
-              </a>
-            )}
             <a className={styles.buttonGhost} href={repoURL}>
               <StarIcon />
               <span>[ view on GitHub ]</span>
             </a>
           </div>
-          {error && (
-            <p role="alert" className={styles.error}>
-              Sign-in didn't work: {error}
-            </p>
-          )}
         </section>
 
         <DemoVideo />
@@ -237,21 +219,6 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
             Warm disk snapshots cut task start from <strong>26.8s to 2.8s</strong> on <code className={styles.inline}>expressjs/express</code>{" "}
             (<a className={styles.inlineLink} href={`${repoURL}/blob/main/docs/experiments.md`}>read the benchmarks →</a>).
           </p>
-        </section>
-
-        <section className={styles.section} aria-labelledby="signin">
-          <h2 id="signin" className={styles.heading}>
-            What signing in means
-          </h2>
-          <ul className={styles.facts}>
-            <li>
-              forgerun asks GitHub for access to your repositories, so it can clone private ones and push branches and pull requests
-              as you.
-            </li>
-            <li>Your GitHub token is stored encrypted, and your threads are visible only to you.</li>
-            <li>There's a daily limit on how many turns each person can start.</li>
-            <li>You can revoke access any time in GitHub → Settings → Applications.</li>
-          </ul>
         </section>
 
         <section className={styles.section} aria-labelledby="self-host">

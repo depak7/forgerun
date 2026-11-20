@@ -29,8 +29,6 @@ function status(over: Partial<Status> = {}): Status {
     tasks: { queued: 0, running: 0 },
     require_zdr: false,
     remote_workers: false,
-    paused: false,
-    limits: { turns_per_day: 20, live: 1 },
     sessions: { open: 1, max: 4, idle_seconds: 1800 },
     ...over,
   };
@@ -138,27 +136,18 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("no agent keys · models that need none")).toBeTruthy();
   });
 
-  it("shows the limits and pauses new tasks", async () => {
-    serve(status());
-    renderPage(<SettingsPage />);
-    expect(await screen.findByText(/may have 1 turn waiting or running, and start 20 turns a day/)).toBeTruthy();
-    const fetchMock = globalThis.fetch as unknown as { mock: { calls: [RequestInfo, RequestInit?][] } };
-    fireEvent.click(screen.getByRole("button", { name: /pause new tasks/ }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([u, i]) => u.toString() === "/api/admin/pause" && i?.method === "POST")).toBe(true));
-  });
-
   it("says when snapshots are off", async () => {
     serve(status({ snapshots: { enabled: false, count: 0, bytes: 0, budget_bytes: 0, max_age_seconds: 0, sweep_seconds: 0 } }));
     renderPage(<SettingsPage />);
     expect(await screen.findByText(/Every task starts cold/)).toBeTruthy();
   });
 
-  it("lets a signed-in user make, see and revoke their personal tokens", async () => {
+  it("makes, lists and revokes personal tokens", async () => {
     const listed = [{ id: 3, name: "old laptop", created_at: "2026-11-01T10:00:00Z", last_used_at: null }];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       const data =
-        url === "/api/me" ? { signed_in: true, sign_in: true, login: "alice", name: "", avatar_url: "", admin: false }
+        url === "/api/me" ? { signed_in: true, sign_in: true, login: "owner" }
         : url === "/api/tokens" && init?.method === "POST" ? { id: 4, name: "laptop MCP", created_at: "2026-11-04T10:00:00Z", last_used_at: null, token: "frt_secret" }
         : url === "/api/tokens" ? listed
         : url === "/api/tokens/3" ? {}
@@ -168,7 +157,6 @@ describe("SettingsPage", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     renderPage(<SettingsPage />);
-    expect(await screen.findByText("Only an admin can see the server's settings.")).toBeTruthy();
     expect(await screen.findByText("old laptop")).toBeTruthy();
     expect(screen.getByText("never used")).toBeTruthy();
 

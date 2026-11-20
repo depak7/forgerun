@@ -15,11 +15,9 @@ const status = {
   tasks: { queued: 0, running: 0 },
   require_zdr: false,
   remote_workers: false,
-  paused: false,
-  limits: { turns_per_day: 20, live: 1 },
   sessions: { open: 0, max: 4, idle_seconds: 1800 },
 };
-const me = (over: object) => ({ signed_in: true, sign_in: true, login: "alice", name: "Alice", avatar_url: "", admin: false, ...over });
+const me = (over: object) => ({ signed_in: true, sign_in: true, login: "owner", ...over });
 
 function renderLayout() {
   renderPage(
@@ -32,40 +30,26 @@ function renderLayout() {
 }
 
 describe("Layout", () => {
-  it("asks to sign in with GitHub when signed out", async () => {
+  it("asks for the username and password when signed out", async () => {
     fakeServer({ "/api/me": me({ signed_in: false, login: "" }), "/api/status": status, "/api/threads": [], "/api/agents": [] });
     renderLayout();
-    const button = await screen.findByRole("link", { name: /sign in with GitHub/ });
-    expect(button.getAttribute("href")).toBe("/auth/github/login");
+    expect(await screen.findByLabelText("Password")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /sign in/ })).toBeTruthy();
     expect(screen.queryByText("the page")).toBeNull();
   });
 
-  it("leaves the sign-in buttons off when the server hides them", async () => {
-    fakeServer({ "/api/me": me({ signed_in: false, login: "", sign_in_hidden: true }), "/api/status": status, "/api/threads": [], "/api/agents": [] });
-    renderLayout();
-    expect(await screen.findByRole("link", { name: /view on GitHub/ })).toBeTruthy();
-    expect(screen.queryByRole("link", { name: /sign in/ })).toBeNull();
-  });
-
-  it("shows the signed-in user, with settings for their tokens but not the server's credentials", async () => {
+  it("shows who's signed in, the settings and the server's credentials", async () => {
     fakeServer({ "/api/me": me({}), "/api/status": status, "/api/threads": [], "/api/agents": [] });
     renderLayout();
     expect(await screen.findByText("the page")).toBeTruthy();
-    expect(screen.getByText("alice")).toBeTruthy();
+    expect(screen.getByText("owner")).toBeTruthy();
     expect(screen.getByRole("button", { name: "sign out" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "settings" })).toBeTruthy();
-    expect(screen.queryByText("Credentials")).toBeNull();
-  });
-
-  it("gives an admin the settings", async () => {
-    fakeServer({ "/api/me": me({ admin: true }), "/api/status": status, "/api/threads": [], "/api/agents": [] });
-    renderLayout();
-    expect(await screen.findByRole("link", { name: "settings" })).toBeTruthy();
-    expect(screen.getByText("admin")).toBeTruthy();
+    expect(screen.getByText("Credentials")).toBeTruthy();
   });
 
   it("has no account row in local mode", async () => {
-    fakeServer({ "/api/me": me({ sign_in: false, login: "local", admin: true }), "/api/status": status, "/api/threads": [], "/api/agents": [] });
+    fakeServer({ "/api/me": me({ sign_in: false, login: "local" }), "/api/status": status, "/api/threads": [], "/api/agents": [] });
     renderLayout();
     expect(await screen.findByText("the page")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "sign out" })).toBeNull();

@@ -118,7 +118,7 @@ func TestPrivateRepoComesFromTheHost(t *testing.T) {
 	}
 	pub := &publish.Publisher{Tokens: forge.NewStaticToken(forge.NewToken("tok-never-in-the-vm")),
 		RemoteURL: func(forge.Repo) string { return "file://" + bare }}
-	fetch := pub.Fetcher(forge.Token{})
+	fetch := pub.Fetcher()
 
 	first := task.New(testRepo, "one")
 	first.Fetch = fetch

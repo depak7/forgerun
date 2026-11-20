@@ -464,28 +464,17 @@ func githubToken(ctx context.Context, e Env) Result {
 
 func signIn(e Env) Result {
 	r := Result{Name: "sign-in"}
-	id, public := e.Getenv("GITHUB_OAUTH_CLIENT_ID"), e.Getenv("FORGERUN_PUBLIC_URL")
-	if id == "" {
-		r.Status, r.Detail = Pass, "off: local mode, every request is the admin"
-		if u, err := url.Parse(public); public != "" && err == nil && !loopback(u.Hostname()) {
-			r.Status = Warn
-			r.Fix = "FORGERUN_PUBLIC_URL is public but sign-in is off: anyone who opens it is admin. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET"
-		}
-		return r
-	}
-	// GitHub Apps' client IDs start with "Iv"; OAuth Apps' with "Ov" (or are hex).
-	if strings.HasPrefix(id, "Iv") {
-		r.Status, r.Detail = Fail, "GITHUB_OAUTH_CLIENT_ID is a GitHub App's, not an OAuth App's"
-		r.Fix = "make an OAuth App (Settings → Developer settings → OAuth Apps): a GitHub App's sign-in tokens expire in 8 hours and only reach repos it's installed on"
-		return r
-	}
 	if e.SignIn != nil {
 		if err := e.SignIn(); err != nil {
 			r.Status, r.Detail = Fail, err.Error()
 			return r
 		}
 	}
-	r.Status, r.Detail = Pass, "GitHub sign-in on, for "+cmp.Or(public, "http://localhost:8080")
+	if user := e.Getenv("FORGERUN_USERNAME"); user != "" {
+		r.Status, r.Detail = Pass, "on, as "+user
+		return r
+	}
+	r.Status, r.Detail = Pass, "off: local mode, for this machine only"
 	return r
 }
 

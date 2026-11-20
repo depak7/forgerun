@@ -236,22 +236,13 @@ func TestSignIn(t *testing.T) {
 	if r := signIn(e); r.Status != Pass || !strings.Contains(r.Detail, "local mode") {
 		t.Errorf("local mode: %+v", r)
 	}
-	env["FORGERUN_PUBLIC_URL"] = "https://forgerun.example.com"
-	if r := signIn(e); r.Status != Warn || !strings.Contains(r.Fix, "anyone who opens it is admin") {
-		t.Errorf("local mode in public: %+v", r)
+	env["FORGERUN_USERNAME"] = "owner"
+	if r := signIn(e); r.Status != Pass || !strings.Contains(r.Detail, "as owner") {
+		t.Errorf("on: %+v", r)
 	}
-	env["GITHUB_OAUTH_CLIENT_ID"] = "Iv23liABCDEF"
-	if r := signIn(e); r.Status != Fail || !strings.Contains(r.Detail, "GitHub App") {
-		t.Errorf("GitHub App: %+v", r)
-	}
-	env["GITHUB_OAUTH_CLIENT_ID"] = "Ov23liABCDEF"
-	e.SignIn = func() error { return errors.New("FORGERUN_SECRET_KEY is not set") }
-	if r := signIn(e); r.Status != Fail || !strings.Contains(r.Detail, "FORGERUN_SECRET_KEY") {
-		t.Errorf("settings incomplete: %+v", r)
-	}
-	e.SignIn = func() error { return nil }
-	if r := signIn(e); r.Status != Pass {
-		t.Errorf("OAuth App: %+v", r)
+	e.SignIn = func() error { return errors.New("FORGERUN_PASSWORD must be at least 12 characters") }
+	if r := signIn(e); r.Status != Fail || !strings.Contains(r.Detail, "FORGERUN_PASSWORD") {
+		t.Errorf("settings wrong: %+v", r)
 	}
 }
 

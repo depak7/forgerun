@@ -41,16 +41,13 @@ type folderJSON struct {
 // let its thread be pushed: onto that commit, with a pull request to that
 // branch.
 func (s *Server) uploadFolder(w http.ResponseWriter, r *http.Request) {
-	if !s.allowTurn(w, r) {
-		return
-	}
 	q := r.URL.Query()
 	name := folderName(q.Get("name"))
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "name is required: the folder's name, e.g. ?name=my-app")
 		return
 	}
-	f := store.Folder{Name: name, Owner: viewerOf(r).ID, Branch: q.Get("branch")}
+	f := store.Folder{Name: name, Branch: q.Get("branch")}
 	if repo := q.Get("repo"); repo != "" {
 		gh, err := forge.ParseRepo(repo)
 		if err != nil || !commitID.MatchString(q.Get("base")) || !validBranch(f.Branch) {
@@ -130,12 +127,11 @@ func checkFolder(data []byte, max int64) error {
 	}
 }
 
-// ownFolder returns the folder if the viewer may start tasks on it,
-// writing the error response itself if not.
+// ownFolder returns an uploaded folder, writing the error response
+// itself if there's none.
 func (s *Server) ownFolder(w http.ResponseWriter, r *http.Request, id string) (store.Folder, bool) {
 	f, err := s.store.GetFolder(r.Context(), id)
-	v := viewerOf(r)
-	if errors.Is(err, store.ErrFolderNotFound) || (err == nil && !v.Admin && (v.ID == 0 || f.Owner != v.ID)) {
+	if errors.Is(err, store.ErrFolderNotFound) {
 		writeError(w, http.StatusNotFound, "no such folder: "+id+"; upload it first (POST /api/folders)")
 		return store.Folder{}, false
 	}

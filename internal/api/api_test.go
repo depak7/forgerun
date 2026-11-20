@@ -387,7 +387,7 @@ func TestCreateRejectsBadModelChoice(t *testing.T) {
 			if apiErr.Code != "invalid_request" || !strings.Contains(apiErr.Message, tc.wantText) {
 				t.Errorf("error = %+v, want message containing %q", apiErr, tc.wantText)
 			}
-			if recs, _ := s.List(context.Background(), 10, 0); len(recs) != 0 {
+			if recs, _ := s.List(context.Background(), 10); len(recs) != 0 {
 				t.Errorf("a rejected request created %d task(s)", len(recs))
 			}
 		})
@@ -535,43 +535,31 @@ type fakePRs struct {
 	got    *[]task.PublishRequest
 	// Access: can push unless readOnly; noRepo = GitHub doesn't show it.
 	readOnly, noRepo bool
-	tokens           *[]string // the user tokens it was given
 }
 
-func (f fakePRs) IsOpen(_ context.Context, _ string, _ int, tok forge.Token) (bool, error) {
-	f.saw(tok)
+func (f fakePRs) IsOpen(context.Context, string, int) (bool, error) {
 	return f.open, f.err
 }
 
-func (f fakePRs) Access(_ context.Context, _ string, tok forge.Token) (forge.Access, error) {
-	f.saw(tok)
+func (f fakePRs) Access(context.Context, string) (forge.Access, error) {
 	if f.noRepo {
 		return forge.Access{}, forge.ErrNoRepo
 	}
 	return forge.Access{Push: !f.readOnly}, nil
 }
 
-func (f fakePRs) Repos(_ context.Context, tok forge.Token) ([]forge.RepoInfo, error) {
-	f.saw(tok)
+func (f fakePRs) Repos(context.Context) ([]forge.RepoInfo, error) {
 	r := forge.RepoInfo{FullName: "o/r", URL: "https://github.com/o/r", Private: true}
 	return []forge.RepoInfo{r}, nil
 }
 
 // The fake repo has branches main (its default) and dev.
-func (f fakePRs) HasBranch(_ context.Context, _, branch string, tok forge.Token) (bool, error) {
-	f.saw(tok)
+func (f fakePRs) HasBranch(_ context.Context, _, branch string) (bool, error) {
 	return branch == "main" || branch == "dev", nil
 }
 
-func (f fakePRs) Branches(_ context.Context, _ string, tok forge.Token) (string, []string, error) {
-	f.saw(tok)
+func (f fakePRs) Branches(context.Context, string) (string, []string, error) {
 	return "main", []string{"dev", "main"}, nil
-}
-
-func (f fakePRs) saw(tok forge.Token) {
-	if f.tokens != nil {
-		*f.tokens = append(*f.tokens, tok.Reveal())
-	}
 }
 
 func (f fakePRs) Publish(_ context.Context, req task.PublishRequest) (task.Published, error) {

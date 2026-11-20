@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,31 +137,23 @@ func TestGitHubTokens(t *testing.T) {
 func TestSignInSettings(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	env := func(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
-	if a, err := signIn(env(nil), log); a != nil || err != nil {
-		t.Errorf("no client ID: local mode, got %v, %v", a, err)
+	if a, err := signIn(env(nil), "127.0.0.1:8080", log); a != nil || err != nil {
+		t.Errorf("none, on this machine: local mode, got %v, %v", a, err)
 	}
-	full := map[string]string{"GITHUB_OAUTH_CLIENT_ID": "id", "GITHUB_OAUTH_CLIENT_SECRET": "s",
-		"FORGERUN_SECRET_KEY": strings.Repeat("ab", 32), "FORGERUN_ADMINS": " depak7 , other ", "FORGERUN_PUBLIC_URL": "https://f.example/"}
-	a, err := signIn(env(full), log)
-	if err != nil || a.PublicURL != "https://f.example" || len(a.Admins) != 2 || a.Admins[0] != "depak7" || a.HideSignIn {
+	if _, err := signIn(env(nil), "0.0.0.0:8080", log); err == nil || !strings.Contains(err.Error(), "FORGERUN_PASSWORD") {
+		t.Errorf("none, reachable from the network: %v", err)
+	}
+	full := map[string]string{"FORGERUN_USERNAME": "owner", "FORGERUN_PASSWORD": "a long passphrase"}
+	if a, err := signIn(env(full), "0.0.0.0:8080", log); err != nil || a.Username != "owner" || a.Password != "a long passphrase" {
 		t.Errorf("full settings: %+v, %v", a, err)
 	}
-	hidden := maps.Clone(full)
-	hidden["FORGERUN_HIDE_SIGN_IN"] = "true"
-	if a, err := signIn(env(hidden), log); err != nil || !a.HideSignIn {
-		t.Errorf("FORGERUN_HIDE_SIGN_IN=true: %+v, %v", a, err)
-	}
-	for _, missing := range []string{"GITHUB_OAUTH_CLIENT_SECRET", "FORGERUN_SECRET_KEY"} {
-		kv := maps.Clone(full)
-		delete(kv, missing)
-		if _, err := signIn(env(kv), log); err == nil || !strings.Contains(err.Error(), missing) {
-			t.Errorf("without %s: %v", missing, err)
+	for name, kv := range map[string]map[string]string{
+		"no password":    {"FORGERUN_USERNAME": "owner"},
+		"short password": {"FORGERUN_USERNAME": "owner", "FORGERUN_PASSWORD": "short"},
+	} {
+		if _, err := signIn(env(kv), "127.0.0.1:8080", log); err == nil {
+			t.Errorf("%s: accepted", name)
 		}
-	}
-	kv := maps.Clone(full)
-	kv["FORGERUN_PUBLIC_URL"] = "forgerun.example"
-	if _, err := signIn(env(kv), log); err == nil {
-		t.Error("a public URL without a scheme should be refused")
 	}
 }
 

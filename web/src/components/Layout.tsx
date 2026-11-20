@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { useAgents, useMe, useStatus, useThreads } from "../api/queries";
 import type { Me } from "../api/types";
-import { LandingPage } from "../pages/Landing";
+import { LoginPage } from "../pages/Login";
 import { formatBytes, shortID } from "../format";
 import { keyState } from "../lib/keys";
 import styles from "./Layout.module.css";
@@ -13,7 +13,7 @@ import styles from "./Layout.module.css";
 export function Layout() {
   const { data: me } = useMe();
   if (!me) return null; // a moment, while we learn who's signed in
-  if (!me.signed_in) return <LandingPage signInHidden={me.sign_in_hidden} />;
+  if (!me.signed_in) return <LoginPage />;
   return (
     <div className={styles.app}>
       <StatusStrip />
@@ -68,7 +68,6 @@ function StatusStrip() {
           →
         </Link>
       ))}
-      {status?.paused && <span className={styles.missing}>NEW TASKS PAUSED</span>}
       {status?.snapshots.enabled && (
         <span className={styles.stripRight}>
           SNAPSHOTS {formatBytes(status.snapshots.bytes)}
@@ -105,46 +104,42 @@ function Sidebar({ me }: { me: Me }) {
         >
           tasks
         </NavLink>
-        {(me.admin || me.sign_in) && (
-          <NavLink
-            to="/settings"
-            className={({ isActive }) => linkClass(isActive)}
-          >
-            settings
-          </NavLink>
-        )}
+        <NavLink
+          to="/settings"
+          className={({ isActive }) => linkClass(isActive)}
+        >
+          settings
+        </NavLink>
       </div>
-      {me.admin && (
-        <div className={styles.creds}>
-          <span className="label">Credentials</span>
-          {agents
-            ?.filter((a) => a.credential?.name)
-            .map((a) => (
-              <span key={a.id} className={styles.credRow}>
-                <span>{a.id}</span>
-                <span className={keyState(a) === "set" ? styles.set : keyState(a) === "optional" ? styles.optional : styles.missing}>
-                  {keyState(a) === "set" ? "SET" : keyState(a) === "optional" ? "OPTIONAL" : "MISSING"}
-                </span>
+      <div className={styles.creds}>
+        <span className="label">Credentials</span>
+        {agents
+          ?.filter((a) => a.credential?.name)
+          .map((a) => (
+            <span key={a.id} className={styles.credRow}>
+              <span>{a.id}</span>
+              <span className={keyState(a) === "set" ? styles.set : keyState(a) === "optional" ? styles.optional : styles.missing}>
+                {keyState(a) === "set" ? "SET" : keyState(a) === "optional" ? "OPTIONAL" : "MISSING"}
               </span>
-            ))}
-          <span className={styles.credRow}>
-            <span>github</span>
-            <span>
-              {status?.pull_requests.enabled ? (
-                status.pull_requests.github_user
-              ) : (
-                <span className={styles.missing}>OFF</span>
-              )}
             </span>
+          ))}
+        <span className={styles.credRow}>
+          <span>github</span>
+          <span>
+            {status?.pull_requests.enabled ? (
+              status.pull_requests.github_user
+            ) : (
+              <span className={styles.missing}>OFF</span>
+            )}
           </span>
-        </div>
-      )}
+        </span>
+      </div>
       {me.sign_in && <Account me={me} />}
     </nav>
   );
 }
 
-// Account is the signed-in user, with sign out.
+// Account is who's signed in, with sign out.
 function Account({ me }: { me: Me }) {
   const queryClient = useQueryClient();
   const signOut = useMutation({
@@ -152,19 +147,9 @@ function Account({ me }: { me: Me }) {
     onSuccess: () => queryClient.clear(),
   });
   return (
-    <div className={`${styles.account} ${me.admin ? "" : styles.accountAlone}`}>
-      {me.avatar_url && (
-        <img
-          src={me.avatar_url}
-          alt=""
-          width={24}
-          height={24}
-          className={styles.avatar}
-        />
-      )}
-      <span className={styles.accountName} title={me.name || me.login}>
+    <div className={styles.account}>
+      <span className={styles.accountName} title={me.login}>
         {me.login}
-        {me.admin && <span className={styles.adminTag}> admin</span>}
       </span>
       <button
         type="button"

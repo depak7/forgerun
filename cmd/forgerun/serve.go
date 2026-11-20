@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -10,11 +9,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -24,7 +22,6 @@ import (
 	"github.com/depak7/forgerun/internal/models"
 	"github.com/depak7/forgerun/internal/publish"
 	"github.com/depak7/forgerun/internal/sandbox"
-	"github.com/depak7/forgerun/internal/seal"
 	"github.com/depak7/forgerun/internal/snapshots"
 	"github.com/depak7/forgerun/internal/store"
 	"github.com/depak7/forgerun/internal/store/postgres"
@@ -62,11 +59,8 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	fs.Var(&maxFolder, "max-folder", "largest folder upload, compressed, e.g. 50MiB")
 	fs.Var(&snapshotBudget, "snapshot-budget", "total disk for snapshots, e.g. 500MB or 20GB; least recently used are deleted first (0 = no limit)")
 	snapshotSweep := fs.Duration("snapshot-sweep", 10*time.Minute, "how often to check snapshot limits and clean up")
-	turnsPerDay := fs.Int("user-turns-per-day", 20, "turns each signed-in user (not admins) may start per 24 hours (0 = no limit)")
-	userLive := fs.Int("user-live", 1, "turns each signed-in user (not admins) may have waiting or running at once (0 = no limit)")
 	dbURL := dbFlag(fs)
 	fs.Parse(args)
-	limits := api.Limits{TurnsPerDay: *turnsPerDay, Live: *userLive}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
@@ -104,9 +98,13 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	if err != nil {
 		return err
 	}
-	auth, err := signIn(os.Getenv, log)
+	auth, err := signIn(os.Getenv, *addr, log)
 	if err != nil {
 		return err
+	}
+	allow, err := api.ParseAllowFrom(os.Getenv("FORGERUN_ALLOW_FROM"))
+	if err != nil {
+		return fmt.Errorf("FORGERUN_ALLOW_FROM: %w", err)
 	}
 	var backend sandbox.Backend = sandbox.Microsandbox{}
 	if !orchestratorOnly { // the orchestrator alone runs no sandboxes
@@ -132,9 +130,6 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		return err
-	}
-	if !isLoopback(*addr) && auth == nil {
-		log.Warn("listening on a non-loopback address with sign-in off: anyone who can reach it can use it (set GITHUB_OAUTH_CLIENT_ID)", "addr", *addr)
 	}
 
 	// Tasks left "running" by a crash have no worker anymore. (Remote
@@ -175,8 +170,8 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	if orchestratorOnly {
 		return orchestrate(ctx, stop, ln, db, log, orchestratorConfig{
 			api: api.Config{Store: db, Agents: agents, Agent: *defaultAgent, DefaultModel: *defaultModel, RequireZDR: *requireZDR,
-				PRs: prs, OutDir: *out, GitHubUser: githubUser, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, MaxFolder: int64(maxFolder), Log: log},
-			workerToken: workerToken, publisher: publisher, prTokens: prTokens,
+				PRs: prs, OutDir: *out, GitHubUser: githubUser, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, MaxFolder: int64(maxFolder), Log: log},
+			workerToken: workerToken, publisher: publisher, prTokens: prTokens, allow: allow,
 		})
 	}
 	sweepsDone := make(chan struct{})
@@ -198,14 +193,14 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 	}
 	pool := worker.New(db, runner, *workers, log)
 	if publisher != nil {
-		pool.Fetchers = repoFetchers(db, auth, publisher, log)
+		pool.Fetchers = repoFetchers(publisher, log)
 	}
 	pool.Folders = db.FolderData
 	go sweepFolders(ctx, db, log)
 	srv := &http.Server{
-		Handler: routes(os.Getenv("FORGERUN_PUBLIC_URL"), os.Getenv("FORGERUN_ANALYTICS_WEBSITE_ID"), nil, api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
+		Handler: routes(allow, os.Getenv("FORGERUN_PUBLIC_URL"), os.Getenv("FORGERUN_ANALYTICS_WEBSITE_ID"), nil, api.LogRequests(log, api.New(api.Config{Store: db, Pool: pool, Agents: agents, Agent: *defaultAgent,
 			DefaultModel: *defaultModel, RequireZDR: *requireZDR, PRs: prs, Sessions: runner, Capacity: runner, OutDir: *out, GitHubUser: githubUser,
-			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, Limits: limits, MaxFolder: int64(maxFolder), Log: log}))),
+			Snapshots: snapshotSettings, SessionIdle: *sessionIdle, MaxSessions: *maxSessions, Auth: auth, MaxFolder: int64(maxFolder), Log: log}))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -243,10 +238,11 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 
 // routes sends /api/ and /healthz to the API, /api/worker/ to remote
 // workers' endpoints (if there are any), and everything else to the web
-// app (a placeholder page unless built with -tags webui). site is the
-// server's public address for the app's link previews and sitemap;
-// analytics is the analytics script's website ID ("" for none).
-func routes(site, analytics string, workers, apiHandler http.Handler) http.Handler {
+// app (a placeholder page unless built with -tags webui), all only for
+// addresses in allow (every address if it's empty). site is the server's
+// public address for the app's link previews and sitemap; analytics is
+// the analytics script's website ID ("" for none).
+func routes(allow []netip.Prefix, site, analytics string, workers, apiHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	if workers != nil {
 		mux.Handle("/api/worker/", workers) // not request-logged: heartbeats every few seconds
@@ -255,7 +251,7 @@ func routes(site, analytics string, workers, apiHandler http.Handler) http.Handl
 	mux.Handle("/auth/", apiHandler)
 	mux.Handle("/healthz", apiHandler)
 	mux.Handle("/", webui.Handler(webui.Files(), site, analytics))
-	return mux
+	return api.AllowFrom(allow, mux)
 }
 
 // tokenWarnBefore is how soon before a GitHub token expires serve warns.
@@ -370,51 +366,38 @@ func isLoopback(addr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// signIn reads the GitHub sign-in settings. With no OAuth client ID the
-// server runs in local mode: no sign-in, and every request is the admin.
-func signIn(getenv func(string) string, log *slog.Logger) (*api.Auth, error) {
-	id, secret := getenv("GITHUB_OAUTH_CLIENT_ID"), getenv("GITHUB_OAUTH_CLIENT_SECRET")
-	if id == "" {
-		log.Info("sign-in off (local mode): set GITHUB_OAUTH_CLIENT_ID to let people sign in with GitHub")
-		return nil, nil
-	}
-	if secret == "" {
-		return nil, errors.New("GITHUB_OAUTH_CLIENT_ID is set but GITHUB_OAUTH_CLIENT_SECRET isn't")
-	}
-	key, err := seal.ParseKey(getenv("FORGERUN_SECRET_KEY"))
-	if err != nil {
-		return nil, fmt.Errorf("FORGERUN_SECRET_KEY (encrypts users' GitHub tokens): %w", err)
-	}
-	public := strings.TrimRight(cmp.Or(getenv("FORGERUN_PUBLIC_URL"), "http://localhost:8080"), "/")
-	if u, err := url.Parse(public); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("FORGERUN_PUBLIC_URL %q must be like https://forgerun.example.com", public)
-	}
-	var admins []string
-	for _, a := range strings.Split(getenv("FORGERUN_ADMINS"), ",") {
-		if a = strings.TrimSpace(a); a != "" {
-			admins = append(admins, a)
+// minPassword is the shortest password sign-in accepts: it's what stands
+// between the network and the agents' keys.
+const minPassword = 12
+
+// signIn reads the owner's sign-in (FORGERUN_USERNAME, FORGERUN_PASSWORD).
+// Without it the server runs in local mode, with no sign-in, which is
+// refused on an address other machines can reach.
+func signIn(getenv func(string) string, addr string, log *slog.Logger) (*api.Auth, error) {
+	user, pass := getenv("FORGERUN_USERNAME"), getenv("FORGERUN_PASSWORD")
+	switch {
+	case user == "" && pass == "":
+		if !isLoopback(addr) {
+			return nil, fmt.Errorf("listening on %s, which other machines can reach, needs sign-in: set FORGERUN_USERNAME and FORGERUN_PASSWORD (or listen on 127.0.0.1)", addr)
 		}
+		log.Info("sign-in off (local mode): set FORGERUN_USERNAME and FORGERUN_PASSWORD to require it")
+		return nil, nil
+	case user == "" || pass == "":
+		return nil, errors.New("set both FORGERUN_USERNAME and FORGERUN_PASSWORD, or neither")
+	case len(pass) < minPassword:
+		return nil, fmt.Errorf("FORGERUN_PASSWORD must be at least %d characters", minPassword)
 	}
-	if len(admins) == 0 {
-		log.Warn("FORGERUN_ADMINS is empty: nobody can see settings or other people's threads")
-	}
-	hide := getenv("FORGERUN_HIDE_SIGN_IN") == "true"
-	log.Info("sign-in with GitHub on", "public_url", public, "admins", strings.Join(admins, ","), "buttons_hidden", hide)
-	return &api.Auth{OAuth: &forge.OAuth{ClientID: id, ClientSecret: secret}, GitHub: &forge.GitHub{},
-		PublicURL: public, Admins: admins, Key: key, HideSignIn: hide}, nil
+	log.Info("sign-in on", "username", user)
+	return &api.Auth{Username: user, Password: pass}, nil
 }
 
-// repoFetchers fetches private repos on this host, with the task owner's
-// GitHub token (or the server's): their VMs never hold a GitHub credential.
-// Public repos are cloned by the VM itself, which is faster.
-func repoFetchers(db store.Store, auth *api.Auth, p *publish.Publisher, log *slog.Logger) func(context.Context, store.Record) (task.Fetcher, error) {
+// repoFetchers fetches private repos on this host, with the server's
+// GitHub token: their VMs never hold a GitHub credential. Public repos are
+// cloned by the VM itself, which is faster.
+func repoFetchers(p *publish.Publisher, log *slog.Logger) func(context.Context, store.Record) (task.Fetcher, error) {
 	return func(ctx context.Context, rec store.Record) (task.Fetcher, error) {
 		repo := rec.Repo
-		tok, err := auth.Token(ctx, db, rec.Owner)
-		if err != nil {
-			return nil, err
-		}
-		acc, err := p.Access(ctx, repo, tok)
+		acc, err := p.Access(ctx, repo)
 		if err != nil {
 			// Can't tell (GitHub unreachable?): let the VM try a plain clone.
 			log.Warn("checking whether a repo is private", "repo", repo, "err", err)
@@ -423,6 +406,6 @@ func repoFetchers(db store.Store, auth *api.Auth, p *publish.Publisher, log *slo
 		if !acc.Private {
 			return nil, nil
 		}
-		return p.Fetcher(tok), nil
+		return p.Fetcher(), nil
 	}
 }

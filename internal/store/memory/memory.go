@@ -24,9 +24,8 @@ type modelKey struct{ agent, id string }
 type Store struct {
 	mu        sync.Mutex
 	tasks     map[string]*store.Record
-	diffs     map[string]string // by task id, kept apart like the diff column
-	users     map[int64]*store.User
-	logins    map[string]login
+	diffs     map[string]string    // by task id, kept apart like the diff column
+	logins    map[string]time.Time // expiry, by login id
 	models    map[modelKey]models.Variant
 	snapshots map[int64]*store.Snapshot
 	folders   map[string]folder
@@ -41,7 +40,7 @@ var _ store.Store = (*Store)(nil)
 // Agents are implied by their models: an agent exists if any of vs belongs
 // to it, and its default is the variant marked AgentDefault.
 func New(vs ...models.Variant) *Store {
-	s := &Store{tasks: map[string]*store.Record{}, diffs: map[string]string{}, users: map[int64]*store.User{}, logins: map[string]login{}, models: map[modelKey]models.Variant{},
+	s := &Store{tasks: map[string]*store.Record{}, diffs: map[string]string{}, logins: map[string]time.Time{}, models: map[modelKey]models.Variant{},
 		snapshots: map[int64]*store.Snapshot{}, folders: map[string]folder{}, tokens: map[string]*store.APIToken{}}
 	for _, v := range vs {
 		s.models[modelKey{v.AgentID, v.ID}] = v
@@ -67,7 +66,7 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 		return fmt.Errorf("creating task %s: %w: %s", t.ID, store.ErrFolderNotFound, t.FolderID)
 	}
 	rec := &store.Record{ID: t.ID, Repo: t.Repo, FolderID: t.FolderID, BaseBranch: t.BaseBranch, Prompt: t.Prompt, AgentID: agentID,
-		Model: m, State: task.Queued, Plan: t.Plan, Owner: t.Owner, ThreadID: t.ID, CreatedAt: time.Now()}
+		Model: m, State: task.Queued, Plan: t.Plan, ThreadID: t.ID, CreatedAt: time.Now()}
 	if t.ParentID != "" { // mirrors the Postgres thread rules and indexes
 		parent, ok := s.tasks[t.ParentID]
 		if !ok {
@@ -89,17 +88,12 @@ func (s *Store) Create(_ context.Context, t task.Task, agentID string) error {
 	return nil
 }
 
-func (s *Store) ListThreads(_ context.Context, limit int, owner int64) ([]store.Thread, error) {
+func (s *Store) ListThreads(_ context.Context, limit int) ([]store.Thread, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	byThread := map[string][]store.Record{}
 	for _, r := range s.tasks {
 		byThread[r.ThreadID] = append(byThread[r.ThreadID], *r)
-	}
-	for id := range byThread {
-		if root := s.tasks[id]; owner != 0 && (root == nil || root.Owner != owner) {
-			delete(byThread, id)
-		}
 	}
 	var threads []store.Thread
 	for id, recs := range byThread {
@@ -301,23 +295,6 @@ func (s *Store) ClaimFor(_ context.Context, prefer, avoid []string) (store.Recor
 	return *oldest, true, nil
 }
 
-func (s *Store) UserUsage(_ context.Context, owner int64, since time.Time) (created, live int, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, r := range s.tasks {
-		if r.Owner != owner {
-			continue
-		}
-		if !r.CreatedAt.Before(since) {
-			created++
-		}
-		if r.State == task.Queued || r.State == task.Running {
-			live++
-		}
-	}
-	return created, live, nil
-}
-
 func (s *Store) Running(_ context.Context) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -440,14 +417,12 @@ func (s *Store) FolderDiff(_ context.Context, id string) (string, error) {
 	return f.handoffDiff, nil
 }
 
-func (s *Store) List(_ context.Context, limit int, owner int64) ([]store.Record, error) {
+func (s *Store) List(_ context.Context, limit int) ([]store.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	recs := make([]store.Record, 0, len(s.tasks))
 	for _, r := range s.tasks {
-		if owner == 0 || r.Owner == owner {
-			recs = append(recs, *r)
-		}
+		recs = append(recs, *r)
 	}
 	slices.SortFunc(recs, func(a, b store.Record) int { return b.CreatedAt.Compare(a.CreatedAt) }) // newest first
 	if len(recs) > limit {
@@ -568,52 +543,18 @@ func (s *Store) transition(id string, from, to task.State) (*store.Record, error
 	return r, nil
 }
 
-type login struct {
-	user    int64
-	expires time.Time
-}
-
-func (s *Store) SaveUser(_ context.Context, u store.User) (store.User, error) {
+func (s *Store) CreateLogin(_ context.Context, id string, expires time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, old := range s.users {
-		if old.GitHubID == u.GitHubID {
-			old.Login, old.Name, old.AvatarURL = u.Login, u.Name, u.AvatarURL
-			if u.Token != nil {
-				old.Token = u.Token
-			}
-			return *old, nil
-		}
-	}
-	u.ID, u.CreatedAt = int64(len(s.users)+1), time.Now()
-	s.users[u.ID] = &u
-	return u, nil
-}
-
-func (s *Store) GetUser(_ context.Context, id int64) (store.User, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if u, ok := s.users[id]; ok {
-		return *u, nil
-	}
-	return store.User{}, fmt.Errorf("%w: %d", store.ErrUserNotFound, id)
-}
-
-func (s *Store) CreateLogin(_ context.Context, id string, userID int64, expires time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.logins[id] = login{userID, expires}
+	s.logins[id] = expires
 	return nil
 }
 
-func (s *Store) LoginUser(_ context.Context, id string) (store.User, error) {
+func (s *Store) ValidLogin(_ context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	l, ok := s.logins[id]
-	if !ok || !time.Now().Before(l.expires) {
-		return store.User{}, store.ErrUserNotFound
-	}
-	return *s.users[l.user], nil
+	expires, ok := s.logins[id]
+	return ok && time.Now().Before(expires), nil
 }
 
 func (s *Store) DeleteLogin(_ context.Context, id string) error {
@@ -623,36 +564,31 @@ func (s *Store) DeleteLogin(_ context.Context, id string) error {
 	return nil
 }
 
-func (s *Store) CreateToken(_ context.Context, t store.APIToken, hash string) (store.APIToken, error) {
+func (s *Store) CreateToken(_ context.Context, name, hash string) (store.APIToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.users[t.UserID]; !ok { // mirrors the Postgres foreign key
-		return store.APIToken{}, fmt.Errorf("creating a token: %w", store.ErrUserNotFound)
-	}
 	s.lastToken++
-	t.ID, t.CreatedAt, t.LastUsedAt = s.lastToken, time.Now(), nil
+	t := store.APIToken{ID: s.lastToken, Name: name, CreatedAt: time.Now()}
 	s.tokens[hash] = &t
 	return t, nil
 }
 
-func (s *Store) ListTokens(_ context.Context, userID int64) ([]store.APIToken, error) {
+func (s *Store) ListTokens(_ context.Context) ([]store.APIToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []store.APIToken
 	for _, t := range s.tokens {
-		if t.UserID == userID {
-			out = append(out, *t)
-		}
+		out = append(out, *t)
 	}
 	slices.SortFunc(out, func(a, b store.APIToken) int { return cmp.Compare(b.ID, a.ID) })
 	return out, nil
 }
 
-func (s *Store) DeleteToken(_ context.Context, userID, id int64) error {
+func (s *Store) DeleteToken(_ context.Context, id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for hash, t := range s.tokens {
-		if t.ID == id && t.UserID == userID {
+		if t.ID == id {
 			delete(s.tokens, hash)
 			return nil
 		}
@@ -660,14 +596,13 @@ func (s *Store) DeleteToken(_ context.Context, userID, id int64) error {
 	return fmt.Errorf("%w: %d", store.ErrTokenNotFound, id)
 }
 
-func (s *Store) TokenUser(_ context.Context, hash string) (store.User, error) {
+func (s *Store) UseToken(_ context.Context, hash string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.tokens[hash]
-	if !ok {
-		return store.User{}, store.ErrUserNotFound
+	if ok {
+		now := time.Now()
+		t.LastUsedAt = &now
 	}
-	now := time.Now()
-	t.LastUsedAt = &now
-	return *s.users[t.UserID], nil
+	return ok, nil
 }

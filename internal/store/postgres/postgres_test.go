@@ -44,7 +44,7 @@ func openTest(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	if _, err := s.pool.Exec(ctx, `TRUNCATE tasks, snapshots, folders, api_tokens`); err != nil {
+	if _, err := s.pool.Exec(ctx, `TRUNCATE tasks, snapshots, folders, api_tokens, logins`); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -133,7 +133,7 @@ func TestListNewestFirst(t *testing.T) {
 		time.Sleep(5 * time.Millisecond) // distinct created_at values
 	}
 
-	recs, err := s.List(ctx, 2, 0)
+	recs, err := s.List(ctx, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +863,7 @@ func TestListThreadsAndCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	threads, err := s.ListThreads(ctx, 10, 0)
+	threads, err := s.ListThreads(ctx, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -883,7 +883,7 @@ func TestListThreadsAndCounts(t *testing.T) {
 	if !threads[0].UpdatedAt.After(threads[1].UpdatedAt) && !threads[0].UpdatedAt.Equal(threads[1].UpdatedAt) {
 		t.Errorf("not newest first: %v then %v", threads[0].UpdatedAt, threads[1].UpdatedAt)
 	}
-	if one, _ := s.ListThreads(ctx, 1, 0); len(one) != 1 || one[0].ID != threads[0].ID {
+	if one, _ := s.ListThreads(ctx, 1); len(one) != 1 || one[0].ID != threads[0].ID {
 		t.Errorf("limit 1 = %+v", one)
 	}
 
@@ -896,55 +896,25 @@ func TestListThreadsAndCounts(t *testing.T) {
 	}
 }
 
-func TestUsersAndLogins(t *testing.T) {
+func TestLogins(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
-	u, err := s.SaveUser(ctx, store.User{GitHubID: 101, Login: "alice", Name: "Alice", Token: []byte("sealed-1")})
-	if err != nil || u.ID == 0 {
-		t.Fatalf("SaveUser = %+v, %v", u, err)
-	}
-	// Signing in again updates the profile and token, keeping the ID.
-	again, err := s.SaveUser(ctx, store.User{GitHubID: 101, Login: "alice2", Token: []byte("sealed-2")})
-	if err != nil || again.ID != u.ID || again.Login != "alice2" || string(again.Token) != "sealed-2" || again.Name != "" {
-		t.Errorf("second SaveUser = %+v, %v", again, err)
-	}
-	if err := s.CreateLogin(ctx, "hash-1", u.ID, time.Now().Add(time.Hour)); err != nil {
+	if err := s.CreateLogin(ctx, "hash-1", time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.LoginUser(ctx, "hash-1"); err != nil || got.ID != u.ID {
-		t.Errorf("LoginUser = %+v, %v", got, err)
+	if ok, err := s.ValidLogin(ctx, "hash-1"); err != nil || !ok {
+		t.Errorf("ValidLogin = %v, %v", ok, err)
 	}
-	s.CreateLogin(ctx, "hash-old", u.ID, time.Now().Add(-time.Minute))
+	s.CreateLogin(ctx, "hash-old", time.Now().Add(-time.Minute))
 	for _, id := range []string{"hash-old", "nope"} {
-		if _, err := s.LoginUser(ctx, id); !errors.Is(err, store.ErrUserNotFound) {
-			t.Errorf("LoginUser(%s): %v", id, err)
+		if ok, err := s.ValidLogin(ctx, id); err != nil || ok {
+			t.Errorf("ValidLogin(%s) = %v, %v", id, ok, err)
 		}
 	}
 	if err := s.DeleteLogin(ctx, "hash-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.LoginUser(ctx, "hash-1"); !errors.Is(err, store.ErrUserNotFound) {
-		t.Errorf("after DeleteLogin: %v", err)
-	}
-
-	// Tasks remember their owner, and lists filter by it.
-	mine := task.New("https://github.com/o/r", "mine")
-	mine.Owner = u.ID
-	if err := s.Create(ctx, mine, "cursor"); err != nil {
-		t.Fatal(err)
-	}
-	theirs := task.New("https://github.com/o/r", "theirs")
-	s.Create(ctx, theirs, "cursor")
-	if rec, _ := s.Get(ctx, mine.ID); rec.Owner != u.ID {
-		t.Errorf("owner = %d", rec.Owner)
-	}
-	if recs, _ := s.List(ctx, 10, u.ID); len(recs) != 1 || recs[0].ID != mine.ID {
-		t.Errorf("own tasks: %v", idsOf(recs))
-	}
-	if threads, _ := s.ListThreads(ctx, 10, u.ID); len(threads) != 1 {
-		t.Errorf("own threads: %d", len(threads))
-	}
-	if threads, _ := s.ListThreads(ctx, 10, 0); len(threads) != 2 {
-		t.Errorf("everyone's threads: %d", len(threads))
+	if ok, _ := s.ValidLogin(ctx, "hash-1"); ok {
+		t.Error("signed-out login accepted")
 	}
 }
 
@@ -969,26 +939,6 @@ func TestClaimFor(t *testing.T) {
 	}
 	if running, _ := s.Running(ctx); len(running) != 2 {
 		t.Errorf("running = %v", running)
-	}
-}
-
-func TestUserUsage(t *testing.T) {
-	s, ctx := openTest(t), context.Background()
-	u, _ := s.SaveUser(ctx, store.User{GitHubID: 9, Login: "carol"})
-	for i, state := range []task.State{task.Queued, task.Succeeded} {
-		tk := task.New("https://github.com/o/r", fmt.Sprint(i))
-		tk.Owner = u.ID
-		s.Create(ctx, tk, "cursor")
-		if state == task.Succeeded {
-			finishTask(t, s, tk.ID, store.Outcome{State: task.Succeeded})
-		}
-	}
-	created, live, err := s.UserUsage(ctx, u.ID, time.Now().Add(-time.Hour))
-	if err != nil || created != 2 || live != 1 {
-		t.Errorf("UserUsage = %d, %d, %v", created, live, err)
-	}
-	if created, _, _ := s.UserUsage(ctx, u.ID, time.Now().Add(time.Hour)); created != 0 {
-		t.Errorf("since the future: %d", created)
 	}
 }
 
@@ -1017,7 +967,7 @@ func TestFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	f, err := s.GetFolder(ctx, "f-1")
-	if err != nil || f.Name != "my-app" || f.Owner != 0 || f.SizeBytes != 3 || f.CreatedAt.IsZero() {
+	if err != nil || f.Name != "my-app" || f.SizeBytes != 3 || f.CreatedAt.IsZero() {
 		t.Errorf("GetFolder = %+v, %v", f, err)
 	}
 	if data, err := s.FolderData(ctx, "f-1"); err != nil || string(data) != "tgz" {
@@ -1065,36 +1015,31 @@ func TestFolders(t *testing.T) {
 	}
 }
 
-// A token is found by its hash and records its use; only its owner can
-// delete it.
+// A token is found by its hash and records its use.
 func TestAPITokens(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
-	u, err := s.SaveUser(ctx, store.User{GitHubID: 990001, Login: "tok-user"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tok, err := s.CreateToken(ctx, store.APIToken{UserID: u.ID, Name: "laptop"}, "hash1")
+	tok, err := s.CreateToken(ctx, "laptop", "hash1")
 	if err != nil || tok.ID == 0 || tok.CreatedAt.IsZero() {
 		t.Fatalf("CreateToken = %+v, %v", tok, err)
 	}
-	if got, err := s.TokenUser(ctx, "hash1"); err != nil || got.ID != u.ID {
-		t.Errorf("TokenUser = %+v, %v", got, err)
+	if ok, err := s.UseToken(ctx, "hash1"); err != nil || !ok {
+		t.Errorf("UseToken = %v, %v", ok, err)
 	}
-	if _, err := s.TokenUser(ctx, "nope"); !errors.Is(err, store.ErrUserNotFound) {
-		t.Errorf("unknown hash: %v", err)
+	if ok, _ := s.UseToken(ctx, "nope"); ok {
+		t.Error("unknown hash accepted")
 	}
-	list, err := s.ListTokens(ctx, u.ID)
+	list, err := s.ListTokens(ctx)
 	if err != nil || len(list) != 1 || list[0].Name != "laptop" || list[0].LastUsedAt == nil {
 		t.Errorf("ListTokens = %+v, %v", list, err)
 	}
-	if err := s.DeleteToken(ctx, u.ID+1, tok.ID); !errors.Is(err, store.ErrTokenNotFound) {
-		t.Errorf("someone else's token: %v", err)
+	if err := s.DeleteToken(ctx, tok.ID+1); !errors.Is(err, store.ErrTokenNotFound) {
+		t.Errorf("no such token: %v", err)
 	}
-	if err := s.DeleteToken(ctx, u.ID, tok.ID); err != nil {
+	if err := s.DeleteToken(ctx, tok.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.TokenUser(ctx, "hash1"); !errors.Is(err, store.ErrUserNotFound) {
-		t.Errorf("revoked: %v", err)
+	if ok, _ := s.UseToken(ctx, "hash1"); ok {
+		t.Error("revoked token accepted")
 	}
 }
 

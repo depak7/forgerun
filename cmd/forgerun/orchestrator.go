@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"time"
 
@@ -22,6 +23,7 @@ type orchestratorConfig struct {
 	workerToken string
 	publisher   *publish.Publisher
 	prTokens    forge.TokenSource
+	allow       []netip.Prefix // addresses that may connect; empty = any
 }
 
 // orchestrate serves the API and web UI with no workers of its own: turns
@@ -29,12 +31,12 @@ type orchestratorConfig struct {
 func orchestrate(ctx context.Context, stop context.CancelFunc, ln net.Listener, db store.Store, log *slog.Logger, cfg orchestratorConfig) error {
 	rs := &remote.Server{Store: db, Token: cfg.workerToken, OutDir: cfg.api.OutDir, Log: log}
 	if cfg.publisher != nil {
-		rs.FetchToken = fetchTokens(db, cfg.api.Auth, cfg.publisher, cfg.prTokens, log)
+		rs.FetchToken = fetchTokens(cfg.publisher, cfg.prTokens, log)
 	}
 	ac := cfg.api
 	ac.Pool, ac.Sessions, ac.Workers = rs, rs, rs
 	srv := &http.Server{
-		Handler:           routes(os.Getenv("FORGERUN_PUBLIC_URL"), os.Getenv("FORGERUN_ANALYTICS_WEBSITE_ID"), rs, api.LogRequests(log, api.New(ac))),
+		Handler:           routes(cfg.allow, os.Getenv("FORGERUN_PUBLIC_URL"), os.Getenv("FORGERUN_ANALYTICS_WEBSITE_ID"), rs, api.LogRequests(log, api.New(ac))),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go rs.Reap(ctx) // fails turns whose worker went away
@@ -83,15 +85,11 @@ func sweepFolders(ctx context.Context, db store.Store, log *slog.Logger) {
 }
 
 // fetchTokens decides, per turn, whether the worker must fetch the repo on
-// its host (a private repo) and with which GitHub token: the task owner's,
-// or the server's own. "" means the VM can clone it.
-func fetchTokens(db store.Store, auth *api.Auth, p *publish.Publisher, server forge.TokenSource, log *slog.Logger) func(context.Context, store.Record) (string, error) {
+// its host (a private repo), and gives it the server's GitHub token to do
+// so. "" means the VM can clone it.
+func fetchTokens(p *publish.Publisher, server forge.TokenSource, log *slog.Logger) func(context.Context, store.Record) (string, error) {
 	return func(ctx context.Context, rec store.Record) (string, error) {
-		tok, err := auth.Token(ctx, db, rec.Owner)
-		if err != nil {
-			return "", err
-		}
-		acc, err := p.Access(ctx, rec.Repo, tok)
+		acc, err := p.Access(ctx, rec.Repo)
 		if err != nil {
 			log.Warn("checking whether a repo is private", "repo", rec.Repo, "err", err)
 			return "", nil // let the VM try a plain clone
@@ -99,14 +97,13 @@ func fetchTokens(db store.Store, auth *api.Auth, p *publish.Publisher, server fo
 		if !acc.Private {
 			return "", nil
 		}
-		if tok.IsZero() && server != nil {
-			repo, err := forge.ParseRepo(rec.Repo)
-			if err != nil {
-				return "", err
-			}
-			if tok, err = server.Token(ctx, repo); err != nil {
-				return "", err
-			}
+		repo, err := forge.ParseRepo(rec.Repo)
+		if err != nil {
+			return "", err
+		}
+		tok, err := server.Token(ctx, repo)
+		if err != nil {
+			return "", err
 		}
 		return tok.Reveal(), nil
 	}

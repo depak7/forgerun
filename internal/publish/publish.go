@@ -91,7 +91,7 @@ func (p *Publisher) Publish(ctx context.Context, req task.PublishRequest) (task.
 	if len(req.Requests) == 0 {
 		return task.Published{}, errors.New("publishing needs the thread's requests")
 	}
-	tok, err := p.token(ctx, repo, req.Token)
+	tok, err := p.token(ctx, repo)
 	if err != nil {
 		return task.Published{}, fmt.Errorf("getting a token for %s: %w", repo, err)
 	}
@@ -199,12 +199,8 @@ func (p *Publisher) prBase(ctx context.Context, tok forge.Token, repo forge.Repo
 
 // IsOpen reports whether a repo's pull request is still open, so a
 // follow-up can be refused before any work is done.
-func (p *Publisher) IsOpen(ctx context.Context, repoURL string, number int, user forge.Token) (bool, error) {
-	repo, err := forge.ParseRepo(repoURL)
-	if err != nil {
-		return false, err
-	}
-	tok, err := p.token(ctx, repo, user)
+func (p *Publisher) IsOpen(ctx context.Context, repoURL string, number int) (bool, error) {
+	repo, tok, err := p.repoToken(ctx, repoURL)
 	if err != nil {
 		return false, err
 	}
@@ -337,31 +333,27 @@ func quote(s string) string {
 	return "> " + strings.ReplaceAll(strings.TrimSpace(s), "\n", "\n> ")
 }
 
-// token is the user's token if there is one, otherwise the server's.
-func (p *Publisher) token(ctx context.Context, repo forge.Repo, user forge.Token) (forge.Token, error) {
-	if !user.IsZero() {
-		return user, nil
-	}
+// token is the GitHub token for a repo.
+func (p *Publisher) token(ctx context.Context, repo forge.Repo) (forge.Token, error) {
 	if p.Tokens == nil {
-		return forge.Token{}, errors.New("no GitHub token for this push: sign in, or set GITHUB_TOKEN on the server")
+		return forge.Token{}, errors.New("no GitHub token: set GITHUB_TOKEN on the server")
 	}
 	return p.Tokens.Token(ctx, repo)
 }
 
-// repoToken parses a repo URL and picks the token for it: the user's, or
-// the server's.
-func (p *Publisher) repoToken(ctx context.Context, repoURL string, user forge.Token) (forge.Repo, forge.Token, error) {
+// repoToken parses a repo URL and picks the token for it.
+func (p *Publisher) repoToken(ctx context.Context, repoURL string) (forge.Repo, forge.Token, error) {
 	repo, err := forge.ParseRepo(repoURL)
 	if err != nil {
 		return forge.Repo{}, forge.Token{}, err
 	}
-	tok, err := p.token(ctx, repo, user)
+	tok, err := p.token(ctx, repo)
 	return repo, tok, err
 }
 
-// Access reports what a token (the user's, or the server's) may do with a repo.
-func (p *Publisher) Access(ctx context.Context, repoURL string, user forge.Token) (forge.Access, error) {
-	repo, tok, err := p.repoToken(ctx, repoURL, user)
+// Access reports what the server's token may do with a repo.
+func (p *Publisher) Access(ctx context.Context, repoURL string) (forge.Access, error) {
+	repo, tok, err := p.repoToken(ctx, repoURL)
 	if err != nil {
 		return forge.Access{}, err
 	}
@@ -369,8 +361,8 @@ func (p *Publisher) Access(ctx context.Context, repoURL string, user forge.Token
 }
 
 // HasBranch reports whether a repo has a branch.
-func (p *Publisher) HasBranch(ctx context.Context, repoURL, branch string, user forge.Token) (bool, error) {
-	repo, tok, err := p.repoToken(ctx, repoURL, user)
+func (p *Publisher) HasBranch(ctx context.Context, repoURL, branch string) (bool, error) {
+	repo, tok, err := p.repoToken(ctx, repoURL)
 	if err != nil {
 		return false, err
 	}
@@ -378,8 +370,8 @@ func (p *Publisher) HasBranch(ctx context.Context, repoURL, branch string, user 
 }
 
 // Branches returns a repo's default branch and up to 100 branch names.
-func (p *Publisher) Branches(ctx context.Context, repoURL string, user forge.Token) (string, []string, error) {
-	repo, tok, err := p.repoToken(ctx, repoURL, user)
+func (p *Publisher) Branches(ctx context.Context, repoURL string) (string, []string, error) {
+	repo, tok, err := p.repoToken(ctx, repoURL)
 	if err != nil {
 		return "", nil, err
 	}
@@ -391,17 +383,14 @@ func (p *Publisher) Branches(ctx context.Context, repoURL string, user forge.Tok
 	return def, names, err
 }
 
-// Repos lists the repos a token (the user's, or the server's) can push to.
-func (p *Publisher) Repos(ctx context.Context, user forge.Token) ([]forge.RepoInfo, error) {
-	tok := user
-	if tok.IsZero() {
-		if p.Tokens == nil {
-			return nil, nil
-		}
-		var err error
-		if tok, err = p.Tokens.Token(ctx, forge.Repo{}); err != nil {
-			return nil, err
-		}
+// Repos lists the repos the server's token can push to.
+func (p *Publisher) Repos(ctx context.Context) ([]forge.RepoInfo, error) {
+	if p.Tokens == nil {
+		return nil, nil
+	}
+	tok, err := p.Tokens.Token(ctx, forge.Repo{})
+	if err != nil {
+		return nil, err
 	}
 	return p.GitHub.PushableRepos(ctx, tok)
 }

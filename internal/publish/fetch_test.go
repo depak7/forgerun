@@ -8,15 +8,13 @@ import (
 	"io"
 	"strings"
 	"testing"
-
-	"github.com/depak7/forgerun/internal/forge"
 )
 
 // Fetch hands back a shallow checkout (with .git) at the default branch or
 // at a given commit, and nothing in it holds the token.
 func TestFetch(t *testing.T) {
 	f := newFixture(t)
-	fetcher := f.publisher(secret).Fetcher(forge.NewToken(secret))
+	fetcher := f.publisher(secret).Fetcher()
 
 	tarball, branch, err := fetcher.Fetch(context.Background(), "https://github.com/o/r", "")
 	if err != nil {
@@ -43,7 +41,7 @@ func TestFetch(t *testing.T) {
 	// A token the remote refuses fails, without the token in the error.
 	bad := newFixture(t)
 	bad.remote = "/nonexistent/" + secret
-	if _, _, err := bad.publisher(secret).Fetcher(forge.NewToken(secret)).Fetch(context.Background(), "https://github.com/o/r", ""); err == nil || strings.Contains(err.Error(), secret) {
+	if _, _, err := bad.publisher(secret).Fetcher().Fetch(context.Background(), "https://github.com/o/r", ""); err == nil || strings.Contains(err.Error(), secret) {
 		t.Errorf("unreachable remote: %v", err)
 	}
 }

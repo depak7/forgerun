@@ -229,7 +229,7 @@ func TestListThreadsAndCounts(t *testing.T) {
 	follow.ParentID = first.ID
 	s.Create(ctx, follow, "fake")
 
-	threads, _ := s.ListThreads(ctx, 10, 0)
+	threads, _ := s.ListThreads(ctx, 10)
 	if len(threads) != 1 || threads[0].ID != first.ID || threads[0].Steps != 2 || threads[0].Title != "first" ||
 		threads[0].Latest.ID != follow.ID || !slices.Equal(threads[0].Agents, []string{"fake", "fake"}) {
 		t.Errorf("threads = %+v", threads)
@@ -267,10 +267,10 @@ func TestClaimFor(t *testing.T) {
 // task can't name a folder that wasn't uploaded.
 func TestFolders(t *testing.T) {
 	s, ctx := New(fakeDefault), context.Background()
-	if err := s.SaveFolder(ctx, store.Folder{ID: "f-1", Name: "my-app", Owner: 7}, []byte("tgz")); err != nil {
+	if err := s.SaveFolder(ctx, store.Folder{ID: "f-1", Name: "my-app"}, []byte("tgz")); err != nil {
 		t.Fatal(err)
 	}
-	if f, err := s.GetFolder(ctx, "f-1"); err != nil || f.Owner != 7 || f.SizeBytes != 3 {
+	if f, err := s.GetFolder(ctx, "f-1"); err != nil || f.SizeBytes != 3 {
 		t.Errorf("GetFolder = %+v, %v", f, err)
 	}
 	if data, err := s.FolderData(ctx, "f-1"); err != nil || string(data) != "tgz" {
@@ -301,23 +301,35 @@ func TestFolders(t *testing.T) {
 
 func TestAPITokens(t *testing.T) {
 	s, ctx := New(fakeDefault), context.Background()
-	if _, err := s.CreateToken(ctx, store.APIToken{UserID: 1, Name: "x"}, "h"); !errors.Is(err, store.ErrUserNotFound) {
-		t.Errorf("no such user: %v", err)
+	tok, _ := s.CreateToken(ctx, "x", "h")
+	if ok, err := s.UseToken(ctx, "h"); err != nil || !ok {
+		t.Errorf("UseToken = %v, %v", ok, err)
 	}
-	u, _ := s.SaveUser(ctx, store.User{GitHubID: 5, Login: "u"})
-	tok, _ := s.CreateToken(ctx, store.APIToken{UserID: u.ID, Name: "x"}, "h")
-	if got, err := s.TokenUser(ctx, "h"); err != nil || got.ID != u.ID {
-		t.Errorf("TokenUser = %+v, %v", got, err)
-	}
-	if list, _ := s.ListTokens(ctx, u.ID); len(list) != 1 || list[0].LastUsedAt == nil {
+	if list, _ := s.ListTokens(ctx); len(list) != 1 || list[0].LastUsedAt == nil {
 		t.Errorf("ListTokens = %+v", list)
 	}
-	if err := s.DeleteToken(ctx, u.ID+1, tok.ID); !errors.Is(err, store.ErrTokenNotFound) {
-		t.Errorf("someone else's: %v", err)
+	if err := s.DeleteToken(ctx, tok.ID+1); !errors.Is(err, store.ErrTokenNotFound) {
+		t.Errorf("no such token: %v", err)
 	}
-	s.DeleteToken(ctx, u.ID, tok.ID)
-	if _, err := s.TokenUser(ctx, "h"); !errors.Is(err, store.ErrUserNotFound) {
-		t.Errorf("revoked: %v", err)
+	s.DeleteToken(ctx, tok.ID)
+	if ok, _ := s.UseToken(ctx, "h"); ok {
+		t.Error("revoked token still works")
+	}
+}
+
+func TestLogins(t *testing.T) {
+	s, ctx := New(fakeDefault), context.Background()
+	s.CreateLogin(ctx, "live", time.Now().Add(time.Hour))
+	s.CreateLogin(ctx, "old", time.Now().Add(-time.Hour))
+	if ok, _ := s.ValidLogin(ctx, "live"); !ok {
+		t.Error("live login refused")
+	}
+	if ok, _ := s.ValidLogin(ctx, "old"); ok {
+		t.Error("expired login accepted")
+	}
+	s.DeleteLogin(ctx, "live")
+	if ok, _ := s.ValidLogin(ctx, "live"); ok {
+		t.Error("signed-out login accepted")
 	}
 }
 

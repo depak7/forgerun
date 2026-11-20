@@ -59,7 +59,7 @@ func workerCmd(args []string) error {
 		return fmt.Errorf("-server %q must start with https:// (or http:// on a trusted network)", *server)
 	}
 	if strings.HasPrefix(*server, "http://") && !strings.Contains(*server, "localhost") && !strings.Contains(*server, "127.0.0.1") {
-		log.Warn("-server is plain http: the worker token and users' GitHub tokens travel unencrypted", "server", *server)
+		log.Warn("-server is plain http: the worker token and the GitHub token for private repos travel unencrypted", "server", *server)
 	}
 	if *maxSessions > 0 && *maxSessions < *workers {
 		*maxSessions = *workers

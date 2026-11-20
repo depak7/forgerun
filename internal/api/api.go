@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/depak7/forgerun/internal/agent"
@@ -48,10 +47,9 @@ type Config struct {
 	Snapshots    *SnapshotSettings // nil = snapshots are off
 	SessionIdle  time.Duration     // how long an idle session stays open; 0 = no limit
 	MaxSessions  int               // most sessions open at once; 0 = no limit
-	Auth         *Auth             // GitHub sign-in; nil = local mode (no sign-in, everyone is the admin)
+	Auth         *Auth             // the owner's sign-in; nil = local mode (no sign-in)
 	Workers      Workers           // remote workers; nil = they run in this process
 	Capacity     Capacity          // this machine's, when workers run in this process; nil = unknown
-	Limits       Limits            // per-user limits (signed-in users who aren't admins)
 	MaxFolder    int64             // largest folder upload in bytes, compressed; 0 = DefaultMaxFolder
 	Log          *slog.Logger
 }
@@ -61,14 +59,12 @@ type Config struct {
 // before any work is done. publish.Publisher implements it.
 type PRs interface {
 	Publish(ctx context.Context, req task.PublishRequest) (task.Published, error)
-	IsOpen(ctx context.Context, repo string, number int, user forge.Token) (bool, error)
-	// Access and Repos use the user's token, or the server's if it's zero.
-	Access(ctx context.Context, repo string, user forge.Token) (forge.Access, error)
-	Repos(ctx context.Context, user forge.Token) ([]forge.RepoInfo, error)
-	// HasBranch and Branches look at a repo's branches, with the user's
-	// token or the server's.
-	HasBranch(ctx context.Context, repo, branch string, user forge.Token) (bool, error)
-	Branches(ctx context.Context, repo string, user forge.Token) (def string, names []string, err error)
+	IsOpen(ctx context.Context, repo string, number int) (bool, error)
+	// Access, Repos, HasBranch and Branches ask GitHub with the server's token.
+	Access(ctx context.Context, repo string) (forge.Access, error)
+	Repos(ctx context.Context) ([]forge.RepoInfo, error)
+	HasBranch(ctx context.Context, repo, branch string) (bool, error)
+	Branches(ctx context.Context, repo string) (def string, names []string, err error)
 }
 
 // WorkerInfo is a worker machine connected to the orchestrator.
@@ -122,8 +118,6 @@ type Server struct {
 	auth         *Auth
 	workers      Workers
 	capacity     Capacity
-	limits       Limits
-	paused       atomic.Bool // an admin paused new tasks
 	outDir       string
 	githubUser   string
 	snapshots    *SnapshotSettings
@@ -134,7 +128,7 @@ type Server struct {
 // New returns the HTTP handler serving the API.
 func New(cfg Config) http.Handler {
 	srv := &Server{agents: cfg.Agents, store: cfg.Store, pool: cfg.Pool, agent: cfg.Agent,
-		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, workers: cfg.Workers, capacity: cfg.Capacity, limits: cfg.Limits, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, maxFolder: cmp.Or(cfg.MaxFolder, DefaultMaxFolder), log: cfg.Log}
+		defaultModel: cfg.DefaultModel, requireZDR: cfg.RequireZDR, prs: cfg.PRs, sessions: cfg.Sessions, sessionIdle: cfg.SessionIdle, maxSessions: cfg.MaxSessions, auth: cfg.Auth, workers: cfg.Workers, capacity: cfg.Capacity, outDir: cfg.OutDir, githubUser: cfg.GitHubUser, snapshots: cfg.Snapshots, maxFolder: cmp.Or(cfg.MaxFolder, DefaultMaxFolder), log: cfg.Log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/tasks", srv.createTask)
 	mux.HandleFunc("POST /api/folders", srv.uploadFolder)
@@ -154,15 +148,13 @@ func New(cfg Config) http.Handler {
 	mux.HandleFunc("POST /api/threads/{id}/end", srv.endSession)
 	mux.HandleFunc("POST /api/threads/{id}/push", srv.pushThread)
 	mux.HandleFunc("GET /api/status", srv.status)
-	mux.HandleFunc("GET /api/snapshots", adminOnly(srv.listSnapshots))
+	mux.HandleFunc("GET /api/snapshots", srv.listSnapshots)
 	mux.HandleFunc("GET /api/me", srv.me)
 	mux.HandleFunc("GET /api/repos", srv.listRepos)
 	mux.HandleFunc("GET /api/repos/branches", srv.listBranches)
-	mux.HandleFunc("GET /api/workers", adminOnly(srv.listWorkers))
+	mux.HandleFunc("GET /api/workers", srv.listWorkers)
 	mux.HandleFunc("GET /api/capacity", srv.capacityNow)
-	mux.HandleFunc("POST /api/admin/pause", adminOnly(srv.pause))
-	mux.HandleFunc("GET /auth/github/login", srv.githubLogin)
-	mux.HandleFunc("GET /auth/github/callback", srv.githubCallback)
+	mux.HandleFunc("POST /auth/login", srv.login)
 	mux.HandleFunc("POST /auth/logout", srv.logout)
 	mux.HandleFunc("GET /api/models", srv.listModels)
 	mux.HandleFunc("GET /healthz", srv.health)
@@ -257,9 +249,6 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	if !s.allowTurn(w, r) {
-		return
-	}
 	var folder store.Folder
 	switch {
 	case req.Folder != "" && req.Repo != "":
@@ -310,7 +299,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 	// A folder from a GitHub repo shows as that repo, like its branch will.
 	t := task.New(cmp.Or(folder.Repo, folder.Name, req.Repo), req.Prompt)
-	t.ModelID, t.Plan, t.Owner, t.FolderID, t.BaseBranch = v.ID, req.Plan, viewerOf(r).ID, folder.ID, req.Branch
+	t.ModelID, t.Plan, t.FolderID, t.BaseBranch = v.ID, req.Plan, folder.ID, req.Branch
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.internalError(w, r, err)
 		return
@@ -472,9 +461,6 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.allowTurn(w, r) {
-		return
-	}
 	// Explain the thread rules in the user's terms; the store enforces them too.
 	if !parent.State.Terminal() {
 		writeError(w, http.StatusConflict, "task "+parent.ID+" is still "+string(parent.State)+"; follow up when it finishes")
@@ -490,12 +476,7 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if parent.PR.Number > 0 && s.prs != nil {
-		tok, err := s.userToken(r)
-		if err != nil {
-			s.internalError(w, r, err)
-			return
-		}
-		open, err := s.prs.IsOpen(r.Context(), parent.Repo, parent.PR.Number, tok)
+		open, err := s.prs.IsOpen(r.Context(), parent.Repo, parent.PR.Number)
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "checking the pull request on GitHub: "+err.Error())
 			return
@@ -516,7 +497,7 @@ func (s *Server) createFollowUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := task.New(parent.Repo, req.Prompt)
-	t.ModelID, t.ParentID, t.Plan, t.Owner = v.ID, parent.ID, req.Plan, parent.Owner
+	t.ModelID, t.ParentID, t.Plan = v.ID, parent.ID, req.Plan
 	if err := s.store.Create(r.Context(), t, agentID); err != nil {
 		s.storeError(w, r, err)
 		return
@@ -546,7 +527,7 @@ func (s *Server) listThreads(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	threads, err := s.store.ListThreads(r.Context(), limit, viewerOf(r).owner())
+	threads, err := s.store.ListThreads(r.Context(), limit)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -614,12 +595,7 @@ type statusJSON struct {
 	} `json:"snapshots"`
 	RequireZDR    bool `json:"require_zdr"`    // only zero-data-retention models are accepted
 	RemoteWorkers bool `json:"remote_workers"` // workers run apart (forgerun server + forgerun worker)
-	Paused        bool `json:"paused"`         // an admin paused new tasks
-	Limits        struct {
-		TurnsPerDay int `json:"turns_per_day"` // 0 = no limit
-		Live        int `json:"live"`          // queued or running at once; 0 = no limit
-	} `json:"limits"`
-	Sessions struct {
+	Sessions      struct {
 		Open        int   `json:"open"`
 		Max         int   `json:"max"`          // 0 = no limit
 		IdleSeconds int64 `json:"idle_seconds"` // an idle session closes after this; 0 = never
@@ -633,8 +609,7 @@ type statusJSON struct {
 // status serves GET /api/status.
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	var out statusJSON
-	out.RequireZDR, out.RemoteWorkers, out.Paused = s.requireZDR, s.workers != nil, s.paused.Load()
-	out.Limits.TurnsPerDay, out.Limits.Live = s.limits.TurnsPerDay, s.limits.Live
+	out.RequireZDR, out.RemoteWorkers = s.requireZDR, s.workers != nil
 	if s.sessions != nil {
 		out.Sessions.Open = s.sessions.OpenSessions()
 	}
@@ -684,7 +659,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	recs, err := s.store.List(r.Context(), limit, viewerOf(r).owner())
+	recs, err := s.store.List(r.Context(), limit)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -703,7 +678,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) {
-	rec, ok := s.getRecord(w, r) // only the task's owner (or an admin) may cancel it
+	rec, ok := s.getRecord(w, r)
 	if !ok {
 		return
 	}
@@ -931,13 +906,8 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 // getRecord loads the task named in the path, writing an error response if
 // that fails.
-// getRecord loads the task named in the path, if the viewer may see it.
-// Someone else's task is "not found": its existence isn't revealed.
 func (s *Server) getRecord(w http.ResponseWriter, r *http.Request) (store.Record, bool) {
 	rec, err := s.store.Get(r.Context(), r.PathValue("id"))
-	if err == nil && !viewerOf(r).canSee(rec) {
-		err = store.ErrNotFound
-	}
 	if err != nil {
 		s.storeError(w, r, err)
 		return store.Record{}, false
@@ -1026,7 +996,7 @@ func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
 type capacityJSON struct {
 	Workers int `json:"workers"` // connected workers; 1 when they run in this process
 	// Free is what each worker that reports its capacity has free, largest
-	// first. Workers aren't named: that's for admins (GET /api/workers).
+	// first. GET /api/workers names them.
 	Free []capacity.Resources `json:"free"`
 }
 
@@ -1053,53 +1023,4 @@ func (s *Server) capacityNow(w http.ResponseWriter, r *http.Request) {
 		return cmp.Or(cmp.Compare(b.MemMiB, a.MemMiB), cmp.Compare(b.CPUs, a.CPUs))
 	})
 	writeData(w, http.StatusOK, out)
-}
-
-// Limits bound what each signed-in user may run, since the server's agent
-// keys pay for it. Admins, and local mode, aren't limited.
-type Limits struct {
-	TurnsPerDay int // turns started in the last 24 hours; 0 = no limit
-	Live        int // turns queued or running at once; 0 = no limit
-}
-
-// allowTurn refuses a new turn when an admin paused new tasks, or the
-// user is over a limit, in their terms.
-func (s *Server) allowTurn(w http.ResponseWriter, r *http.Request) bool {
-	v := viewerOf(r)
-	if s.paused.Load() && !v.Admin {
-		writeError(w, http.StatusServiceUnavailable, "new tasks are paused by the admin for now; try again later")
-		return false
-	}
-	if v.Admin || v.ID == 0 || (s.limits.TurnsPerDay == 0 && s.limits.Live == 0) {
-		return true
-	}
-	created, live, err := s.store.UserUsage(r.Context(), v.ID, time.Now().Add(-24*time.Hour))
-	if err != nil {
-		s.internalError(w, r, err)
-		return false
-	}
-	switch {
-	case s.limits.Live > 0 && live >= s.limits.Live:
-		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("you already have %d turn(s) waiting or running; wait for it to finish", live))
-		return false
-	case s.limits.TurnsPerDay > 0 && created >= s.limits.TurnsPerDay:
-		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("you've used your %d turns for today; more tomorrow", s.limits.TurnsPerDay))
-		return false
-	}
-	return true
-}
-
-// pause serves POST /api/admin/pause {"paused": bool}: stop (or resume)
-// taking new tasks. Running ones carry on. It lasts until the server
-// restarts.
-func (s *Server) pause(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Paused bool `json:"paused"`
-	}
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	s.paused.Store(req.Paused)
-	s.log.Warn("new tasks paused by an admin", "paused", req.Paused, "by", viewerOf(r).Login)
-	writeData(w, http.StatusOK, map[string]bool{"paused": req.Paused})
 }

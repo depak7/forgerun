@@ -15,8 +15,6 @@ export interface Status {
   };
   require_zdr: boolean; // only zero-data-retention models are accepted
   remote_workers: boolean; // workers run apart from the orchestrator
-  paused: boolean; // an admin paused new tasks
-  limits: { turns_per_day: number; live: number }; // per signed-in user; 0 = no limit
   sessions: { open: number; max: number; idle_seconds: number }; // 0 = no limit / never
   tasks: { queued: number; running: number };
 }
@@ -139,15 +137,11 @@ export interface ApiToken {
 
 export interface Me {
   signed_in: boolean;
-  sign_in: boolean; // the server uses GitHub sign-in (false = local mode, no accounts)
-  sign_in_hidden?: boolean; // the landing page shows no sign-in buttons
+  sign_in: boolean; // the server has sign-in (false = local mode)
   login: string;
-  name: string;
-  avatar_url: string;
-  admin: boolean;
 }
 
-// A repo the signed-in user can push to (GET /api/repos).
+// A repo the server's GITHUB_TOKEN can push to (GET /api/repos).
 export interface Repo {
   full_name: string;
   url: string;

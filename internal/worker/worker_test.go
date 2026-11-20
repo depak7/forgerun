@@ -297,12 +297,11 @@ func (fakeFetcher) Fetch(context.Context, string, string) ([]byte, string, error
 	return nil, "main", nil
 }
 
-// The worker asks how each task's repo is fetched, for its owner; an error
+// The worker asks how each task's repo is fetched; an error
 // there fails the task before any VM starts.
 func TestFetchers(t *testing.T) {
 	s := memory.New(fakeDefault)
 	ok, broken := task.New("https://github.com/o/private", "x"), task.New("https://github.com/o/broken", "y")
-	ok.Owner = 7
 	for _, tk := range []task.Task{ok, broken} {
 		if err := s.Create(context.Background(), tk, "fake"); err != nil {
 			t.Fatal(err)
@@ -317,9 +316,6 @@ func TestFetchers(t *testing.T) {
 	p.Fetchers = func(_ context.Context, rec store.Record) (task.Fetcher, error) {
 		if strings.HasSuffix(rec.Repo, "broken") {
 			return nil, errors.New("no access to " + rec.Repo)
-		}
-		if rec.Owner != 7 {
-			return nil, errors.New("wrong owner")
 		}
 		return fakeFetcher{}, nil
 	}

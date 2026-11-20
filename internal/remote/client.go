@@ -192,7 +192,7 @@ func (c *Client) Fetchers(_ context.Context, rec store.Record) (task.Fetcher, er
 		return nil, nil
 	}
 	p := &publish.Publisher{Tokens: forge.NewStaticToken(forge.NewToken(tok)), GitHub: &forge.GitHub{}}
-	return p.Fetcher(forge.Token{}), nil
+	return p.Fetcher(), nil
 }
 
 // LogSink streams a turn's log to the orchestrator: what's written is sent

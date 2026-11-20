@@ -12,10 +12,6 @@ import (
 	"github.com/depak7/forgerun/internal/task"
 )
 
-// ErrUserNotFound is returned for an unknown user, or a login that has
-// expired or doesn't exist.
-var ErrUserNotFound = errors.New("user not found")
-
 // ErrNotFound is returned when no task has the given ID.
 var ErrNotFound = errors.New("task not found")
 
@@ -30,7 +26,7 @@ var ErrSnapshotNotFound = errors.New("snapshot not found")
 // given ID.
 var ErrFolderNotFound = errors.New("folder not found")
 
-// ErrTokenNotFound is returned when a user has no token with the given ID.
+// ErrTokenNotFound is returned when there's no token with the given ID.
 var ErrTokenNotFound = errors.New("token not found")
 
 // ErrThreadBusy means the thread already has a queued or running task.
@@ -63,7 +59,6 @@ type Record struct {
 	HasDiff    bool        // the agent changed something; Store.Diff returns it
 	SnapshotID *int64      // the snapshot the task was restored from; nil = cold start
 	ParentID   string      // the task this one continues; "" for a thread's first task
-	Owner      int64       // the user who started it; 0 = none (from before accounts, or local mode)
 	ThreadID   string      // the thread's first task (its own ID for a first task)
 	PR         PullRequest // the thread's branch and pull request, as of this task
 	BaseCommit string      // the commit the agent started from; "" until known
@@ -144,7 +139,6 @@ type Thread struct {
 type Folder struct {
 	ID        string
 	Name      string // shown where a thread's repo would be
-	Owner     int64  // the user who uploaded it; 0 = none (local mode)
 	SizeBytes int64  // of Data
 	// For a folder from a GitHub repo: the repo (https://github.com/o/n),
 	// the commit it was on and its branch; all "" otherwise.
@@ -152,25 +146,13 @@ type Folder struct {
 	CreatedAt          time.Time
 }
 
-// APIToken is a personal token: it acts as its user from tools that have
-// no browser to sign in with. Only a hash of the token itself is stored.
+// APIToken is a personal token: it signs in tools that have no browser
+// (forgerun's MCP server). Only a hash of the token itself is stored.
 type APIToken struct {
 	ID         int64
-	UserID     int64
 	Name       string // what it's for, e.g. "laptop MCP"
 	CreatedAt  time.Time
 	LastUsedAt *time.Time // nil if never used
-}
-
-// User is someone who signed in with GitHub.
-type User struct {
-	ID        int64
-	GitHubID  int64
-	Login     string // GitHub username
-	Name      string
-	AvatarURL string
-	Token     []byte // their GitHub token, encrypted; nil if none
-	CreatedAt time.Time
 }
 
 // Outcome is how a task ended.
@@ -205,9 +187,8 @@ type Store interface {
 	Create(ctx context.Context, t task.Task, agentID string) error
 	// ThreadTasks returns every task in a thread, oldest first.
 	ThreadTasks(ctx context.Context, threadID string) ([]Record, error)
-	// ListThreads returns threads with the most recent activity first:
-	// owner's only, or everyone's if owner is 0.
-	ListThreads(ctx context.Context, limit int, owner int64) ([]Thread, error)
+	// ListThreads returns threads with the most recent activity first.
+	ListThreads(ctx context.Context, limit int) ([]Thread, error)
 	// CountTasks returns how many tasks are in each state.
 	CountTasks(ctx context.Context) (map[task.State]int, error)
 	// Start moves a task from Queued to Running.
@@ -224,9 +205,6 @@ type Store interface {
 	// prefer (its open sessions) come first, and tasks of threads in avoid
 	// (open on other workers) are skipped.
 	ClaimFor(ctx context.Context, prefer, avoid []string) (rec Record, ok bool, err error)
-	// UserUsage counts a user's tasks: created since a time, and queued or
-	// running now.
-	UserUsage(ctx context.Context, owner int64, since time.Time) (created, live int, err error)
 	// Running lists the IDs of every Running task.
 	Running(ctx context.Context) ([]string, error)
 	// Cancel moves a Queued task to Cancelled. Running tasks are cancelled by
@@ -238,7 +216,7 @@ type Store interface {
 	Get(ctx context.Context, id string) (Record, error)
 	// Diff returns a task's changes as git diff output; "" if it has none.
 	Diff(ctx context.Context, id string) (string, error)
-	// SaveFolder saves an uploaded folder (f.ID, Name, Owner) and its data.
+	// SaveFolder saves an uploaded folder (f.ID, Name) and its data.
 	SaveFolder(ctx context.Context, f Folder, data []byte) error
 	// GetFolder returns an uploaded folder, without its data, or
 	// ErrFolderNotFound.
@@ -251,32 +229,25 @@ type Store interface {
 	// FolderDiff returns a folder's uncommitted work at handoff, as a
 	// turn reported it (Outcome.FolderDiff); "" until then.
 	FolderDiff(ctx context.Context, id string) (string, error)
-	// List returns the most recent tasks first: owner's only, or everyone's
-	// if owner is 0.
-	List(ctx context.Context, limit int, owner int64) ([]Record, error)
+	// List returns the most recent tasks first.
+	List(ctx context.Context, limit int) ([]Record, error)
 
-	// SaveUser creates or updates the user with u.GitHubID (login, name,
-	// avatar, token) and returns it with its ID.
-	SaveUser(ctx context.Context, u User) (User, error)
-	// GetUser returns one user, or ErrUserNotFound.
-	GetUser(ctx context.Context, id int64) (User, error)
 	// CreateLogin records a signed-in browser: id is the hash of its cookie.
-	CreateLogin(ctx context.Context, id string, userID int64, expires time.Time) error
-	// LoginUser returns the user of an unexpired login, or ErrUserNotFound.
-	LoginUser(ctx context.Context, id string) (User, error)
+	CreateLogin(ctx context.Context, id string, expires time.Time) error
+	// ValidLogin reports whether a login exists and hasn't expired.
+	ValidLogin(ctx context.Context, id string) (bool, error)
 	// DeleteLogin signs a browser out. Deleting it twice is not an error.
 	DeleteLogin(ctx context.Context, id string) error
-	// CreateToken saves a token (t.UserID, Name) under the hash of its
-	// value and returns it with its ID and creation time.
-	CreateToken(ctx context.Context, t APIToken, hash string) (APIToken, error)
-	// ListTokens returns a user's tokens, newest first.
-	ListTokens(ctx context.Context, userID int64) ([]APIToken, error)
-	// DeleteToken revokes one of a user's tokens, or returns
-	// ErrTokenNotFound if they have none with that ID.
-	DeleteToken(ctx context.Context, userID, id int64) error
-	// TokenUser returns the user of the token with this hash, and records
-	// that it was used; ErrUserNotFound if there's none.
-	TokenUser(ctx context.Context, hash string) (User, error)
+	// CreateToken saves a token named name under the hash of its value and
+	// returns it with its ID and creation time.
+	CreateToken(ctx context.Context, name, hash string) (APIToken, error)
+	// ListTokens returns every token, newest first.
+	ListTokens(ctx context.Context) ([]APIToken, error)
+	// DeleteToken revokes a token, or returns ErrTokenNotFound.
+	DeleteToken(ctx context.Context, id int64) error
+	// UseToken reports whether there's a token with this hash, and records
+	// that it was used.
+	UseToken(ctx context.Context, hash string) (bool, error)
 	// GetAgent returns one agent, or ErrAgentNotFound.
 	GetAgent(ctx context.Context, id string) (Agent, error)
 	// ListAgents returns every enabled agent, sorted by id.

@@ -28,24 +28,22 @@ func tokenOf(t store.APIToken) tokenJSON {
 	return tokenJSON{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt.UTC(), LastUsedAt: utc(t.LastUsedAt)}
 }
 
-// tokenViewer is who a personal token acts for.
-func (s *Server) tokenViewer(r *http.Request, tok string) (viewer, bool) {
+// validToken reports whether tok is a personal token that hasn't been
+// revoked.
+func (s *Server) validToken(r *http.Request, tok string) bool {
 	if !strings.HasPrefix(tok, tokenPrefix) {
-		return viewer{}, false
+		return false
 	}
-	u, err := s.store.TokenUser(r.Context(), loginID(tok))
+	ok, err := s.store.UseToken(r.Context(), hashOf(tok))
 	if err != nil {
-		if !errors.Is(err, store.ErrUserNotFound) {
-			s.log.Error("reading a token", "err", err)
-		}
-		return viewer{}, false
+		s.log.Error("reading a token", "err", err)
 	}
-	return viewer{ID: u.ID, Login: u.Login, Admin: s.isAdmin(u.Login), ByToken: true}, true
+	return ok
 }
 
-// browserOnly refuses token management unless the viewer signed in with
-// GitHub in a browser: a leaked token mustn't be able to make more, or
-// outlive its own revocation. In local mode there's nothing to sign in to.
+// browserOnly refuses token management unless the request signed in in a
+// browser: a leaked token mustn't be able to make more, or outlive its own
+// revocation. In local mode there's nothing to sign in to.
 func (s *Server) browserOnly(w http.ResponseWriter, r *http.Request) bool {
 	switch {
 	case s.auth == nil:
@@ -75,7 +73,7 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value := tokenPrefix + randomToken()
-	t, err := s.store.CreateToken(r.Context(), store.APIToken{UserID: viewerOf(r).ID, Name: name}, loginID(value))
+	t, err := s.store.CreateToken(r.Context(), name, hashOf(value))
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -85,12 +83,12 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusCreated, out)
 }
 
-// listTokens serves GET /api/tokens: the viewer's own tokens.
+// listTokens serves GET /api/tokens.
 func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 	if !s.browserOnly(w, r) {
 		return
 	}
-	ts, err := s.store.ListTokens(r.Context(), viewerOf(r).ID)
+	ts, err := s.store.ListTokens(r.Context())
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -102,15 +100,14 @@ func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, out)
 }
 
-// deleteToken serves DELETE /api/tokens/{id}: revokes one of the viewer's
-// tokens, at once.
+// deleteToken serves DELETE /api/tokens/{id}: revokes a token, at once.
 func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
 	if !s.browserOnly(w, r) {
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err == nil {
-		err = s.store.DeleteToken(r.Context(), viewerOf(r).ID, id)
+		err = s.store.DeleteToken(r.Context(), id)
 	}
 	var badID *strconv.NumError
 	switch {

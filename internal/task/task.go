@@ -36,7 +36,6 @@ type Task struct {
 	ID       string
 	ThreadID string // the thread's first task; "" = this task starts a thread
 	ParentID string // the task this one follows; "" for a thread's first task
-	Owner    int64  // the user who started it; 0 = nobody signed in (local mode)
 	Repo     string // git URL; for a folder, its name
 	// FolderID is the uploaded folder the thread works on, instead of
 	// cloning Repo; "" for a repo. Follow-ups inherit it.
@@ -427,13 +426,13 @@ func checkoutBranch(ctx context.Context, sb sandbox.Sandbox, t Task, dir string)
 }
 
 // snapshotRepo is what a thread's snapshots are kept under: its repo, or
-// for a folder, its owner's folder of that name (or GitHub repo). A
-// folder's files are its owner's, so its snapshots serve only them.
+// for a folder, the folder's name (or GitHub repo), kept apart from the
+// repo's own snapshots.
 func snapshotRepo(t Task) string {
 	if t.Folder == nil {
 		return t.Repo
 	}
-	return fmt.Sprintf("folder:%d:%s", t.Owner, t.Repo)
+	return "folder:" + t.Repo
 }
 
 // CloseSession closes a thread's idle session, saving its VM as the

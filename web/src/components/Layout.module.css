@@ -128,13 +128,6 @@
   font-family: var(--font-mono);
   font-size: 12px;
 }
-.accountAlone {
-  margin-top: auto;
-}
-.avatar {
-  border-radius: 50%;
-  flex: none;
-}
 .accountName {
   flex: 1;
   min-width: 0;
@@ -142,9 +135,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
-}
-.adminTag {
-  color: var(--accent);
 }
 .signOut {
   min-height: 32px;

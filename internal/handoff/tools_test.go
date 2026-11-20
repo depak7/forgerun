@@ -30,15 +30,15 @@ func (nopPool) Cancel(id string) bool { return false }
 // to and has branches main (its default) and dev; pushes are recorded.
 type fakeGitHub struct{ pushed *[]task.PublishRequest }
 
-func (fakeGitHub) IsOpen(context.Context, string, int, forge.Token) (bool, error) { return true, nil }
-func (fakeGitHub) Access(context.Context, string, forge.Token) (forge.Access, error) {
+func (fakeGitHub) IsOpen(context.Context, string, int) (bool, error) { return true, nil }
+func (fakeGitHub) Access(context.Context, string) (forge.Access, error) {
 	return forge.Access{Push: true}, nil
 }
-func (fakeGitHub) Repos(context.Context, forge.Token) ([]forge.RepoInfo, error) { return nil, nil }
-func (fakeGitHub) HasBranch(_ context.Context, _, b string, _ forge.Token) (bool, error) {
+func (fakeGitHub) Repos(context.Context) ([]forge.RepoInfo, error) { return nil, nil }
+func (fakeGitHub) HasBranch(_ context.Context, _, b string) (bool, error) {
 	return b == "main" || b == "dev", nil
 }
-func (fakeGitHub) Branches(context.Context, string, forge.Token) (string, []string, error) {
+func (fakeGitHub) Branches(context.Context, string) (string, []string, error) {
 	return "main", []string{"dev", "main"}, nil
 }
 func (f fakeGitHub) Publish(_ context.Context, req task.PublishRequest) (task.Published, error) {
@@ -93,7 +93,7 @@ func TestHandoffTools(t *testing.T) {
 		!strings.Contains(out, "on main, with the uncommitted work on top") || !strings.Contains(out, "Left out as secrets: .env.") {
 		t.Errorf("handoff said:\n%s", out)
 	}
-	threads, _ := s.ListThreads(context.Background(), 10, 0)
+	threads, _ := s.ListThreads(context.Background(), 10)
 	if len(threads) != 1 {
 		t.Fatalf("%d threads", len(threads))
 	}
@@ -183,7 +183,7 @@ func TestOrchestrateTools(t *testing.T) {
 		t.Errorf("missing branch: %v", err)
 	}
 	expect(mustCall("forgerun_start", `{"repo":"https://github.com/o/r","prompt":"Fix it","branch":"dev","plan":true}`), "Started thread t-", "https://github.com/o/r (from dev)")
-	threads, _ := s.ListThreads(ctx, 10, 0)
+	threads, _ := s.ListThreads(ctx, 10)
 	id := threads[0].ID
 	if rec, _ := s.Get(ctx, id); rec.BaseBranch != "dev" || !rec.Plan {
 		t.Errorf("first turn %+v", rec)

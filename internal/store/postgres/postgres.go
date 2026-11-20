@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -53,17 +52,17 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	// branch and pull request; if the parent doesn't exist, nothing is inserted.
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO tasks (id, repo, prompt, agent_id, state, model_id, pr_requested,
-		                   parent_id, thread_id, pr_url, pr_number, pr_branch, plan, owner_id, folder_id, base_branch)
+		                   parent_id, thread_id, pr_url, pr_number, pr_branch, plan, folder_id, base_branch)
 		SELECT $1, $2, $3, $4, $5,
 		       COALESCE(NULLIF($6, ''), (SELECT default_model_id FROM agents WHERE id = $4)),
 		       COALESCE(p.pr_requested, false),
-		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch, $8, $9,
-		       COALESCE(p.folder_id, NULLIF($10, '')),
-		       CASE WHEN p.id IS NULL THEN NULLIF($11, '') ELSE p.base_branch END
+		       p.id, COALESCE(p.thread_id, $1), p.pr_url, p.pr_number, p.pr_branch, $8,
+		       COALESCE(p.folder_id, NULLIF($9, '')),
+		       CASE WHEN p.id IS NULL THEN NULLIF($10, '') ELSE p.base_branch END
 		FROM (SELECT NULLIF($7::text, '') AS parent) want
 		LEFT JOIN tasks p ON p.id = want.parent
 		WHERE want.parent IS NULL OR p.id IS NOT NULL`,
-		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID, t.Plan, nullableID(t.Owner), t.FolderID, t.BaseBranch)
+		t.ID, t.Repo, t.Prompt, agentID, string(task.Queued), t.ModelID, t.ParentID, t.Plan, t.FolderID, t.BaseBranch)
 	if err != nil {
 		return fmt.Errorf("creating task %s: %w", t.ID, threadError(err)) // includes the FK error for an unknown model
 	}
@@ -73,7 +72,7 @@ func (s *Store) Create(ctx context.Context, t task.Task, agentID string) error {
 	return nil
 }
 
-func (s *Store) ListThreads(ctx context.Context, limit int, owner int64) ([]store.Thread, error) {
+func (s *Store) ListThreads(ctx context.Context, limit int) ([]store.Thread, error) {
 	// One row per thread: its first task, size, agents in order, newest step.
 	rows, err := s.pool.Query(ctx, `
 		SELECT root.id, root.prompt, root.repo, count(*),
@@ -81,10 +80,9 @@ func (s *Store) ListThreads(ctx context.Context, limit int, owner int64) ([]stor
 		       (array_agg(t.id ORDER BY t.created_at DESC, t.id DESC))[1],
 		       max(COALESCE(t.finished_at, t.started_at, t.created_at)) AS updated
 		FROM tasks t JOIN tasks root ON root.id = t.thread_id
-		WHERE $2 = 0 OR root.owner_id = $2
 		GROUP BY root.id, root.prompt, root.repo
 		ORDER BY updated DESC, root.id DESC
-		LIMIT $1`, limit, owner)
+		LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing threads: %w", err)
 	}
@@ -250,16 +248,6 @@ func (s *Store) ClaimFor(ctx context.Context, prefer, avoid []string) (store.Rec
 	return rec, true, nil
 }
 
-func (s *Store) UserUsage(ctx context.Context, owner int64, since time.Time) (created, live int, err error) {
-	err = s.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE created_at >= $2),
-		count(*) FILTER (WHERE state IN ('queued', 'running'))
-		FROM tasks WHERE owner_id = $1`, owner, since).Scan(&created, &live)
-	if err != nil {
-		return 0, 0, fmt.Errorf("counting tasks of user %d: %w", owner, err)
-	}
-	return created, live, nil
-}
-
 func (s *Store) Running(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id FROM tasks WHERE state = 'running'`)
 	if err != nil {
@@ -313,7 +301,7 @@ const modelColumns = `m.id, m.agent_id, m.family, m.name, m.effort, m.thinking, 
 // selectColumns is the task (aliased t) plus its model.
 const selectColumns = `t.id, t.repo, t.prompt, t.agent_id, t.state, t.error, t.log_path, t.diff IS NOT NULL,
 	t.snapshot_id, t.pr_requested, t.pr_url, t.pr_error, t.base_commit, t.summary,
-	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.plan, t.asked, t.owner_id, t.folder_id, t.base_branch, t.created_at, t.started_at, t.finished_at, ` + modelColumns
+	t.parent_id, t.thread_id, t.pr_number, t.pr_branch, t.reply, t.pushed, t.plan, t.asked, t.folder_id, t.base_branch, t.created_at, t.started_at, t.finished_at, ` + modelColumns
 
 const fromTasks = ` FROM tasks t
 	JOIN models m ON m.agent_id = t.agent_id AND m.id = t.model_id
@@ -338,9 +326,9 @@ func (s *Store) Diff(ctx context.Context, id string) (string, error) {
 }
 
 func (s *Store) SaveFolder(ctx context.Context, f store.Folder, data []byte) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO folders (id, name, owner_id, data, repo, base_commit, branch)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		f.ID, f.Name, nullableID(f.Owner), data, nullable(f.Repo), nullable(f.Base), nullable(f.Branch))
+	_, err := s.pool.Exec(ctx, `INSERT INTO folders (id, name, data, repo, base_commit, branch)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		f.ID, f.Name, data, nullable(f.Repo), nullable(f.Base), nullable(f.Branch))
 	if err != nil {
 		return fmt.Errorf("saving folder %s: %w", f.ID, err)
 	}
@@ -358,15 +346,11 @@ func (s *Store) DeleteUnusedFolders(ctx context.Context, cutoff time.Time) (int6
 
 func (s *Store) GetFolder(ctx context.Context, id string) (store.Folder, error) {
 	f := store.Folder{ID: id}
-	var owner *int64
 	var repo, base, branch *string
-	err := s.pool.QueryRow(ctx, `SELECT name, owner_id, length(data), repo, base_commit, branch, created_at FROM folders WHERE id = $1`, id).
-		Scan(&f.Name, &owner, &f.SizeBytes, &repo, &base, &branch, &f.CreatedAt)
+	err := s.pool.QueryRow(ctx, `SELECT name, length(data), repo, base_commit, branch, created_at FROM folders WHERE id = $1`, id).
+		Scan(&f.Name, &f.SizeBytes, &repo, &base, &branch, &f.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.Folder{}, fmt.Errorf("%w: %s", store.ErrFolderNotFound, id)
-	}
-	if owner != nil {
-		f.Owner = *owner
 	}
 	f.Repo, f.Base, f.Branch = deref(repo), deref(base), deref(branch)
 	return f, err
@@ -390,10 +374,9 @@ func (s *Store) FolderData(ctx context.Context, id string) ([]byte, error) {
 	return data, err
 }
 
-func (s *Store) List(ctx context.Context, limit int, owner int64) ([]store.Record, error) {
+func (s *Store) List(ctx context.Context, limit int) ([]store.Record, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+selectColumns+fromTasks+`
-		WHERE $2 = 0 OR t.owner_id = $2
-		ORDER BY t.created_at DESC, t.id DESC LIMIT $1`, limit, owner)
+		ORDER BY t.created_at DESC, t.id DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
 	}
@@ -588,14 +571,13 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 		prURL, prError, baseCommit, summary *string
 		parentID, prBranch, reply, folderID *string
 		baseBranch                          *string
-		owner                               *int64
 		prNumber                            *int
 		startedAt, finishedAt               *time.Time
 	)
 	err := row.Scan(&rec.ID, &rec.Repo, &rec.Prompt, &rec.AgentID, &state,
 		&errMsg, &logPath, &rec.HasDiff, &rec.SnapshotID,
 		&rec.PR.Requested, &prURL, &prError, &baseCommit, &summary,
-		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &owner, &folderID, &baseBranch, &rec.CreatedAt, &startedAt, &finishedAt,
+		&parentID, &rec.ThreadID, &prNumber, &prBranch, &reply, &rec.Pushed, &rec.Plan, &rec.Asked, &folderID, &baseBranch, &rec.CreatedAt, &startedAt, &finishedAt,
 		&rec.Model.ID, &rec.Model.AgentID, &rec.Model.Family, &rec.Model.Name, &rec.Model.Effort,
 		&rec.Model.Thinking, &rec.Model.Fast, &rec.Model.IsDefault, &rec.Model.AgentDefault, &rec.Model.ZDR, &rec.Model.Keyless)
 	if err != nil {
@@ -612,9 +594,6 @@ func scanRecord(row pgx.Row) (store.Record, error) {
 	if prNumber != nil {
 		rec.PR.Number = *prNumber
 	}
-	if owner != nil {
-		rec.Owner = *owner
-	}
 	rec.StartedAt, rec.FinishedAt = startedAt, finishedAt
 	return rec, nil
 }
@@ -628,14 +607,6 @@ func nullable(s string) *string {
 }
 
 // nullableInt maps 0 to SQL NULL.
-// nullableID maps 0 (no row) to NULL.
-func nullableID(id int64) *int64 {
-	if id == 0 {
-		return nil
-	}
-	return &id
-}
-
 func nullableInt(n int) *int {
 	if n == 0 {
 		return nil
@@ -651,43 +622,17 @@ func deref(s *string) string {
 	return *s
 }
 
-func (s *Store) SaveUser(ctx context.Context, u store.User) (store.User, error) {
-	row := s.pool.QueryRow(ctx, `
-		INSERT INTO users (github_id, login, name, avatar_url, github_token)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (github_id) DO UPDATE SET login = $2, name = $3, avatar_url = $4,
-			github_token = COALESCE($5, users.github_token), last_login_at = now()
-		RETURNING `+userColumns, u.GitHubID, u.Login, nullable(u.Name), nullable(u.AvatarURL), u.Token)
-	saved, err := scanUser(row)
-	if err != nil {
-		return store.User{}, fmt.Errorf("saving user %s: %w", u.Login, err)
-	}
-	return saved, nil
-}
-
-func (s *Store) GetUser(ctx context.Context, id int64) (store.User, error) {
-	u, err := scanUser(s.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return store.User{}, fmt.Errorf("%w: %d", store.ErrUserNotFound, id)
-	}
-	return u, err
-}
-
-func (s *Store) CreateLogin(ctx context.Context, id string, userID int64, expires time.Time) error {
-	if _, err := s.pool.Exec(ctx, `INSERT INTO logins (id, user_id, expires_at) VALUES ($1, $2, $3)`, id, userID, expires); err != nil {
+func (s *Store) CreateLogin(ctx context.Context, id string, expires time.Time) error {
+	if _, err := s.pool.Exec(ctx, `INSERT INTO logins (id, expires_at) VALUES ($1, $2)`, id, expires); err != nil {
 		return fmt.Errorf("creating a login: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) LoginUser(ctx context.Context, id string) (store.User, error) {
-	u, err := scanUser(s.pool.QueryRow(ctx, `SELECT `+prefixed("u.", userColumns)+`
-		FROM logins l JOIN users u ON u.id = l.user_id
-		WHERE l.id = $1 AND l.expires_at > now()`, id))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return store.User{}, store.ErrUserNotFound
-	}
-	return u, err
+func (s *Store) ValidLogin(ctx context.Context, id string) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM logins WHERE id = $1 AND expires_at > now())`, id).Scan(&ok)
+	return ok, err
 }
 
 func (s *Store) DeleteLogin(ctx context.Context, id string) error {
@@ -695,29 +640,30 @@ func (s *Store) DeleteLogin(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *Store) CreateToken(ctx context.Context, t store.APIToken, hash string) (store.APIToken, error) {
-	err := s.pool.QueryRow(ctx, `INSERT INTO api_tokens (user_id, name, hash) VALUES ($1, $2, $3) RETURNING id, created_at`,
-		t.UserID, t.Name, hash).Scan(&t.ID, &t.CreatedAt)
+func (s *Store) CreateToken(ctx context.Context, name, hash string) (store.APIToken, error) {
+	t := store.APIToken{Name: name}
+	err := s.pool.QueryRow(ctx, `INSERT INTO api_tokens (name, hash) VALUES ($1, $2) RETURNING id, created_at`,
+		name, hash).Scan(&t.ID, &t.CreatedAt)
 	if err != nil {
 		return store.APIToken{}, fmt.Errorf("creating a token: %w", err)
 	}
 	return t, nil
 }
 
-func (s *Store) ListTokens(ctx context.Context, userID int64) ([]store.APIToken, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, user_id, name, created_at, last_used_at FROM api_tokens
-		WHERE user_id = $1 ORDER BY created_at DESC, id DESC`, userID)
+func (s *Store) ListTokens(ctx context.Context) ([]store.APIToken, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, name, created_at, last_used_at FROM api_tokens
+		ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("listing tokens: %w", err)
 	}
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (store.APIToken, error) {
 		var t store.APIToken
-		return t, row.Scan(&t.ID, &t.UserID, &t.Name, &t.CreatedAt, &t.LastUsedAt)
+		return t, row.Scan(&t.ID, &t.Name, &t.CreatedAt, &t.LastUsedAt)
 	})
 }
 
-func (s *Store) DeleteToken(ctx context.Context, userID, id int64) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM api_tokens WHERE id = $1 AND user_id = $2`, id, userID)
+func (s *Store) DeleteToken(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM api_tokens WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("deleting a token: %w", err)
 	}
@@ -727,33 +673,10 @@ func (s *Store) DeleteToken(ctx context.Context, userID, id int64) error {
 	return nil
 }
 
-func (s *Store) TokenUser(ctx context.Context, hash string) (store.User, error) {
-	u, err := scanUser(s.pool.QueryRow(ctx, `WITH used AS (
-			UPDATE api_tokens SET last_used_at = now() WHERE hash = $1 RETURNING user_id)
-		SELECT `+prefixed("u.", userColumns)+` FROM used JOIN users u ON u.id = used.user_id`, hash))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return store.User{}, store.ErrUserNotFound
+func (s *Store) UseToken(ctx context.Context, hash string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE api_tokens SET last_used_at = now() WHERE hash = $1`, hash)
+	if err != nil {
+		return false, fmt.Errorf("reading a token: %w", err)
 	}
-	return u, err
-}
-
-const userColumns = `id, github_id, login, name, avatar_url, github_token, created_at`
-
-// prefixed qualifies each of a comma-separated column list, e.g. "u.id, u.login".
-func prefixed(prefix, columns string) string {
-	parts := strings.Split(columns, ", ")
-	for i, p := range parts {
-		parts[i] = prefix + p
-	}
-	return strings.Join(parts, ", ")
-}
-
-func scanUser(row pgx.Row) (store.User, error) {
-	var u store.User
-	var name, avatar *string
-	if err := row.Scan(&u.ID, &u.GitHubID, &u.Login, &name, &avatar, &u.Token, &u.CreatedAt); err != nil {
-		return store.User{}, err
-	}
-	u.Name, u.AvatarURL = deref(name), deref(avatar)
-	return u, nil
+	return tag.RowsAffected() > 0, nil
 }

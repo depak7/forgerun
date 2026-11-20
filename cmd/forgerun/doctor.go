@@ -172,7 +172,7 @@ func realEnv(kind string) doctor.Env {
 			return id.Login, id.Expires, err
 		},
 		SignIn: func() error {
-			_, err := signIn(os.Getenv, slog.New(slog.DiscardHandler))
+			_, err := signIn(os.Getenv, defaultAddr(os.Getenv), slog.New(slog.DiscardHandler))
 			return err
 		},
 		Agents: agents,

@@ -3,7 +3,6 @@
 CREATE TABLE folders (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
-    owner_id   BIGINT REFERENCES users (id),
     data       BYTEA NOT NULL, -- gzipped tar of the files (with .git for a repo)
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

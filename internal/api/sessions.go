@@ -43,7 +43,7 @@ func (s *Server) threadTasks(w http.ResponseWriter, r *http.Request) ([]store.Re
 		s.internalError(w, r, err)
 		return nil, false
 	}
-	if len(thread) == 0 || thread[0].ID != id || !viewerOf(r).canSee(thread[0]) {
+	if len(thread) == 0 || thread[0].ID != id {
 		writeError(w, http.StatusNotFound, "no thread "+id)
 		return nil, false
 	}
@@ -154,12 +154,7 @@ func (s *Server) pushThread(w http.ResponseWriter, r *http.Request) {
 			s.log.Warn("no summary for the pull request", "thread", id, "err", err)
 		}
 	}
-	tok, err := s.tokenOf(ctx, thread[0].Owner)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	pub, err := s.prs.Publish(ctx, task.PublishRequest{Token: tok,
+	pub, err := s.prs.Publish(ctx, task.PublishRequest{
 		ThreadID: id, Repo: thread[0].Repo, BaseCommit: base, Patches: patches, PRBase: prBase,
 		Summary: summary, Requests: requests, OpenPR: req.PR, Branch: pr.Branch, PRNumber: pr.Number,
 	})

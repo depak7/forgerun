@@ -39,9 +39,6 @@
 .topLinks a:hover {
   color: var(--text);
 }
-.topLinks .topSignIn {
-  color: var(--accent);
-}
 .starPill {
   display: inline-flex;
   align-items: center;
@@ -105,7 +102,6 @@
   gap: 12px;
   margin-top: 8px;
 }
-.button,
 .buttonGhost {
   display: inline-flex;
   align-items: center;
@@ -118,14 +114,6 @@
   font-weight: 600;
   font-size: 15px;
 }
-.button {
-  background: var(--accent);
-  color: var(--accent-ink);
-}
-.button:hover {
-  color: var(--accent-ink);
-  background: var(--accent-hover);
-}
 .buttonGhost {
   gap: 8px;
   border: 1px solid var(--line-strong);
@@ -135,12 +123,6 @@
   color: var(--text);
   border-color: var(--accent-line);
 }
-.error {
-  margin: 0;
-  font-size: 14px;
-  color: var(--failed);
-}
-
 /* Try it yourself: the install command, in the hero. */
 .try {
   display: flex;

@@ -4,15 +4,14 @@ import { LandingPage } from "./Landing";
 
 afterEach(() => {
   cleanup();
-  window.history.replaceState(null, "", "/");
 });
 
 describe("LandingPage", () => {
-  it("says what forgerun is and how to sign in", () => {
+  it("says what forgerun is, with no way to sign in", () => {
     render(<LandingPage />);
     expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/your own VM/);
     expect(screen.getByText(/every turn in its own sandbox/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: /sign in with GitHub/ }).getAttribute("href")).toBe("/auth/github/login");
+    expect(screen.queryByText(/sign in/i)).toBeNull();
     expect(screen.getByRole("link", { name: /view on GitHub/ }).getAttribute("href")).toBe("https://github.com/depak7/forgerun");
     expect(screen.getByRole("link", { name: "Star on GitHub" }).getAttribute("href")).toBe("https://github.com/depak7/forgerun");
     expect(screen.getByRole("link", { name: /\[ star on GitHub \]/ }).getAttribute("href")).toBe("https://github.com/depak7/forgerun");
@@ -21,13 +20,11 @@ describe("LandingPage", () => {
       "Why it's safe to point at your code",
       "Agents",
       "How it compares",
-      "What signing in means",
       "Run it yourself",
       "Frequently asked questions",
     ]) {
       expect(screen.getByRole("heading", { name: section })).toBeTruthy();
     }
-    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("shows the one-line install and copies it", async () => {
@@ -65,11 +62,5 @@ describe("LandingPage", () => {
     await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
     expect(video.muted).toBe(true);
     play.mockRestore();
-  });
-
-  it("explains a failed sign-in", () => {
-    window.history.replaceState(null, "", "/?signin_error=access%20denied");
-    render(<LandingPage />);
-    expect(screen.getByRole("alert").textContent).toBe("Sign-in didn't work: access denied");
   });
 });

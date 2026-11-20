@@ -11,41 +11,29 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/depak7/forgerun/internal/forge"
-	"github.com/depak7/forgerun/internal/seal"
-	"github.com/depak7/forgerun/internal/store"
 )
 
-// Auth is sign-in with GitHub. Without it (nil) the server is in local
-// mode: nobody signs in, and every request acts as the admin.
+// Auth is the owner's sign-in: a username and password from the
+// environment. Without it (nil) the server is in local mode: nobody signs
+// in, and every request is allowed.
 type Auth struct {
-	OAuth     *forge.OAuth
-	GitHub    *forge.GitHub // reads the signed-in user's profile
-	PublicURL string        // where browsers reach forgerun, e.g. https://forgerun.example.com
-	Admins    []string      // GitHub logins that may see everything and change settings
-	Key       seal.Key      // encrypts users' GitHub tokens at rest
-	// HideSignIn keeps the sign-in buttons off the landing page, for a
-	// server whose page is only there to show what forgerun is. Signing
-	// in still works at /auth/github/login.
-	HideSignIn bool
+	Username, Password string
+	failures           failures
 }
 
 const (
 	loginCookie = "forgerun_login"
-	stateCookie = "forgerun_oauth_state"
 	loginFor    = 30 * 24 * time.Hour
 )
 
-// viewer is who a request acts for.
+// viewer is how a request signed in.
 type viewer struct {
-	ID      int64 // 0 in local mode
-	Login   string
-	Admin   bool
-	ByToken bool // signed in with a personal token, not a browser login
+	ByToken bool // with a personal token, not a browser login
 }
 
 type viewerKey struct{}
@@ -55,59 +43,40 @@ func viewerOf(r *http.Request) viewer {
 	return v
 }
 
-// owner is the owner filter for lists: the viewer's own tasks, or
-// everyone's for an admin.
-func (v viewer) owner() int64 {
-	if v.Admin {
-		return 0
-	}
-	return v.ID
-}
-
-// canSee reports whether the viewer may see a task.
-func (v viewer) canSee(rec store.Record) bool { return v.Admin || (v.ID != 0 && rec.Owner == v.ID) }
-
-// withViewer resolves who's signed in and guards the API: in sign-in mode,
-// every /api/ request but /api/me needs a login or a personal token, and
-// requests that change something with a login must come from forgerun's
-// own pages. (A token isn't sent by browsers on their own, so it needs no
-// such check.)
+// withViewer guards the API: with sign-in on, every /api/ request but
+// /api/me needs a login or a personal token, and requests that change
+// something with a login must come from forgerun's own pages. (A token
+// isn't sent by browsers on their own, so it needs no such check.)
 func (s *Server) withViewer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.auth == nil {
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), viewerKey{}, viewer{Login: "local", Admin: true})))
+			next.ServeHTTP(w, r)
 			return
 		}
 		if tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
-			v, ok := s.tokenViewer(r, tok)
-			if !ok {
+			if !s.validToken(r, tok) {
 				writeError(w, http.StatusUnauthorized, "that token isn't valid: it may have been revoked")
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), viewerKey{}, v)))
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), viewerKey{}, viewer{ByToken: true})))
 			return
 		}
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && !s.sameOrigin(r) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !sameOrigin(r) {
 			writeError(w, http.StatusForbidden, "requests that change something must come from forgerun's own pages")
 			return
 		}
-		v, ok := s.signedIn(r)
-		if !ok && strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/me" {
-			writeError(w, http.StatusUnauthorized, "sign in with GitHub first")
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/me" && !s.signedIn(r) {
+			writeError(w, http.StatusUnauthorized, "sign in first")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), viewerKey{}, v)))
+		next.ServeHTTP(w, r)
 	})
 }
 
 // sameOrigin checks a browser's Origin (or, failing that, Referer) against
-// forgerun's public address. Together with SameSite cookies this stops
-// other sites from making a signed-in browser change things.
-func (s *Server) sameOrigin(r *http.Request) bool {
-	want, err := url.Parse(s.auth.PublicURL)
-	if err != nil {
-		return false
-	}
+// the host it asked for. Together with SameSite cookies this stops other
+// sites from making a signed-in browser change things.
+func sameOrigin(r *http.Request) bool {
 	from := r.Header.Get("Origin")
 	if from == "" {
 		from = r.Header.Get("Referer")
@@ -116,32 +85,25 @@ func (s *Server) sameOrigin(r *http.Request) bool {
 		return true // not a browser (curl, scripts): the cookie is what's checked
 	}
 	got, err := url.Parse(from)
-	return err == nil && got.Scheme == want.Scheme && got.Host == want.Host
+	return err == nil && got.Host == r.Host
 }
 
-func (s *Server) signedIn(r *http.Request) (viewer, bool) {
+func (s *Server) signedIn(r *http.Request) bool {
 	c, err := r.Cookie(loginCookie)
 	if err != nil || c.Value == "" {
-		return viewer{}, false
+		return false
 	}
-	u, err := s.store.LoginUser(r.Context(), loginID(c.Value))
+	ok, err := s.store.ValidLogin(r.Context(), hashOf(c.Value))
 	if err != nil {
-		if !errors.Is(err, store.ErrUserNotFound) {
-			s.log.Error("reading a login", "err", err)
-		}
-		return viewer{}, false
+		s.log.Error("reading a login", "err", err)
 	}
-	return viewer{ID: u.ID, Login: u.Login, Admin: s.isAdmin(u.Login)}, true
+	return ok
 }
 
-func (s *Server) isAdmin(login string) bool {
-	return slices.ContainsFunc(s.auth.Admins, func(a string) bool { return strings.EqualFold(a, login) })
-}
-
-// loginID is what the database keeps for a login cookie: its hash, so the
-// table can't be used to sign in.
-func loginID(cookie string) string {
-	sum := sha256.Sum256([]byte(cookie))
+// hashOf is what the database keeps for a login cookie or a token: its
+// hash, so the table can't be used to sign in.
+func hashOf(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -151,181 +113,156 @@ func randomToken() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-func (s *Server) callbackURL() string {
-	return strings.TrimRight(s.auth.PublicURL, "/") + "/auth/github/callback"
-}
-func (s *Server) secure() bool { return strings.HasPrefix(s.auth.PublicURL, "https://") }
-
-// githubLogin serves GET /auth/github/login: off to GitHub to approve.
-func (s *Server) githubLogin(w http.ResponseWriter, r *http.Request) {
-	if s.auth == nil {
-		http.Redirect(w, r, "/", http.StatusFound)
-		return
-	}
-	state := randomToken()
-	http.SetCookie(w, &http.Cookie{Name: stateCookie, Value: state, Path: "/auth/", MaxAge: 600,
-		HttpOnly: true, Secure: s.secure(), SameSite: http.SameSiteLaxMode})
-	http.Redirect(w, r, s.auth.OAuth.AuthorizeURL(s.callbackURL(), state), http.StatusFound)
+// secure reports whether the browser reached forgerun over HTTPS (itself,
+// or through a proxy that says so), so cookies are sent over HTTPS only.
+func secure(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
-// githubCallback serves GET /auth/github/callback: GitHub sends the browser
-// back with a code, which becomes the user's token and a login.
-func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) {
+// login serves POST /auth/login {"username", "password"}: on a match, the
+// browser gets a login cookie.
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if s.auth == nil {
-		http.Redirect(w, r, "/", http.StatusFound)
+		writeError(w, http.StatusBadRequest, "this server has no sign-in (local mode)")
 		return
 	}
-	fail := func(msg string) { http.Redirect(w, r, "/?signin_error="+url.QueryEscape(msg), http.StatusFound) }
-	if e := r.URL.Query().Get("error"); e != "" {
-		fail("GitHub said: " + e)
+	ip := clientIP(r)
+	if wait := s.auth.failures.wait(ip, time.Now()); wait > 0 {
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("too many failed sign-ins: try again in %d minutes", int(wait.Minutes())+1))
 		return
 	}
-	c, err := r.Cookie(stateCookie)
-	state := r.URL.Query().Get("state")
-	if err != nil || state == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
-		fail("the sign-in expired or didn't start here; try again")
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !decodeBody(w, r, &req) {
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: stateCookie, Path: "/auth/", MaxAge: -1})
-
-	ctx := r.Context()
-	tok, err := s.auth.OAuth.Exchange(ctx, r.URL.Query().Get("code"), s.callbackURL())
-	if err != nil {
-		s.log.Warn("GitHub sign-in failed", "err", err)
-		fail("GitHub didn't accept the sign-in; try again")
+	if !s.auth.matches(req.Username, req.Password) {
+		s.auth.failures.add(ip, time.Now())
+		s.log.Warn("failed sign-in", "ip", ip)
+		writeError(w, http.StatusUnauthorized, "wrong username or password")
 		return
 	}
-	who, err := s.auth.GitHub.WhoAmI(ctx, tok)
-	if err != nil {
-		s.log.Warn("reading the signed-in GitHub user", "err", err)
-		fail("couldn't read your GitHub profile; try again")
-		return
-	}
-	sealed, err := s.auth.Key.Seal([]byte(tok.Reveal()))
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	u, err := s.store.SaveUser(ctx, store.User{GitHubID: who.ID, Login: who.Login, Name: who.Name, AvatarURL: who.AvatarURL, Token: sealed})
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
+	s.auth.failures.clear(ip)
 	cookie := randomToken()
-	if err := s.store.CreateLogin(ctx, loginID(cookie), u.ID, time.Now().Add(loginFor)); err != nil {
+	if err := s.store.CreateLogin(r.Context(), hashOf(cookie), time.Now().Add(loginFor)); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: loginCookie, Value: cookie, Path: "/", MaxAge: int(loginFor.Seconds()),
-		HttpOnly: true, Secure: s.secure(), SameSite: http.SameSiteLaxMode})
-	s.log.Info("signed in", "user", u.Login, "admin", s.isAdmin(u.Login))
-	http.Redirect(w, r, "/", http.StatusFound)
+		HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode})
+	s.log.Info("signed in", "ip", ip)
+	writeData(w, http.StatusOK, struct{}{})
+}
+
+// matches compares a username and password with the owner's, in constant
+// time: both are checked even when the first differs.
+func (a *Auth) matches(username, password string) bool {
+	same := func(got, want string) int {
+		g, w := sha256.Sum256([]byte(got)), sha256.Sum256([]byte(want))
+		return subtle.ConstantTimeCompare(g[:], w[:])
+	}
+	return same(username, a.Username)&same(password, a.Password) == 1
 }
 
 // logout serves POST /auth/logout.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if s.auth != nil {
 		if c, err := r.Cookie(loginCookie); err == nil {
-			if err := s.store.DeleteLogin(r.Context(), loginID(c.Value)); err != nil {
+			if err := s.store.DeleteLogin(r.Context(), hashOf(c.Value)); err != nil {
 				s.internalError(w, r, err)
 				return
 			}
 		}
-		http.SetCookie(w, &http.Cookie{Name: loginCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secure(), SameSite: http.SameSiteLaxMode})
+		http.SetCookie(w, &http.Cookie{Name: loginCookie, Path: "/", MaxAge: -1, HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode})
 	}
 	writeData(w, http.StatusOK, struct{}{})
 }
 
-// meJSON is who's signed in.
+// meJSON is whether the browser is signed in.
 type meJSON struct {
-	SignedIn     bool   `json:"signed_in"`
-	SignIn       bool   `json:"sign_in"`        // the server uses GitHub sign-in (false = local mode)
-	SignInHidden bool   `json:"sign_in_hidden"` // the landing page shows no sign-in buttons
-	Login        string `json:"login"`
-	Name         string `json:"name"`
-	AvatarURL    string `json:"avatar_url"`
-	Admin        bool   `json:"admin"`
+	SignedIn bool   `json:"signed_in"`
+	SignIn   bool   `json:"sign_in"` // the server has sign-in (false = local mode)
+	Login    string `json:"login"`
 }
 
 // me serves GET /api/me. It answers 200 when signed out too, so the UI can
 // show the sign-in page.
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
-	v := viewerOf(r)
-	if s.auth == nil {
-		writeData(w, http.StatusOK, meJSON{SignedIn: true, Login: v.Login, Admin: true})
-		return
+	switch {
+	case s.auth == nil:
+		writeData(w, http.StatusOK, meJSON{SignedIn: true, Login: "local"})
+	case viewerOf(r).ByToken || s.signedIn(r):
+		writeData(w, http.StatusOK, meJSON{SignedIn: true, SignIn: true, Login: s.auth.Username})
+	default:
+		writeData(w, http.StatusOK, meJSON{SignIn: true})
 	}
-	if v.ID == 0 {
-		writeData(w, http.StatusOK, meJSON{SignIn: true, SignInHidden: s.auth.HideSignIn})
-		return
-	}
-	u, err := s.store.GetUser(r.Context(), v.ID)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	writeData(w, http.StatusOK, meJSON{SignedIn: true, SignIn: true, Login: u.Login, Name: u.Name, AvatarURL: u.AvatarURL, Admin: v.Admin})
 }
 
-// adminOnly wraps handlers only an admin may use.
-func adminOnly(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if !viewerOf(r).Admin {
-			writeError(w, http.StatusForbidden, "only an admin can see this")
-			return
+// failures counts failed sign-ins by IP. A password, unlike a token, can be
+// guessed, so after maxFailures in a row an IP waits out lockout.
+type failures struct {
+	mu sync.Mutex
+	by map[string]failure
+}
+
+type failure struct {
+	n    int
+	last time.Time
+}
+
+const (
+	maxFailures = 5
+	lockout     = 15 * time.Minute
+)
+
+// wait is how long ip must wait before trying again; 0 if it needn't.
+func (f *failures) wait(ip string, now time.Time) time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e := f.by[ip]
+	if e.n < maxFailures {
+		return 0
+	}
+	return max(0, lockout-now.Sub(e.last))
+}
+
+func (f *failures) add(ip string, now time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.by == nil {
+		f.by = map[string]failure{}
+	}
+	for k, e := range f.by { // forget the ones whose lockout is over
+		if now.Sub(e.last) >= lockout {
+			delete(f.by, k)
 		}
-		h(w, r)
 	}
+	e := f.by[ip]
+	e.n++
+	e.last = now
+	f.by[ip] = e
 }
 
-// userToken is the signed-in user's GitHub token, decrypted. In local mode
-// it's the zero Token: the server's own GITHUB_TOKEN is used.
-func (s *Server) userToken(r *http.Request) (forge.Token, error) {
-	return s.tokenOf(r.Context(), viewerOf(r).ID)
+func (f *failures) clear(ip string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.by, ip)
 }
 
-// tokenOf is a user's GitHub token; the zero Token for user 0 (local mode).
-func (s *Server) tokenOf(ctx context.Context, userID int64) (forge.Token, error) {
-	return s.auth.Token(ctx, s.store, userID)
-}
-
-// Token is a user's GitHub token, decrypted. Without sign-in (a nil Auth),
-// or for user 0, it's the zero Token: the server's own is used.
-func (a *Auth) Token(ctx context.Context, st store.Store, userID int64) (forge.Token, error) {
-	if a == nil || userID == 0 {
-		return forge.Token{}, nil
-	}
-	u, err := st.GetUser(ctx, userID)
-	if err != nil {
-		return forge.Token{}, err
-	}
-	if u.Token == nil {
-		return forge.Token{}, errors.New("no GitHub token on file: sign out and in again")
-	}
-	raw, err := a.Key.Open(u.Token)
-	if err != nil {
-		return forge.Token{}, err
-	}
-	return forge.NewToken(string(raw)), nil
-}
-
-// checkPush refuses a repo the user can't push to, in their terms.
+// checkPush refuses a repo the server's token can't push to.
 func (s *Server) checkPush(w http.ResponseWriter, r *http.Request, repo string) bool {
-	tok, err := s.userToken(r)
-	if err != nil {
-		s.internalError(w, r, err)
-		return false
-	}
-	acc, err := s.prs.Access(r.Context(), repo, tok)
+	acc, err := s.prs.Access(r.Context(), repo)
 	switch {
 	case errors.Is(err, forge.ErrNoRepo):
-		writeError(w, http.StatusBadRequest, "GitHub doesn't show you this repo: check the URL, or that it's shared with you")
+		writeError(w, http.StatusBadRequest, "GitHub doesn't show this repo to GITHUB_TOKEN: check the URL, or that it's shared with the token's account")
 		return false
 	case err != nil:
 		writeError(w, http.StatusBadGateway, "checking the repo on GitHub: "+err.Error())
 		return false
 	case !acc.Push:
-		writeError(w, http.StatusBadRequest, "you can read this repo but not push to it, so forgerun couldn't push the changes; fork it and use your fork")
+		writeError(w, http.StatusBadRequest, "GITHUB_TOKEN can read this repo but not push to it, so forgerun couldn't push the changes; fork it and use your fork")
 		return false
 	}
 	return true
@@ -337,12 +274,7 @@ func (s *Server) checkBranch(w http.ResponseWriter, r *http.Request, repo, branc
 	if branch == "" {
 		return true
 	}
-	tok, err := s.userToken(r)
-	if err != nil {
-		s.internalError(w, r, err)
-		return false
-	}
-	ok, err := s.prs.HasBranch(r.Context(), repo, branch, tok)
+	ok, err := s.prs.HasBranch(r.Context(), repo, branch)
 	switch {
 	case err != nil:
 		writeError(w, http.StatusBadGateway, "checking the branch on GitHub: "+err.Error())
@@ -370,15 +302,10 @@ func (s *Server) listBranches(w http.ResponseWriter, r *http.Request) {
 		writeData(w, http.StatusOK, out)
 		return
 	}
-	tok, err := s.userToken(r)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	def, names, err := s.prs.Branches(r.Context(), repo, tok)
+	def, names, err := s.prs.Branches(r.Context(), repo)
 	switch {
 	case errors.Is(err, forge.ErrNoRepo):
-		writeError(w, http.StatusBadRequest, "GitHub doesn't show you this repo: check the URL, or that it's shared with you")
+		writeError(w, http.StatusBadRequest, "GitHub doesn't show this repo to GITHUB_TOKEN: check the URL, or that it's shared with the token's account")
 		return
 	case err != nil:
 		writeError(w, http.StatusBadGateway, "listing the repo's branches on GitHub: "+err.Error())
@@ -388,14 +315,14 @@ func (s *Server) listBranches(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, out)
 }
 
-// repoJSON is a repo the user can push to.
+// repoJSON is a repo forgerun can push to.
 type repoJSON struct {
 	FullName string `json:"full_name"`
 	URL      string `json:"url"`
 	Private  bool   `json:"private"`
 }
 
-// listRepos serves GET /api/repos: the repos the user can push to, most
+// listRepos serves GET /api/repos: the repos GITHUB_TOKEN can push to, most
 // recently pushed first.
 func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 	out := []repoJSON{}
@@ -403,12 +330,7 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 		writeData(w, http.StatusOK, out)
 		return
 	}
-	tok, err := s.userToken(r)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	repos, err := s.prs.Repos(r.Context(), tok)
+	repos, err := s.prs.Repos(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "listing your repos on GitHub: "+err.Error())
 		return

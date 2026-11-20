@@ -29,7 +29,7 @@ export function useBranches(repo: string, enabled: boolean) {
   });
 }
 
-// useWorkers lists connected worker machines (admins only).
+// useWorkers lists connected worker machines.
 export function useTokens(enabled: boolean) {
   return useQuery({ queryKey: ["tokens"], queryFn: () => api<ApiToken[]>("/api/tokens"), enabled });
 }

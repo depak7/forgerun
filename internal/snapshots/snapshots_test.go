@@ -405,7 +405,7 @@ func TestFolderWarmStart(t *testing.T) {
 	run := func() (string, task.Result) {
 		t.Helper()
 		tk := task.New("app", "unused")
-		tk.FolderID, tk.Owner = "f-warm", 0
+		tk.FolderID = "f-warm"
 		tk.Folder = func(context.Context) ([]byte, error) { return tgz, nil }
 		if err := s.Create(ctx, tk, "fake"); err != nil {
 			t.Fatal(err)
@@ -422,7 +422,7 @@ func TestFolderWarmStart(t *testing.T) {
 	if strings.Contains(coldLog, "found the installed deps") || !strings.Contains(cold.FolderDiff, "+wip") {
 		t.Fatalf("cold:\n%s\nfolder diff %q", coldLog, cold.FolderDiff)
 	}
-	if _, err := s.CurrentSnapshot(ctx, "folder:0:app", "fake"); err != nil {
+	if _, err := s.CurrentSnapshot(ctx, "folder:app", "fake"); err != nil {
 		t.Fatalf("no snapshot under the folder's key: %v", err)
 	}
 	warmLog, warm := run()
