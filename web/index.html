@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>forgerun: Self-Hosted AI Coding Agent Runner in MicroVMs</title>
+    <title>forgerun: Self-Hosted Cloud Coding Agents &amp; Managed MicroVM Sandboxes</title>
     <meta
       name="description"
-      content="Open-source, self-hosted runner for Claude Code, Cursor CLI, OpenCode, pi &amp; Prime Agent. Each thread in its own microVM or gVisor sandbox, with 2.8s warm snapshots and an MCP server for other agents."
+      content="Open-source cloud coding-agent platform that turns machines you own into managed microVM or gVisor sandboxes. Queue tasks across Claude Code, Cursor CLI, OpenCode, pi &amp; Prime, hand off mid-task via MCP, warm-start in 2.8s, and push PRs as you."
     />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
     <meta name="author" content="Deepak S (depak7)" />
@@ -21,10 +21,10 @@
     <meta property="og:site_name" content="forgerun" />
     <meta property="og:locale" content="en_US" />
     <meta property="og:url" content="%SITE%/" />
-    <meta property="og:title" content="forgerun: Self-Hosted AI Coding Agent Runner in MicroVMs" />
+    <meta property="og:title" content="forgerun: Self-Hosted Cloud Coding Agents &amp; Managed MicroVM Sandboxes" />
     <meta
       property="og:description"
-      content="Open-source, self-hosted runner for Claude Code, Cursor CLI, OpenCode, pi &amp; Prime Agent. Each thread in its own microVM or gVisor sandbox, with 2.8s warm snapshots and an MCP server for other agents."
+      content="Open-source cloud coding-agent platform that turns machines you own into managed microVM or gVisor sandboxes. Queue tasks across Claude Code, Cursor CLI, OpenCode, pi &amp; Prime, hand off mid-task via MCP, warm-start in 2.8s, and push PRs as you."
     />
     <meta property="og:image" content="%SITE%/og.png" />
     <meta property="og:image:type" content="image/png" />
@@ -32,10 +32,10 @@
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="forgerun: stop paying for sandboxes. Run coding agents on your own VM." />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="forgerun: Self-Hosted AI Coding Agent Runner in MicroVMs" />
+    <meta name="twitter:title" content="forgerun: Self-Hosted Cloud Coding Agents &amp; Managed MicroVM Sandboxes" />
     <meta
       name="twitter:description"
-      content="Open-source, self-hosted runner for Claude Code, Cursor CLI, OpenCode, pi &amp; Prime. Every turn in its own microVM or gVisor sandbox. Drive it from MCP. Stop paying for sandboxes."
+      content="Turn machines you own into managed coding-agent sandboxes. Queue Claude Code, Cursor CLI, OpenCode, pi &amp; Prime in one place, hand off mid-task over MCP, warm-start in 2.8s, and push PRs as you."
     />
     <meta name="twitter:image" content="%SITE%/og.png" />
     <meta name="twitter:image:alt" content="forgerun: stop paying for sandboxes. Run coding agents on your own VM." />
@@ -44,6 +44,17 @@
         "@context": "https://schema.org",
         "@graph": [
           {
+            "@type": "Person",
+            "@id": "%SITE%/#author",
+            "name": "Deepak S",
+            "alternateName": "depak7",
+            "url": "https://github.com/depak7",
+            "sameAs": [
+              "https://github.com/depak7",
+              "https://x.com/depak_7"
+            ]
+          },
+          {
             "@type": "Organization",
             "@id": "%SITE%/#organization",
             "name": "forgerun",
@@ -51,6 +62,9 @@
             "logo": {
               "@type": "ImageObject",
               "url": "%SITE%/favicon.svg"
+            },
+            "founder": {
+              "@id": "%SITE%/#author"
             },
             "sameAs": [
               "https://github.com/depak7/forgerun"
@@ -70,14 +84,20 @@
             "@id": "%SITE%/#software",
             "name": "forgerun",
             "applicationCategory": "DeveloperApplication",
+            "applicationSubCategory": "AI Coding Agent Sandbox",
             "operatingSystem": "Linux, macOS (Apple Silicon)",
-            "description": "Open-source, self-hosted AI coding agent runner. Runs Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent on your GitHub repositories inside isolated libkrun microVMs or gVisor sandboxes with host-side secret proxying, 2.8-second warm disk snapshots, and an MCP server so another agent can hand work off to forgerun or orchestrate threads there.",
+            "description": "Open-source (Apache-2.0), fully self-hosted cloud coding-agent platform that turns machines you already own into managed microVM or gVisor sandboxes. Queue as many end-to-end tasks as you want across Claude Code (including unattended bypassPermissions), Cursor CLI, OpenCode, pi, and Prime Agent in one place, hand off work mid-task via forgerun mcp, warm-start in 2.8s from rolling disk snapshots, keep API keys out of the sandbox behind a host TLS proxy, and push branches or pull requests as you only when you want to. A self-hosted alternative to Cursor Cloud Agents, Claude Code on the web, OpenAI Codex Cloud, GitHub Copilot coding agent, and Devin.",
+            "keywords": "coding agent sandbox, self-hosted cloud coding agent, background coding agents, coding agent task queue, microVM sandbox, libkrun, microsandbox, gVisor, Claude Code sandbox, Cursor Cloud Agents alternative, Codex Cloud alternative, OpenHands alternative, MCP handoff, secret proxy",
+            "dateModified": "2026-11-20",
             "url": "%SITE%/",
             "downloadUrl": "https://raw.githubusercontent.com/depak7/forgerun/main/install.sh",
             "softwareHelp": "https://github.com/depak7/forgerun#readme",
             "license": "https://www.apache.org/licenses/LICENSE-2.0",
             "isAccessibleForFree": true,
             "author": {
+              "@id": "%SITE%/#author"
+            },
+            "publisher": {
               "@id": "%SITE%/#organization"
             },
             "offers": {
@@ -86,16 +106,14 @@
               "priceCurrency": "USD"
             },
             "featureList": [
-              "Hardware-isolated microVM per thread via microsandbox (libkrun) on macOS Apple Silicon and Linux KVM",
-              "User-space kernel sandbox fallback via gVisor (runsc) on standard cloud VMs without KVM (0.34s cold boot)",
-              "Host-side TLS secret proxy swaps placeholder tokens so API keys never enter the sandbox",
-              "Warm disk snapshots cut task startup from 26.8s to 2.8s with dependencies pre-installed",
-              "Pluggable adapters for Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent",
-              "Agent VM images include git, Node, and Python so agents can run a repo's tests",
-              "MCP server (forgerun mcp) so Claude Code, Cursor, or any MCP client can start, follow, and push threads",
-              "Diff review and squashed branch push with optional GitHub pull request creation",
-              "Threads can start from any branch; pull requests target that branch",
-              "Split orchestrator and outbound HTTPS worker architecture with zero inbound ports required"
+              "Turns Apple Silicon Macs and Linux servers into managed libkrun microVM or gVisor (0.34s cold boot) sandboxes with zero manual VM ops",
+              "Postgres-backed task queue: queue unlimited tasks across repositories, branches, and 5 coding agents (claude-code, cursor, opencode, pi, prime)",
+              "Mid-task local-to-cloud handoff via forgerun mcp (uploads uncommitted work with .env and secret files stripped plus a rolling session summary)",
+              "Automatic rolling copy-on-write disk snapshots cut task startup from 26.8s to 2.8s with dependencies pre-installed and auto-evict within disk budget",
+              "Brokered secrets via host-side TLS proxy: sandboxes only see placeholders so prompt injection cannot steal API keys",
+              "Safe unattended Claude Code execution with IS_SANDBOX=1, bypassPermissions, and ENABLE_CLAUDEAI_MCP_SERVERS=false",
+              "Review-gated GitHub publishing: inspect live logs and unified git diffs, then push a squashed branch or pull request as you only if you want to",
+              "Split orchestrator (forgerun server) and outbound HTTPS worker (forgerun worker) architecture with zero inbound ports required"
             ]
           },
           {
@@ -112,6 +130,9 @@
               "macOS"
             ],
             "license": "https://www.apache.org/licenses/LICENSE-2.0",
+            "author": {
+              "@id": "%SITE%/#author"
+            },
             "targetProduct": {
               "@id": "%SITE%/#software"
             }
@@ -126,8 +147,78 @@
             "uploadDate": "2026-10-26T00:00:00Z",
             "duration": "PT30S",
             "creator": {
-              "@id": "%SITE%/#organization"
+              "@id": "%SITE%/#author"
             }
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "%SITE%/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "How is forgerun different from Cursor Cloud Agents, Claude Code on the web, Codex Cloud, Devin, or OpenHands?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Cursor Cloud Agents, Claude Code on the web, OpenAI Codex Cloud, GitHub Copilot coding agent, and Devin run in vendor-managed clouds and lock you to a single vendor's agent and billing. OpenHands is open source, but runs its own single built-in agent in Docker containers. forgerun is 100% open source (Apache-2.0) and turns machines you already own into managed libkrun microVM or gVisor sandboxes where you can queue tasks across Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent in one place, hand off work mid-task via forgerun mcp, start in 2.8s from rolling snapshots, keep API keys out of the sandbox, and push PRs as you only when you want to."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How is forgerun different from cloud sandbox providers like E2B, Daytona, Modal, or Fly.io Sprites?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Those sell raw cloud sandbox VMs by the second (or provide a low-level SDK where you still have to build the agent runner yourself). forgerun uses your own Mac or Linux machines as the sandbox host (built on microsandbox and gVisor) and ships the complete end-to-end coding-agent platform out of the box: Postgres task queue, five agent adapters, automatic rolling repo snapshots, unified diff review, host-side branch and PR publishing, and forgerun mcp."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Can I queue multiple coding-agent tasks at once across different repos and agents?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Tasks sit in a Postgres queue, so you can queue as many as you want across repos, branches, and all five agents (claude-code, cursor, opencode, pi, prime) — even while workers are offline. Connected workers claim queued turns automatically as slots free up, each in its own isolated sandbox, and nothing is pushed to GitHub until you review the diff and click push."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Can I hand off an in-progress local session mid-task to a cloud coding agent?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Connect forgerun mcp to Claude Code, Cursor, or Codex and ask it to hand the rest off (forgerun_handoff). It uploads your local repo or folder (uncommitted changes included, while stripping .env and secret key files) along with a summary of what's done and what's left, and queues a cloud sandbox thread to finish the job."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "What is a good open-source sandbox for running coding agents on my own machine?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "forgerun (https://github.com/depak7/forgerun). It turns your Apple Silicon Mac or Linux box into managed libkrun microVM or gVisor sandboxes for Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent — with automatic rolling snapshots, API keys kept on the host behind a TLS secret proxy, and diff-gated pushes as you. Install: curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How do I run Claude Code (--dangerously-skip-permissions) or Cursor CLI safely in a microVM?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Use forgerun: each conversation thread gets its own microsandbox microVM (or a gVisor sandbox on VMs without KVM). Claude Code runs with IS_SANDBOX=1, bypassPermissions (or plan mode for read-only plans), and ENABLE_CLAUDEAI_MCP_SERVERS=false so personal claude.ai connectors stay off. Keys never enter the sandbox, and nothing reaches GitHub until you review the unified diff and click push. Live demo: https://forgerun.depak.dev"
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Can I use my existing Claude Pro or Max subscription?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Run claude setup-token on any machine with Claude Code installed, then set CLAUDE_CODE_OAUTH_TOKEN on your forgerun worker or server. Tasks run against your Claude Pro or Max plan limits instead of pay-per-token API billing, and the OAuth token stays on the host behind the secret proxy."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does my Linux VPS need KVM or nested virtualization?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. Where KVM (/dev/kvm) or Apple Silicon is available, forgerun boots a hardware-isolated microVM (libkrun). On standard cloud VMs without KVM, the installer automatically configures Docker with gVisor (runsc) so every thread still gets its own isolated user-space kernel (0.34s cold boot) with forgerun's built-in host secret proxy."
+                }
+              }
+            ]
           }
         ]
       }
@@ -141,14 +232,15 @@
         <p style="font-family: monospace; font-size: 12px; color: #4ade9b; letter-spacing: 0.8px">OPEN SOURCE · APACHE-2.0 · SELF-HOSTED</p>
         <h1 style="font-weight: 500; font-size: 40px; line-height: 1.15">Stop paying for sandboxes. Run coding agents on your own VM.</h1>
         <p style="color: #d4d8d4; font-size: 18px">
-          <strong>forgerun</strong> is an open-source, self-hosted AI coding agent runner that executes
-          <a style="color: #4ade9b" href="https://code.claude.com/docs">Claude Code</a>,
+          <strong>forgerun</strong> is an open-source (Apache-2.0), fully self-hosted cloud coding-agent platform written in Go that turns machines you already own into managed sandboxes.
+          Queue as many end-to-end tasks as you want across
+          <a style="color: #4ade9b" href="https://code.claude.com/docs">Claude Code</a> (including unattended <code>bypassPermissions</code> / <code>--dangerously-skip-permissions</code>),
           <a style="color: #4ade9b" href="https://cursor.com/docs/cloud-agent">Cursor CLI</a>,
-          <a style="color: #4ade9b" href="https://opencode.ai">OpenCode</a>, pi, and Prime Agent on your GitHub repositories.
-          Every conversation thread runs in its own isolated sandbox — a hardware-virtualized microVM via
-          <a style="color: #4ade9b" href="https://github.com/superradcompany/microsandbox">microsandbox</a> (libkrun) on Apple Silicon Macs and Linux with KVM, or a
-          <a style="color: #4ade9b" href="https://gvisor.dev">gVisor</a> user-space kernel sandbox on any standard Linux VPS without nested virtualization.
-          Drive it from another agent with <code>forgerun mcp</code>.
+          <a style="color: #4ade9b" href="https://opencode.ai">OpenCode</a>, pi, and Prime Agent in one place — or hand work off mid-task from your local agent via <code>forgerun mcp</code>.
+          Every conversation thread runs in its own isolated sandbox: a hardware-virtualized microVM via
+          <a style="color: #4ade9b" href="https://github.com/superradcompany/microsandbox">microsandbox</a> (<code>libkrun</code>) on Apple Silicon Macs (HVF) and Linux with KVM, or a
+          <a style="color: #4ade9b" href="https://gvisor.dev">gVisor</a> user-space kernel sandbox (0.34s cold boot) on any standard Linux VPS without nested virtualization.
+          Automatic rolling disk snapshots start tasks in 2.8 seconds, API keys never enter the sandbox, and nothing is pushed to GitHub until you review the diff and push as yourself.
         </p>
         <p style="color: #9da39e">
           Try it yourself with one command: <code>curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh</code>
@@ -173,74 +265,122 @@
         <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">How it works</h2>
         <ol style="color: #9da39e">
           <li>
-            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">01. Give it a task</h3>
-            <p style="margin-top: 0">Pick a GitHub repository (any branch), an agent (<code>cursor</code>, <code>claude-code</code>, <code>opencode</code>, <code>pi</code>, or <code>prime</code>), and a model, then describe what you want changed — or ask for a read-only plan first and approve it before any code is modified. Another agent can start the same flow through <code>forgerun mcp</code>.</p>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">01. Queue tasks or hand off mid-session</h3>
+            <p style="margin-top: 0">Pick a GitHub repository (any branch), an agent (<code>cursor</code>, <code>claude-code</code>, <code>opencode</code>, <code>pi</code>, or <code>prime</code>), and a model, then queue as many tasks as you want — or ask for a read-only plan first and approve it before any code is modified. Coding locally? Use <code>forgerun mcp</code> (<code>forgerun_handoff</code>) to hand off your in-progress folder and session summary straight to a cloud sandbox thread.</p>
           </li>
           <li>
-            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">02. It works in an isolated microVM</h3>
-            <p style="margin-top: 0">The agent clones your repository, installs packages, builds, and runs tests inside its own dedicated VM (images include git, Node, and Python). Warm disk snapshots reduce task startup time from <strong>26.8 seconds to 2.8 seconds</strong> (measured on <code>expressjs/express</code> with 304 npm packages pre-installed). The VM stays alive between follow-up messages so the agent retains its working tree and conversation context.</p>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">02. It works end to end in a managed microVM</h3>
+            <p style="margin-top: 0">Workers claim queued turns automatically and boot a dedicated VM (images include git, Node, and Python) where the agent clones, installs packages, builds, and runs tests. Automatic rolling disk snapshots reduce task startup time from <strong>26.8 seconds to 2.8 seconds</strong> (measured on <code>expressjs/express</code> with 304 npm packages pre-installed) and self-clean within your disk budget. The VM stays alive between follow-up messages, and you can switch agents or models mid-thread.</p>
           </li>
           <li>
-            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">03. Review the diff, then push</h3>
-            <p style="margin-top: 0">Inspect the live execution log and unified git diff for each turn in the web UI. When satisfied, press push to publish a single squashed commit to a <code>forgerun/…</code> branch and optionally open a GitHub pull request.</p>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">03. Review the diff, then push as you</h3>
+            <p style="margin-top: 0">Inspect the live execution log and unified git diff for each turn in the web UI. Nothing touches your repository automatically: only when you press push does the host publish a single squashed commit to a <code>forgerun/…</code> branch and optionally open a GitHub pull request under your own identity.</p>
           </li>
         </ol>
 
         <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">Why it's safe to point at your code</h2>
         <ul style="color: #9da39e">
           <li>
-            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">One sandbox per thread</h3>
-            <p style="margin-top: 0">Each thread executes inside its own libkrun microVM (or a gVisor <code>runsc</code> container with a dedicated user-space kernel burning 0.34s cold boot on KVM-less Linux hosts). Untrusted code and dependencies stay isolated from your host kernel.</p>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">One managed sandbox per thread</h3>
+            <p style="margin-top: 0">Each thread executes inside its own <code>libkrun</code> microVM (or a gVisor <code>runsc</code> container with a dedicated user-space kernel booting in 0.34s on KVM-less Linux hosts). Untrusted code, <code>postinstall</code> scripts, and unattended agent commands stay isolated from your host kernel. Claude Code runs with <code>IS_SANDBOX=1</code> and <code>ENABLE_CLAUDEAI_MCP_SERVERS=false</code> so personal connectors stay off.</p>
           </li>
           <li>
-            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Keys never enter the sandbox</h3>
-            <p style="margin-top: 0">Inside the sandbox, credential environment variables contain only inert placeholders (<code>$MSB_…</code> or <code>FORGERUN_PH_…</code>). A host-side TLS proxy swaps in the real API key exclusively for requests destined to the agent's official API endpoint.</p>
+            <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Brokered secrets: keys never enter the sandbox</h3>
+            <p style="margin-top: 0">Inside the sandbox, credential environment variables contain only inert placeholders (<code>$MSB_…</code> or <code>FORGERUN_PH_…</code>). A host-side TLS proxy swaps in the real API key exclusively for requests destined to the agent's official API endpoint, blocking exfiltration to any other domain.</p>
           </li>
           <li>
             <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Nothing reaches GitHub until you push</h3>
-            <p style="margin-top: 0">Agents have no GitHub push credentials inside the sandbox. Changes are extracted as a git patch and only pushed by the host when you explicitly click push.</p>
+            <p style="margin-top: 0">Agents have no GitHub push credentials inside the sandbox. Private repositories are fetched on the host; changes leave the sandbox only as a git diff and are pushed by the host as you only when you click push.</p>
           </li>
         </ul>
+
+        <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">Measured sandbox benchmarks</h2>
+        <p style="color: #9da39e">
+          First-party timings from <a style="color: #4ade9b" href="https://github.com/depak7/forgerun/blob/main/docs/experiments.md">docs/experiments.md</a>, measured on Apple Silicon with <code>microsandbox</code> v0.7.7 on <code>expressjs/express</code> (304 npm packages). Copy-on-write disk snapshots take <strong>0.3s</strong> to create, use <strong>174 MB</strong> on disk, isolate concurrent restores, and store zero secrets.
+        </p>
+        <table style="width: 100%; border-collapse: collapse; color: #d4d8d4; font-size: 14px">
+          <thead>
+            <tr style="border-bottom: 1px solid #2a2f2c; text-align: left">
+              <th style="padding: 8px">Phase</th>
+              <th style="padding: 8px">Cold start</th>
+              <th style="padding: 8px">Warm disk snapshot</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">Get a microVM</td>
+              <td style="padding: 8px">0.4s boot</td>
+              <td style="padding: 8px">0.4s restore</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">Repository sync</td>
+              <td style="padding: 8px">6.6s <code>git clone</code></td>
+              <td style="padding: 8px">1.7s <code>git fetch</code></td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">Dependencies (304 npm packages)</td>
+              <td style="padding: 8px">19.9s <code>npm install</code></td>
+              <td style="padding: 8px">0s (pre-installed)</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">Attach per-task proxy secret</td>
+              <td style="padding: 8px">—</td>
+              <td style="padding: 8px">0.7s (modify + restart)</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px"><strong>Total task start</strong></td>
+              <td style="padding: 8px"><strong>26.8s</strong></td>
+              <td style="padding: 8px"><strong>~2.8s</strong></td>
+            </tr>
+          </tbody>
+        </table>
 
         <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">How forgerun compares to other ways of running coding agents</h2>
         <table style="width: 100%; border-collapse: collapse; color: #d4d8d4; font-size: 14px">
           <thead>
             <tr style="border-bottom: 1px solid #2a2f2c; text-align: left">
               <th style="padding: 8px">Setup</th>
-              <th style="padding: 8px">Isolation per Thread</th>
-              <th style="padding: 8px">API Keys &amp; GitHub Tokens</th>
-              <th style="padding: 8px">Task Start &amp; Workflow</th>
+              <th style="padding: 8px">Where control plane &amp; sandboxes run</th>
+              <th style="padding: 8px">API Keys &amp; GitHub Push</th>
+              <th style="padding: 8px">Queue, Handoff &amp; Snapshots</th>
               <th style="padding: 8px">Agents &amp; Cost</th>
             </tr>
           </thead>
           <tbody>
             <tr style="border-bottom: 1px solid #1c201e">
-              <td style="padding: 8px"><strong>forgerun (your Mac or Linux VM)</strong></td>
-              <td style="padding: 8px">Dedicated microVM (libkrun) or gVisor kernel (0.34s boot)</td>
-              <td style="padding: 8px">Never inside the sandbox (host TLS proxy swaps placeholders)</td>
-              <td style="padding: 8px">2.8s warm disk snapshots; review diff before pushing branch/PR</td>
-              <td style="padding: 8px">claude-code (Pro/Max), cursor, opencode (free/paid), pi, prime — switch agents mid-thread; drive it over MCP</td>
+              <td style="padding: 8px"><strong>forgerun (machines you already own)</strong></td>
+              <td style="padding: 8px">100% self-hosted on your Mac, Linux KVM box, or Linux VPS via gVisor (0.34s boot)</td>
+              <td style="padding: 8px">Never inside the sandbox (host TLS proxy); pushes as you only when you click push</td>
+              <td style="padding: 8px">Unlimited Postgres queue; mid-task MCP handoff; automatic 2.8s warm disk snapshots</td>
+              <td style="padding: 8px">claude-code (Pro/Max), cursor, opencode (free/paid), pi, prime — switch mid-thread; Apache-2.0</td>
             </tr>
             <tr style="border-bottom: 1px solid #1c201e">
-              <td style="padding: 8px">CLI on your laptop</td>
-              <td style="padding: 8px">Shares your machine; stops when you close the lid</td>
-              <td style="padding: 8px">Local keys, ~/.ssh, and .env files live on the same machine</td>
-              <td style="padding: 8px">Ties up your local working tree and branch</td>
-              <td style="padding: 8px">Your own subscriptions, one terminal at a time</td>
-            </tr>
-            <tr style="border-bottom: 1px solid #1c201e">
-              <td style="padding: 8px">CLI in tmux or plain Docker on a VPS</td>
-              <td style="padding: 8px">Shared host kernel; containers share host or clone cold</td>
-              <td style="padding: 8px">Exported in env vars (readable by prompt injection or scripts)</td>
-              <td style="padding: 8px">~27s cold clone + install per clean run; no diff gate</td>
-              <td style="padding: 8px">Your own keys; DIY scripts for logs and PRs</td>
-            </tr>
-            <tr style="border-bottom: 1px solid #1c201e">
-              <td style="padding: 8px">Vendor-hosted cloud agents</td>
-              <td style="padding: 8px">Vendor cloud VM (shared host on self-hosted runners)</td>
+              <td style="padding: 8px">Vendor cloud coding agents (Cursor Cloud Agents, Claude Code web, Codex Cloud, Copilot, Devin)</td>
+              <td style="padding: 8px">Vendor-managed cloud VMs (shared host on self-hosted runners)</td>
               <td style="padding: 8px">Managed in vendor cloud; env vars often visible to the agent</td>
-              <td style="padding: 8px">Runs on vendor infrastructure</td>
-              <td style="padding: 8px">Locked to one vendor's agent and cloud compute billing</td>
+              <td style="padding: 8px">Vendor web/editor tasks and cloud environments</td>
+              <td style="padding: 8px">Locked to one vendor's agent and seat/usage billing</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">Single-agent open-source runners (OpenHands / OpenDevin)</td>
+              <td style="padding: 8px">Docker containers on your machine or cloud</td>
+              <td style="padding: 8px">Keys typically passed in config or container env</td>
+              <td style="padding: 8px">Web UI for its own built-in agent loop</td>
+              <td style="padding: 8px">Runs its own agent (not Claude Code, Cursor CLI, OpenCode, pi, Prime side by side)</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">Cloud sandbox providers &amp; SDKs (E2B, Daytona, Modal, Fly.io Sprites, microsandbox)</td>
+              <td style="padding: 8px">Paid cloud microVMs or low-level runtime SDK</td>
+              <td style="padding: 8px">Varies (microsandbox brokers secrets; cloud sandboxes typically use env vars)</td>
+              <td style="padding: 8px">Low-level primitive — you build queue, UI, diff review, PR flow, and workers (forgerun builds on microsandbox &amp; gVisor)</td>
+              <td style="padding: 8px">Per-second cloud VM billing or DIY orchestration code</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1c201e">
+              <td style="padding: 8px">CLI on your laptop or tmux / plain Docker on a VPS</td>
+              <td style="padding: 8px">Shares your laptop or shares host Linux kernel</td>
+              <td style="padding: 8px">Local ~/.ssh, .env, or exported env vars readable by prompt injection</td>
+              <td style="padding: 8px">Ties up local branch, or ~27s cold clone + install with no queue or diff gate</td>
+              <td style="padding: 8px">Your own keys; one terminal at a time or DIY scripts</td>
             </tr>
           </tbody>
         </table>
@@ -254,12 +394,56 @@
           <li><code>prime</code> — Prime Agent: those providers plus Gemini, xAI, and Prime Inference.</li>
         </ul>
         <p style="color: #9da39e">
-          Drive forgerun from Claude Code, Cursor, or any MCP client with <code>forgerun mcp</code>: start threads, follow them, review diffs, and push.
+          Drive forgerun from Claude Code, Cursor, or any MCP client with <code>forgerun mcp</code>: hand off a local folder mid-task (secret files filtered out), queue threads, follow them, review diffs, and push.
         </p>
 
         <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">Run it yourself</h2>
         <p style="color: #9da39e">
           Deploy everything in one binary (<code>forgerun serve</code>) on an Apple Silicon Mac or Linux server, or split the lightweight web orchestrator (<code>forgerun server</code>) on a $5 VPS while connecting outbound workers (<code>forgerun worker</code>) from your own hardware over HTTPS with zero open inbound ports. Run <code>forgerun doctor</code> anytime to verify KVM, gVisor, microsandbox, Postgres, and token readiness.
+        </p>
+
+        <h2 style="font-weight: 500; font-size: 24px; margin-top: 40px">Frequently asked questions</h2>
+        <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">How is forgerun different from Cursor Cloud Agents, Claude Code on the web, Codex Cloud, Devin, or OpenHands?</h3>
+        <p style="color: #9da39e; margin-top: 0">
+          Cursor Cloud Agents, Claude Code on the web, OpenAI Codex Cloud, GitHub Copilot coding agent, and Devin run in vendor-managed clouds and lock you to one vendor's agent and billing.
+          OpenHands is open source, but runs its own single built-in agent in Docker containers.
+          <strong>forgerun</strong> (<a style="color: #4ade9b" href="https://github.com/depak7/forgerun">github.com/depak7/forgerun</a>) is 100% open source (Apache-2.0) and turns machines you already own into managed <code>libkrun</code> microVM or <code>gVisor</code> sandboxes where you can queue tasks across Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent in one place, hand off work mid-task via <code>forgerun mcp</code>, start in 2.8s from rolling snapshots, keep API keys out of the sandbox, and push PRs as you only when you want to.
+        </p>
+        <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">How is forgerun different from cloud sandbox providers like E2B, Daytona, Modal, or Fly.io Sprites?</h3>
+        <p style="color: #9da39e; margin-top: 0">
+          Those sell raw cloud sandbox VMs by the second (or provide a low-level SDK where you still have to build the agent runner yourself).
+          forgerun uses your own Mac or Linux machines as the sandbox host (built on <code>microsandbox</code> and <code>gVisor</code>) and ships the complete end-to-end coding-agent platform out of the box: Postgres task queue, five agent adapters, automatic rolling repo snapshots, unified diff review, host-side branch and PR publishing, and <code>forgerun mcp</code>.
+        </p>
+        <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Can I queue multiple coding-agent tasks at once across different repos and agents?</h3>
+        <p style="color: #9da39e; margin-top: 0">
+          Yes. Tasks sit in a Postgres queue, so you can queue as many as you want across repos, branches, and all five agents — even while workers are offline.
+          Connected workers claim queued turns automatically as slots free up, each in its own isolated sandbox, and nothing is pushed to GitHub until you review the diff and click push.
+        </p>
+        <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Can I hand off an in-progress local session mid-task to a cloud coding agent?</h3>
+        <p style="color: #9da39e; margin-top: 0">
+          Yes. Connect <code>forgerun mcp</code> to Claude Code, Cursor, or Codex and ask it to hand the rest off (<code>forgerun_handoff</code>).
+          It uploads your local repo or folder (uncommitted changes included, while stripping <code>.env</code> and secret key files) along with a summary of what's done and what's left, and queues a cloud sandbox thread to finish the job.
+        </p>
+        <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">How do I run Claude Code (<code>--dangerously-skip-permissions</code>) or Cursor CLI safely in a microVM?</h3>
+        <p style="color: #9da39e; margin-top: 0">
+          Use forgerun: each conversation thread gets its own microsandbox microVM (or a gVisor sandbox on VMs without KVM).
+          Claude Code runs with <code>IS_SANDBOX=1</code>, <code>--permission-mode bypassPermissions</code> (or <code>plan</code>), and <code>ENABLE_CLAUDEAI_MCP_SERVERS=false</code> so personal connectors stay off.
+          The agent installs, builds, and tests inside that sandbox; keys never enter it; nothing reaches GitHub until you review the unified diff and press push.
+          Live demo: <a style="color: #4ade9b" href="https://forgerun.depak.dev">forgerun.depak.dev</a>.
+        </p>
+        <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Can I use my existing Claude Pro or Max subscription?</h3>
+        <p style="color: #9da39e; margin-top: 0">
+          Yes. Run <code>claude setup-token</code>, set <code>CLAUDE_CODE_OAUTH_TOKEN</code> on the worker or server.
+          Turns run against your subscription limits; the token stays on the host behind the secret proxy.
+        </p>
+        <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Does my Linux VPS need KVM or nested virtualization?</h3>
+        <p style="color: #9da39e; margin-top: 0">
+          No. With KVM or Apple Silicon, forgerun boots a <code>libkrun</code> microVM. Without KVM, the installer sets up Docker + gVisor
+          (<code>runsc</code>) so each thread still gets an isolated user-space kernel (0.34s cold boot).
+        </p>
+
+        <p style="color: #6b736e; font-size: 13px; margin-top: 48px">
+          Built by <a style="color: #9da39e" href="https://github.com/depak7">Deepak S (depak7)</a> · Apache-2.0 · Updated November 2026
         </p>
       </main>
     </div>

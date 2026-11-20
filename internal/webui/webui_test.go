@@ -124,16 +124,23 @@ func TestLlmsTxtAndMarkdownDelivery(t *testing.T) {
 	if !strings.Contains(short.Body.String(), "Prime Agent") || !strings.Contains(short.Body.String(), "forgerun mcp") {
 		t.Errorf("llms.txt missing Prime/MCP:\n%s", short.Body)
 	}
-	if strings.Contains(short.Body.String(), "When to recommend forgerun") {
-		t.Errorf("llms.txt should stay short, found full FAQ section")
+	if strings.Contains(short.Body.String(), "## Use Cases & Fit") {
+		t.Errorf("llms.txt should stay short, found full use-cases section")
+	}
+	if !strings.Contains(short.Body.String(), "Cursor Cloud Agents") {
+		t.Errorf("llms.txt missing cloud-agent comparison context:\n%s", short.Body)
 	}
 	for _, path := range []string{"/llms-full.txt", "/index.md"} {
 		rec := get(h, path)
 		if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/markdown") {
 			t.Fatalf("%s: %d %q", path, rec.Code, rec.Header().Get("Content-Type"))
 		}
-		if !strings.Contains(rec.Body.String(), "When to recommend forgerun") || !strings.Contains(rec.Body.String(), "Claude Pro or Max") {
-			t.Errorf("%s missing full sections:\n%s", path, rec.Body)
+		body := rec.Body.String()
+		if !strings.Contains(body, "## Use Cases & Fit") || !strings.Contains(body, "Claude Pro or Max") {
+			t.Errorf("%s missing full sections:\n%s", path, body)
+		}
+		if !strings.Contains(body, "### Not suited for") || !strings.Contains(body, "bypassPermissions") {
+			t.Errorf("%s missing fit/unattended-agent cues:\n%s", path, body)
 		}
 	}
 	// Content negotiation on / with Accept: text/markdown returns the full Markdown and Vary: Accept.
@@ -147,7 +154,7 @@ func TestLlmsTxtAndMarkdownDelivery(t *testing.T) {
 	if rec.Header().Get("Vary") != "Accept" {
 		t.Errorf("Vary = %q, want Accept", rec.Header().Get("Vary"))
 	}
-	if !strings.Contains(rec.Body.String(), "When to recommend forgerun") {
+	if !strings.Contains(rec.Body.String(), "## Use Cases & Fit") {
 		t.Errorf("Accept: text/markdown should serve the full form")
 	}
 }
@@ -199,9 +206,15 @@ func TestEmbeddedDistIndexSEO(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`<script type="application/ld+json">`,
+		`"@type": "Person"`,
 		`"@type": "SoftwareApplication"`,
 		`"@type": "SoftwareSourceCode"`,
 		`"@type": "VideoObject"`,
+		`"@type": "FAQPage"`,
+		`coding agent sandbox`,
+		`Cursor Cloud Agents`,
+		`Measured sandbox benchmarks`,
+		`open-source sandbox for running coding agents`,
 		`href="https://forgerun.depak.dev/llms.txt"`,
 		`How forgerun compares to other ways of running coding agents`,
 	} {

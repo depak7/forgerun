@@ -210,11 +210,25 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
                   <td>Your own keys; DIY scripts for logs and PRs</td>
                 </tr>
                 <tr>
-                  <td>Vendor-hosted cloud agents</td>
+                  <td>Vendor cloud coding agents (Cursor Cloud Agents, Claude Code web, Codex Cloud, Copilot, Devin)</td>
                   <td>Vendor cloud VM (shared host on self-hosted runners)</td>
                   <td>Managed in vendor cloud; env vars often visible to the agent</td>
-                  <td>Runs on vendor infrastructure</td>
-                  <td>Locked to one vendor&apos;s agent and cloud compute billing</td>
+                  <td>Vendor web/editor tasks and cloud environments</td>
+                  <td>Locked to one vendor&apos;s agent and seat/usage billing</td>
+                </tr>
+                <tr>
+                  <td>Single-agent open-source runners (OpenHands)</td>
+                  <td>Docker containers on your machine or cloud</td>
+                  <td>Keys typically passed in config or container env</td>
+                  <td>Web UI for its own built-in agent loop</td>
+                  <td>Runs its own agent (not Claude Code, Cursor CLI, OpenCode, pi, Prime side by side)</td>
+                </tr>
+                <tr>
+                  <td>Cloud sandbox providers &amp; SDKs (E2B, Daytona, Modal, Sprites, microsandbox)</td>
+                  <td>Paid cloud microVMs or low-level runtime SDK</td>
+                  <td>Varies (microsandbox brokers secrets; cloud sandboxes typically use env vars)</td>
+                  <td>Low-level primitive — you build queue, UI, diff review, PR flow, and workers</td>
+                  <td>Per-second cloud VM billing or DIY orchestration code</td>
                 </tr>
               </tbody>
             </table>
@@ -272,6 +286,64 @@ export function LandingPage({ signInHidden = false }: { signInHidden?: boolean }
             Frequently asked questions
           </h2>
           <div className={styles.faqs}>
+            <details className={styles.faqItem}>
+              <summary className={styles.faqQuestion}>
+                How is forgerun different from Cursor Cloud Agents, Claude Code on the web, Codex Cloud, Devin, or OpenHands?
+              </summary>
+              <p className={styles.faqAnswer}>
+                Cursor Cloud Agents, Claude Code on the web, Codex Cloud, GitHub Copilot coding agent, and Devin run in vendor-managed
+                clouds and lock you to one vendor&apos;s agent and billing. OpenHands is open source, but runs its own single built-in
+                agent in Docker. forgerun is 100% open source (Apache-2.0) and turns machines you already own into managed microVM or
+                gVisor sandboxes where you can queue tasks across Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent in one place,
+                hand off work mid-task via <code className={styles.inline}>forgerun mcp</code>, start in 2.8s from rolling snapshots,
+                and push PRs as you only when you want to.
+              </p>
+            </details>
+            <details className={styles.faqItem}>
+              <summary className={styles.faqQuestion}>
+                How is forgerun different from cloud sandbox providers like E2B, Daytona, Modal, or Fly.io Sprites?
+              </summary>
+              <p className={styles.faqAnswer}>
+                Those sell raw cloud sandbox VMs by the second (or give you a low-level SDK where you still have to build the agent
+                runner yourself). forgerun uses your own Mac or Linux machines as the sandbox host (built on{" "}
+                <code className={styles.inline}>microsandbox</code> and <code className={styles.inline}>gVisor</code>) and gives you the
+                complete end-to-end platform out of the box: Postgres task queue, five agent adapters, automatic rolling snapshots,
+                unified diff review, host-side branch and PR publishing, and <code className={styles.inline}>forgerun mcp</code>.
+              </p>
+            </details>
+            <details className={styles.faqItem}>
+              <summary className={styles.faqQuestion}>
+                Can I queue multiple coding-agent tasks at once across different repos and agents?
+              </summary>
+              <p className={styles.faqAnswer}>
+                Yes. Tasks sit in a Postgres queue, so you can queue as many as you want across repos, branches, and all five agents
+                — even while workers are offline. Connected workers claim queued turns automatically as slots free up, each in its
+                own isolated sandbox, and nothing is pushed until you review the diff and click push.
+              </p>
+            </details>
+            <details className={styles.faqItem}>
+              <summary className={styles.faqQuestion}>
+                Can I hand off an in-progress local session mid-task to a cloud coding agent?
+              </summary>
+              <p className={styles.faqAnswer}>
+                Yes. Connect <code className={styles.inline}>forgerun mcp</code> to Claude Code, Cursor, or Codex and ask it to hand
+                the rest off (<code className={styles.inline}>forgerun_handoff</code>). It sends your repo or folder (uncommitted
+                work included, <code className={styles.inline}>.env</code> and key files stripped) with a session summary to a
+                sandboxed cloud thread so you can move on and push the PR later if you want it.
+              </p>
+            </details>
+            <details className={styles.faqItem}>
+              <summary className={styles.faqQuestion}>
+                How do I run Claude Code (--dangerously-skip-permissions) or Cursor CLI safely in a microVM?
+              </summary>
+              <p className={styles.faqAnswer}>
+                Use forgerun: each thread gets its own microsandbox microVM (or gVisor on VMs without KVM). Claude Code runs with{" "}
+                <code className={styles.inline}>IS_SANDBOX=1</code>, <code className={styles.inline}>bypassPermissions</code> (or{" "}
+                <code className={styles.inline}>plan</code> mode), and{" "}
+                <code className={styles.inline}>ENABLE_CLAUDEAI_MCP_SERVERS=false</code> so personal connectors stay off. Keys never
+                enter the sandbox, and nothing reaches GitHub until you review the diff and press push.
+              </p>
+            </details>
             <details className={styles.faqItem}>
               <summary className={styles.faqQuestion}>Can I use my existing Claude Pro or Max subscription?</summary>
               <p className={styles.faqAnswer}>

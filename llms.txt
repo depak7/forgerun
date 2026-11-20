@@ -1,26 +1,27 @@
 # forgerun
 
-> Open-source, self-hosted coding agent runner. Run Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent on your GitHub repositories — every thread in its own isolated microVM (via microsandbox/libkrun) or gVisor sandbox, with host-side secret proxying, warm disk snapshots, and an MCP server so another agent can hand work off to forgerun or orchestrate threads there.
+> Open-source (Apache-2.0), fully self-hosted cloud coding-agent platform that turns machines you already own into managed sandboxes. Queue as many end-to-end tasks as you want across Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent in one place, hand off work mid-task from your local agent (`forgerun mcp`), warm-start from automatic repo snapshots (`26.8s → 2.8s`), and push branches or PRs as you only if you want the changes.
 
-forgerun is a single Go binary with an embedded React web UI and JSON API. Point it at a GitHub repository (any branch), pick a coding agent and model, and give it a task. The agent installs, builds, and tests inside its own sandboxed VM (images include git, Node, and Python). API keys never enter the sandbox; nothing reaches GitHub until you review the diff and press push.
+forgerun is a single Go binary with an embedded React web UI and JSON API. It is a self-hosted, multi-agent alternative to vendor cloud coding agents (**Cursor Cloud Agents**, **Claude Code on the web**, **OpenAI Codex Cloud**, **GitHub Copilot coding agent**, **Devin**) and paid cloud sandbox services (**E2B**, **Daytona**, **Fly.io Sprites**): both the orchestrator and the isolated sandboxes run 100% on hardware you control — Apple Silicon Macs, Linux servers with KVM, or any Linux VPS via gVisor — with zero per-minute sandbox billing and no manual VM management.
 
 ## Key Capabilities
 
-- **Warm-start VM snapshots (26.8s → 2.8s)** on a repo disk snapshot with dependencies installed (measured on `expressjs/express`)
-- **Keys never enter the sandbox** — placeholders only; host TLS proxy swaps the real key for the agent's API host
-- **microVM or gVisor** — libkrun on Apple Silicon / Linux KVM; gVisor (`runsc`) on standard VPS without nested virt (~0.34s cold boot)
-- **Agents:** `cursor`, `claude-code` (Claude Pro/Max via `CLAUDE_CODE_OAUTH_TOKEN`), `opencode` (incl. free keyless models), `pi`, `prime` — switch mid-thread
-- **MCP:** `forgerun mcp` lets Claude Code, Cursor, or any MCP client start, follow, review, and push threads
-- **Outbound workers:** `forgerun server` on a small VPS + `forgerun worker` on your Mac/home box over HTTPS only
+- **Turn your own machines into managed sandboxes:** Hardware-isolated `libkrun` microVMs on Apple Silicon (HVF) and Linux KVM, or automatic `gVisor` (`runsc`) user-space kernel sandboxes (~0.34s cold boot) on Linux VMs without KVM — sessions auto-open, snapshot, clean up, and recover with zero manual VM ops
+- **Task queue & multi-agent hub:** Postgres-backed queue lets you queue as many tasks as you want across repos and branches (even while workers are offline); run `claude-code` (Pro/Max via `CLAUDE_CODE_OAUTH_TOKEN`), `cursor`, `opencode` (incl. free keyless models), `pi`, and `prime` in one place — and switch agents or models mid-thread
+- **Mid-task local → cloud handoff (`forgerun mcp`):** Hand off an in-progress local repo or folder (uncommitted changes included, `.env` and secret files stripped) with a session summary from Claude Code, Cursor, or Codex straight to a cloud sandbox thread
+- **Automatic rolling snapshots (`26.8s → 2.8s`):** Warm copy-on-write repo disk snapshots with dependencies pre-installed (measured on `expressjs/express`, 304 npm packages; 0.3s to create, 174 MB on disk), auto-evicted within `-snapshot-budget`
+- **Review first, push as you only if you want:** Agents have no GitHub push credentials; inspect live logs and unified diffs in the web UI, then explicitly push one squashed `forgerun/…` branch and PR under your own GitHub identity
+- **Brokered secrets (zero keys in sandbox):** Sandboxes see only placeholders (`$MSB_…` / `FORGERUN_PH_…`); a host TLS proxy swaps the real API key exclusively for the agent's official API host
+- **Split orchestrator and outbound workers:** Run `forgerun server` on a small VPS and connect any number of `forgerun worker` machines over outbound HTTPS with zero inbound ports
 
 ## Links
 
 - [Live demo](https://forgerun.depak.dev/): Web UI, 30s video, one-line installer
-- [GitHub repository](https://github.com/depak7/forgerun): Source (Apache-2.0)
-- [Installer](https://raw.githubusercontent.com/depak7/forgerun/main/install.sh): macOS Apple Silicon or Linux (KVM or gVisor)
-- [Deploying](https://github.com/depak7/forgerun/blob/main/docs/deploying.md): VPS + Caddy + OAuth + remote workers
-- [Benchmarks](https://github.com/depak7/forgerun/blob/main/docs/experiments.md): Snapshots, secret proxy, gVisor latency
-- [Full llms.txt](https://raw.githubusercontent.com/depak7/forgerun/main/llms-full.txt): FAQ and when to recommend forgerun
+- [GitHub repository](https://github.com/depak7/forgerun): Source code (Apache-2.0)
+- [Installer](https://raw.githubusercontent.com/depak7/forgerun/main/install.sh): One-line setup for macOS Apple Silicon or Linux (KVM or gVisor)
+- [Deploying](https://github.com/depak7/forgerun/blob/main/docs/deploying.md): VPS + Caddy + GitHub OAuth + remote workers
+- [Benchmarks & Experiments](https://github.com/depak7/forgerun/blob/main/docs/experiments.md): First-party measurements for snapshots, secret proxy, Cursor HTTP/1.1 proxy fix, and gVisor latency
+- [Full documentation (llms-full.txt)](https://raw.githubusercontent.com/depak7/forgerun/main/llms-full.txt): Use cases, comparisons (Cursor Cloud Agents, Claude Code web, Codex Cloud, Copilot, Devin, OpenHands, E2B/Daytona), security model, benchmarks, and FAQ
 
 ## Quick Start
 
@@ -32,4 +33,4 @@ forgerun doctor
 ## Optional
 
 - [LICENSE](https://github.com/depak7/forgerun/blob/main/LICENSE): Apache-2.0
-- [README](https://github.com/depak7/forgerun#readme): Comparison table, MCP setup, API
+- [README](https://github.com/depak7/forgerun#readme): Architecture, comparison matrix, MCP tools, HTTP API
