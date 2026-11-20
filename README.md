@@ -227,7 +227,7 @@ start without it.
 | Variable | What for |
 |---|---|
 | `FORGERUN_USERNAME`, `FORGERUN_PASSWORD` | your sign-in (the password: at least 12 characters). A browser login lasts 30 days; after 5 failed sign-ins an address waits 15 minutes |
-| `FORGERUN_ALLOW_FROM` | only these addresses may connect, e.g. `127.0.0.1,100.64.0.0/10` (your tailnet). Unset: any, behind sign-in |
+| `FORGERUN_ALLOW_FROM` | only these addresses may connect, e.g. `127.0.0.1,192.168.1.0/24`. Unset: any, behind sign-in |
 | `FORGERUN_PUBLIC_URL` | where browsers reach forgerun, e.g. `https://forgerun.example.com` |
 | `FORGERUN_LANDING_ONLY` | `true` serves only the public landing page: no API, no sign-in, no database needed |
 | `FORGERUN_ANALYTICS_WEBSITE_ID` | a website ID for the analytics script at `cloud.umami.is`: the pages load it. Unset (the default), they load no analytics |

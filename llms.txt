@@ -19,7 +19,7 @@ forgerun is a single Go binary with an embedded React web UI and JSON API. It is
 - [Live demo](https://forgerun.depak.dev/): Web UI, 30s video, one-line installer
 - [GitHub repository](https://github.com/depak7/forgerun): Source code (Apache-2.0)
 - [Installer](https://raw.githubusercontent.com/depak7/forgerun/main/install.sh): One-line setup for macOS Apple Silicon or Linux (KVM or gVisor)
-- [Deploying](https://github.com/depak7/forgerun/blob/main/docs/deploying.md): VPS + Caddy + GitHub OAuth + remote workers
+- [Deploying](https://github.com/depak7/forgerun/blob/main/docs/deploying.md): one machine, or a server with remote workers; sign-in with a username and password
 - [Benchmarks & Experiments](https://github.com/depak7/forgerun/blob/main/docs/experiments.md): First-party measurements for snapshots, secret proxy, Cursor HTTP/1.1 proxy fix, and gVisor latency
 - [Full documentation (llms-full.txt)](https://raw.githubusercontent.com/depak7/forgerun/main/llms-full.txt): Use cases, comparisons (Cursor Cloud Agents, Claude Code web, Codex Cloud, Copilot, Devin, OpenHands, E2B/Daytona), security model, benchmarks, and FAQ
 

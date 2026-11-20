@@ -6,11 +6,8 @@ other machines.
 ## All on one machine
 
 `forgerun serve` runs the orchestrator and the VMs in one process. By default only that
-machine can open it (`http://localhost:8080`). To open it from your other devices, pick one:
-
-**Only your own devices: Tailscale.** Nothing is exposed to the internet. Install
-[Tailscale](https://tailscale.com) on this machine and on your devices, then listen on this
-machine's Tailscale address. Off `127.0.0.1`, forgerun needs your sign-in in its `.env`:
+machine can open it (`http://localhost:8080`). To open it from other devices, set your
+sign-in in its `.env` and listen on every address:
 
 ```sh
 FORGERUN_USERNAME=…
@@ -18,16 +15,13 @@ FORGERUN_PASSWORD=…                         # at least 12 characters
 ```
 
 ```sh
-tailscale up
-./forgerun serve -addr "$(tailscale ip -4):8080"
+./forgerun serve -addr 0.0.0.0:8080
 ```
 
-Then open `http://<that address>:8080` on any of your devices.
-
-**From anywhere: a Cloudflare tunnel.** You get an HTTPS address, such as
-`https://forgerun.example.com`, without opening ports on your router. Anyone who knows it
-reaches the sign-in page. Use a **named** tunnel, whose address stays the same (a quick
-tunnel's changes every run):
+Then open `http://<the machine's IP>:8080`. That's plain HTTP: your password and login
+cookie cross the network unencrypted. For HTTPS, put a tunnel or proxy of your choice in
+front. For example, a Cloudflare tunnel gives an HTTPS address without opening ports
+(a **named** tunnel keeps its address; a quick tunnel's changes every run):
 
 ```sh
 brew install cloudflared
@@ -36,8 +30,9 @@ cloudflared tunnel route dns forgerun forgerun.example.com
 cloudflared tunnel run --url http://localhost:8080 forgerun
 ```
 
-The tunnel connects to forgerun on `127.0.0.1`, so forgerun can't tell it's reachable
-from the internet: set the sign-in yourself, with the address:
+A tunnel connects to forgerun on `127.0.0.1`, so with `serve` left on its default address
+forgerun can't tell it's reachable from the internet: set the sign-in yourself, with the
+address:
 
 ```sh
 FORGERUN_USERNAME=…
@@ -47,34 +42,32 @@ FORGERUN_PUBLIC_URL=https://forgerun.example.com
 
 ## The orchestrator on a server, workers elsewhere
 
-The **orchestrator** runs on a small server with a domain and HTTPS, and one or more
-**workers** on machines with virtualization (your Mac is fine). Workers dial out to the
-orchestrator, so nothing needs opening on them, and turns wait in the queue while no
-worker is connected.
+The **orchestrator** runs on a small server, and one or more **workers** on machines with
+virtualization (your Mac is fine). Workers dial out to the orchestrator, so nothing needs
+opening on them, and turns wait in the queue while no worker is connected.
 
 ```
-browsers ──HTTPS──▶  forgerun server  (VPS: Caddy · forgerun · Postgres)
+browsers ──HTTP(S)──▶  forgerun server  (VPS: forgerun · Postgres)
                           ▲
-                          └── HTTPS, outbound ──  forgerun worker  (your Mac: microVMs)
+                          └── HTTP(S), outbound ──  forgerun worker  (your Mac: microVMs)
 ```
 
 ### 1. The orchestrator
 
-Any small Linux VPS with Docker works (1 vCPU, 1 GB is plenty: it runs no VMs). Point a
-DNS name at it, for example `forgerun.example.com`, and open ports 80 and 443.
-
-On the server:
+Any small Linux VPS with Docker works (1 vCPU, 1 GB is plenty: it runs no VMs). Open
+port 8080. On the server:
 
 ```sh
 git clone https://github.com/depak7/forgerun && cd forgerun/deploy
-cp .env.example .env && chmod 600 .env    # fill it in: domain, secrets, your username and password
+cp .env.example .env && chmod 600 .env    # fill it in: secrets, your username and password
 docker compose up -d --build
 docker compose logs -f forgerun           # "forgerun orchestrator serving"
 ```
 
-Caddy gets the HTTPS certificate by itself. Open `https://forgerun.example.com` and sign in
-with `FORGERUN_USERNAME` and `FORGERUN_PASSWORD`. Settings shows "No worker is connected"
-until step 2.
+Open `http://<the server's IP>:8080` and sign in with `FORGERUN_USERNAME` and
+`FORGERUN_PASSWORD`. Settings shows "No worker is connected" until step 2. As on one
+machine, that's plain HTTP; for HTTPS, put a tunnel or proxy in front, and set
+`FORGERUN_PUBLIC_URL` to its address.
 
 ### 2. A worker on your Mac or a Linux machine
 
@@ -92,7 +85,7 @@ curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | s
 Without a terminal, answer ahead:
 
 ```sh
-FORGERUN_ROLE=worker FORGERUN_SERVER=https://… FORGERUN_WORKER_TOKEN=… sh install.sh
+FORGERUN_ROLE=worker FORGERUN_SERVER=http://<the server's IP>:8080 FORGERUN_WORKER_TOKEN=… sh install.sh
 ```
 
 Its settings are in `~/.forgerun-worker.env`.
@@ -102,7 +95,7 @@ Or by hand:
 ```sh
 make build                                  # builds ./forgerun
 cat > ~/.forgerun-worker.env <<'ENV'
-FORGERUN_SERVER=https://forgerun.example.com
+FORGERUN_SERVER=http://<the server's IP>:8080   # or its https:// address
 FORGERUN_WORKER_TOKEN=…                     # the same value as on the server
 CURSOR_API_KEY=…
 CLAUDE_CODE_OAUTH_TOKEN=…                   # from: claude setup-token
@@ -127,15 +120,13 @@ thread sticks to the worker holding its VM.
 - **Sign-in.** forgerun has one owner: `FORGERUN_USERNAME` and `FORGERUN_PASSWORD` (at
   least 12 characters). It won't listen on an address other machines can reach without
   them. A browser login lasts 30 days, or until you sign out. After 5 failed sign-ins in
-  a row, an address waits 15 minutes; behind Caddy every request comes from Caddy, so the
-  wait applies to everyone, you included: use a long random password.
+  a row, an address waits 15 minutes; behind a tunnel or proxy every request comes from
+  it, so the wait applies to everyone, you included: use a long random password.
 - **Tools.** For `forgerun mcp` and scripts, make a personal token in Settings and pass it
   as `FORGERUN_TOKEN`. Revoke one there and it stops working at once.
 - **Fewer addresses.** `FORGERUN_ALLOW_FROM` (IPs or ranges, comma-separated) refuses
   every other address before sign-in. It sees the address that connects to forgerun, so
-  behind a proxy (Caddy here) it sees only the proxy: limit addresses in the proxy
-  instead. Simplest of all is no public address: put the server on a private network
-  such as Tailscale and set `FORGERUN_ALLOW_FROM=100.64.0.0/10`.
+  behind a tunnel or proxy it sees only that: limit addresses there instead.
 - **What a VM can reach.** Agents run arbitrary code inside their microVM, with network
   access. They never see API keys or GitHub tokens: agent keys are swapped in by a proxy,
   and private repos are fetched on the worker's host and copied in.
