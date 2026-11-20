@@ -76,6 +76,8 @@ OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY (pi and prime); also
 GEMINI_API_KEY, XAI_API_KEY, PRIME_API_KEY (prime). serve also
 needs GITHUB_TOKEN to push threads' branches and open pull requests.
 server and worker share FORGERUN_WORKER_TOKEN; agent keys belong on the workers.
+FORGERUN_USERNAME and FORGERUN_PASSWORD sign the owner in (required off 127.0.0.1);
+FORGERUN_ALLOW_FROM limits who may connect; FORGERUN_LANDING_ONLY=true serves only the landing page.
 `)
 	os.Exit(64)
 }

@@ -85,8 +85,8 @@ microVMs) and [gVisor](https://gvisor.dev). forgerun isn't a sandbox provider: i
 runs around the agents (sessions, review, pushing, workers, sign-in). With gVisor, which
 has no key proxy of its own, forgerun's (`internal/secretproxy`) keeps keys out.
 
-> Status: early. It works end to end (sign-in with GitHub, per-user limits, workers on
-> other machines), and things still change quickly.
+> Status: early. It works end to end (sign-in, MCP, workers on other machines), and
+> things still change quickly.
 
 ## How it compares
 
@@ -220,16 +220,16 @@ The token never enters the sandbox: the agent sees a placeholder, and the proxy 
 only for Anthropic's API. It's your personal subscription, so use it for your own tasks, not as a shared key for
 other people. If it leaks, revoke it from your Claude account and make a new one.
 
-**Sign-in (optional).** Without these, forgerun runs in local mode: no accounts, everything
-is yours. With them, people sign in with GitHub and see only their own threads.
+**Sign-in.** forgerun has one owner. On `127.0.0.1` (the default) sign-in is optional:
+without it, forgerun runs in local mode. On an address other machines can reach, it won't
+start without it.
 
 | Variable | What for |
 |---|---|
-| `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | a GitHub OAuth App (callback: `<FORGERUN_PUBLIC_URL>/auth/github/callback`) |
+| `FORGERUN_USERNAME`, `FORGERUN_PASSWORD` | your sign-in (the password: at least 12 characters). A browser login lasts 30 days; after 5 failed sign-ins an address waits 15 minutes |
+| `FORGERUN_ALLOW_FROM` | only these addresses may connect, e.g. `127.0.0.1,100.64.0.0/10` (your tailnet). Unset: any, behind sign-in |
 | `FORGERUN_PUBLIC_URL` | where browsers reach forgerun, e.g. `https://forgerun.example.com` |
-| `FORGERUN_SECRET_KEY` | encrypts users' GitHub tokens at rest: `openssl rand -hex 32` |
-| `FORGERUN_ADMINS` | GitHub usernames that see everything and the settings |
-| `FORGERUN_HIDE_SIGN_IN` | `true` keeps the sign-in buttons off the landing page; signing in still works at `/auth/github/login` |
+| `FORGERUN_LANDING_ONLY` | `true` serves only the public landing page: no API, no sign-in, no database needed |
 | `FORGERUN_ANALYTICS_WEBSITE_ID` | a website ID for the analytics script at `cloud.umami.is`: the pages load it. Unset (the default), they load no analytics |
 
 ### Useful `serve` flags
@@ -285,8 +285,8 @@ flowchart LR
   a crashed run left behind when it starts.
 - Settings lists the connected workers.
 
-To deploy it for other people (orchestrator on a server with HTTPS and sign-in, a worker on
-your machine), see [docs/deploying.md](docs/deploying.md): a Dockerfile and a compose file
+To deploy it on a server (orchestrator with HTTPS and sign-in, a worker on your machine),
+see [docs/deploying.md](docs/deploying.md): a Dockerfile and a compose file
 with automatic HTTPS are included (`deploy/`).
 
 ## Drive forgerun from another agent (MCP)
@@ -353,6 +353,7 @@ The UI uses the same JSON API (`{"success": true, "data": …}`):
 | `GET /api/repos/branches?repo=…` | a repo's default branch and up to 100 of its branches |
 | `POST /api/folders?name=…` | upload a folder (a gzipped tar) to start threads on; `&repo=…&base=…&branch=…` for a GitHub repo's |
 | `GET`/`POST /api/tokens`, `DELETE /api/tokens/{id}` | personal tokens (from a browser login); send one as `Authorization: Bearer frt_…` |
+| `POST /auth/login`, `/auth/logout` | sign a browser in (`{username, password}`) and out |
 | `POST /api/tasks/{id}/followups` | the next message in a thread |
 | `POST /api/tasks/{id}/cancel` | stop a queued or running turn |
 | `GET /api/tasks/{id}/thread` | every turn of a thread |
@@ -393,7 +394,6 @@ internal/api/       HTTP handlers, sign-in and personal tokens
 internal/handoff/   forgerun mcp's tools (handoff and orchestration) and their API client
 internal/mcp/       a minimal MCP server (stdio)
 internal/capacity/  what a machine can run: free CPUs and memory
-internal/seal/      encrypting users' GitHub tokens at rest
 internal/webui/     serving the built UI from the binary
 web/                the React UI (embedded with -tags webui)
 images/             agent VM images

@@ -21,8 +21,7 @@ services:
 
   forgerun:
     build: ..
-    # Per-user limits: -user-live (waiting or running at once), -user-turns-per-day.
-    command: ["server", "-addr", "0.0.0.0:8080", "-out", "/home/forgerun/out", "-user-live", "1", "-user-turns-per-day", "20"]
+    command: ["server", "-addr", "0.0.0.0:8080", "-out", "/home/forgerun/out"]
     env_file: .env
     environment:
       FORGERUN_DATABASE_URL: postgres://forgerun:${POSTGRES_PASSWORD}@postgres:5432/forgerun?sslmode=disable

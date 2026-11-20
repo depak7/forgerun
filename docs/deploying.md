@@ -1,4 +1,4 @@
-# Deploying forgerun for other people
+# Deploying forgerun on a server
 
 The shape that works best: the **orchestrator** on a small server with a domain and
 HTTPS, and one or more **workers** on machines with virtualization (your Mac is fine).
@@ -16,26 +16,18 @@ browsers ──HTTPS──▶  forgerun server  (VPS: Caddy · forgerun · Postg
 Any small Linux VPS with Docker works (1 vCPU, 1 GB is plenty: it runs no VMs). Point a
 DNS name at it, for example `forgerun.example.com`, and open ports 80 and 443.
 
-**Create a GitHub OAuth App** (github.com → Settings → Developer settings → OAuth Apps →
-New OAuth App):
-
-| Field | Value |
-|---|---|
-| Homepage URL | `https://forgerun.example.com` |
-| Authorization callback URL | `https://forgerun.example.com/auth/github/callback` |
-
-Generate a client secret. Then, on the server:
+On the server:
 
 ```sh
 git clone https://github.com/depak7/forgerun && cd forgerun/deploy
-cp .env.example .env && chmod 600 .env    # fill it in: domain, secrets, OAuth app, admins
+cp .env.example .env && chmod 600 .env    # fill it in: domain, secrets, your username and password
 docker compose up -d --build
 docker compose logs -f forgerun           # "forgerun orchestrator serving"
 ```
 
-Caddy gets the HTTPS certificate by itself. Open `https://forgerun.example.com`, sign in
-with GitHub, and you're the admin (your username is in `FORGERUN_ADMINS`). Settings shows
-"No worker is connected" until step 2.
+Caddy gets the HTTPS certificate by itself. Open `https://forgerun.example.com` and sign in
+with `FORGERUN_USERNAME` and `FORGERUN_PASSWORD`. Settings shows "No worker is connected"
+until step 2.
 
 ## 2. A worker on your Mac or a Linux machine
 
@@ -78,22 +70,25 @@ while it's away wait in the queue for it.
 More workers can connect with the same token; each takes turns from the queue, and a
 thread sticks to the worker holding its VM.
 
-## 3. Before you invite people
+## 3. Keeping it to yourself
 
-- **Limits.** Testers run on your agent keys. The defaults are 1 turn waiting or running
-  per person and 20 a day; change them in `deploy/docker-compose.yml`'s `command`
-  (`-user-live`, `-user-turns-per-day`). Admins aren't limited.
-- **Pause switch.** Settings → Usage → `[ pause new tasks ]` stops new work for everyone
-  but admins, at once; running turns carry on.
-- **What testers grant.** Signing in asks GitHub for `repo` (their repositories, to clone
-  private ones and push branches and pull requests as them) and `read:user`. Their tokens
-  are stored encrypted with `FORGERUN_SECRET_KEY`; keep that key, or everyone must sign in
-  again. They can revoke access in GitHub → Settings → Applications.
+- **Sign-in.** forgerun has one owner: `FORGERUN_USERNAME` and `FORGERUN_PASSWORD` (at
+  least 12 characters). It won't listen on an address other machines can reach without
+  them. A browser login lasts 30 days, or until you sign out. After 5 failed sign-ins in
+  a row, an address waits 15 minutes; behind Caddy every request comes from Caddy, so the
+  wait applies to everyone, you included: use a long random password.
+- **Tools.** For `forgerun mcp` and scripts, make a personal token in Settings and pass it
+  as `FORGERUN_TOKEN`. Revoke one there and it stops working at once.
+- **Fewer addresses.** `FORGERUN_ALLOW_FROM` (IPs or ranges, comma-separated) refuses
+  every other address before sign-in. It sees the address that connects to forgerun, so
+  behind a proxy (Caddy here) it sees only the proxy: limit addresses in the proxy
+  instead. Simplest of all is no public address: put the server on a private network
+  such as Tailscale and set `FORGERUN_ALLOW_FROM=100.64.0.0/10`.
 - **What a VM can reach.** Agents run arbitrary code inside their microVM, with network
   access. They never see API keys or GitHub tokens: agent keys are swapped in by a proxy,
   and private repos are fetched on the worker's host and copied in.
-- **Secrets to guard:** `.env` on the server (OAuth secret, `FORGERUN_SECRET_KEY`,
-  `GITHUB_TOKEN`, `FORGERUN_WORKER_TOKEN`) and the worker's env file (agent keys, worker
+- **Secrets to guard:** `.env` on the server (`FORGERUN_PASSWORD`, `GITHUB_TOKEN`,
+  `FORGERUN_WORKER_TOKEN`) and the worker's env file (agent keys, worker
   token). Anyone with the worker token can pretend to be a worker and receive turns
   (including private repos' fetch tokens): rotate it if it leaks.
 
@@ -126,9 +121,9 @@ with a managed Postgres from the same platform or elsewhere. Build from the repo
 | Variable | |
 |---|---|
 | `FORGERUN_DATABASE_URL` (or `DATABASE_URL`) | the Postgres URL, e.g. `…?sslmode=require`. With a connection pooler in front, use its direct (non-pooled) address. |
-| `FORGERUN_PUBLIC_URL` | the app's `https://…` address; the GitHub OAuth App's URLs follow it, as in step 1 |
-| `FORGERUN_SECRET_KEY`, `FORGERUN_WORKER_TOKEN` | `openssl rand -hex 32` each |
-| `GITHUB_TOKEN`, `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `FORGERUN_ADMINS` | as in step 1 |
+| `FORGERUN_PUBLIC_URL` | the app's `https://…` address |
+| `FORGERUN_WORKER_TOKEN` | `openssl rand -hex 32` |
+| `GITHUB_TOKEN`, `FORGERUN_USERNAME`, `FORGERUN_PASSWORD` | as in step 1 |
 | `PORT` | usually set by the platform; forgerun listens on `0.0.0.0:$PORT` (8080 if unset) |
 
 The migrations run on the first start. Workers connect as in step 2, with
@@ -146,7 +141,7 @@ The migrations run on the first start. Workers connect as in step 2, with
 
 `forgerun serve` runs the orchestrator and the VMs in one process. To share it from your
 Mac without a server, put HTTPS in front of it with a **named** tunnel (a quick tunnel's
-address changes every run, and the OAuth callback must stay the same):
+address changes every run):
 
 ```sh
 brew install cloudflared
@@ -155,5 +150,13 @@ cloudflared tunnel route dns forgerun forgerun.example.com
 cloudflared tunnel run --url http://localhost:8080 forgerun
 ```
 
-Set `FORGERUN_PUBLIC_URL=https://forgerun.example.com` and the OAuth App's URLs to match.
-Tailscale Funnel works the same way if you'd rather not use a domain of your own.
+Set `FORGERUN_PUBLIC_URL=https://forgerun.example.com`, and `FORGERUN_USERNAME` and
+`FORGERUN_PASSWORD`: the tunnel makes it reachable from anywhere. To reach it only from
+your own devices, use Tailscale instead and skip the tunnel.
+
+## Just the landing page
+
+`FORGERUN_LANDING_ONLY=true forgerun serve` serves the public landing page, with its
+`robots.txt`, sitemap and `llms.txt`, and nothing else: no API and no sign-in. It needs no
+database, GitHub token or virtualization, so any host that runs the binary (or the
+`Dockerfile`) can serve it. Set `FORGERUN_PUBLIC_URL` to its address.
