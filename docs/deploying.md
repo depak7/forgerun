@@ -5,25 +5,44 @@ other machines.
 
 ## All on one machine
 
-`forgerun serve` runs the orchestrator and the VMs in one process. To reach it from other
-devices, set your sign-in in its `.env`. It won't listen beyond `127.0.0.1` without it, but
-a tunnel reaches it on `127.0.0.1`, so behind one it can't tell: always set it.
+`forgerun serve` runs the orchestrator and the VMs in one process. By default only that
+machine can open it (`http://localhost:8080`). To open it from your other devices, pick one:
+
+**Only your own devices: Tailscale.** Nothing is exposed to the internet. Install
+[Tailscale](https://tailscale.com) on this machine and on your devices, then listen on this
+machine's Tailscale address. Off `127.0.0.1`, forgerun needs your sign-in in its `.env`:
 
 ```sh
 FORGERUN_USERNAME=…
 FORGERUN_PASSWORD=…                         # at least 12 characters
-FORGERUN_PUBLIC_URL=https://forgerun.example.com
 ```
 
-To reach it only from your own devices, put the machine on Tailscale and skip the
-tunnel below. To share it from your Mac without a server, put HTTPS in front of it with a
-**named** tunnel (a quick tunnel's address changes every run):
+```sh
+tailscale up
+./forgerun serve -addr "$(tailscale ip -4):8080"
+```
+
+Then open `http://<that address>:8080` on any of your devices.
+
+**From anywhere: a Cloudflare tunnel.** You get an HTTPS address, such as
+`https://forgerun.example.com`, without opening ports on your router. Anyone who knows it
+reaches the sign-in page. Use a **named** tunnel, whose address stays the same (a quick
+tunnel's changes every run):
 
 ```sh
 brew install cloudflared
 cloudflared tunnel login && cloudflared tunnel create forgerun
 cloudflared tunnel route dns forgerun forgerun.example.com
 cloudflared tunnel run --url http://localhost:8080 forgerun
+```
+
+The tunnel connects to forgerun on `127.0.0.1`, so forgerun can't tell it's reachable
+from the internet: set the sign-in yourself, with the address:
+
+```sh
+FORGERUN_USERNAME=…
+FORGERUN_PASSWORD=…                         # at least 12 characters
+FORGERUN_PUBLIC_URL=https://forgerun.example.com
 ```
 
 ## The orchestrator on a server, workers elsewhere
