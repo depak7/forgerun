@@ -33,12 +33,27 @@ func Files() fs.FS { return files }
 // script; without one the page has no script tag at all, so a self-hosted
 // server sends page views nowhere.
 func Handler(fsys fs.FS, site, analytics string) http.Handler {
+	return handler(fsys, site, analytics, false)
+}
+
+// Landing is Handler for a server that shows only the landing page
+// (FORGERUN_LANDING_ONLY): the page is marked so the app shows nothing
+// else, and its routes are all 404s.
+func Landing(fsys fs.FS, site, analytics string) http.Handler {
+	return handler(fsys, site, analytics, true)
+}
+
+func handler(fsys fs.FS, site, analytics string, landing bool) http.Handler {
 	if fsys == nil {
 		return http.HandlerFunc(placeholder)
 	}
 	// Escaped once: it goes into HTML attributes and XML.
 	site = html.EscapeString(strings.TrimRight(site, "/"))
-	page := strings.NewReplacer("%SITE%", site, "%ANALYTICS%", analyticsTag(analytics))
+	kind := "app"
+	if landing {
+		kind = "landing"
+	}
+	page := strings.NewReplacer("%SITE%", site, "%ANALYTICS%", analyticsTag(analytics), "%PAGE%", kind)
 	files := http.FileServerFS(fsys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -74,7 +89,7 @@ func Handler(fsys fs.FS, site, analytics string) http.Handler {
 		}
 		// Missing static assets and unknown discovery paths must be real 404s,
 		// never a 200 HTML shell (which creates soft 404s and breaks ARD/Well-Known checks).
-		if strings.HasPrefix(name, "assets/") || !isAppRoute(name) {
+		if strings.HasPrefix(name, "assets/") || (landing && name != "") || !isAppRoute(name) {
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("X-Robots-Tag", "noindex")
 			serveIndex(w, fsys, page, http.StatusNotFound)

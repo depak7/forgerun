@@ -10,7 +10,7 @@ import (
 
 // app is a stand-in for the Vite build.
 var app = fstest.MapFS{
-	"index.html":          {Data: []byte(`<!doctype html><link rel="canonical" href="%SITE%/">%ANALYTICS%<div id=root></div>`)},
+	"index.html":          {Data: []byte(`<!doctype html><link rel="canonical" href="%SITE%/">%ANALYTICS%<meta name="forgerun-page" content="%PAGE%"><div id=root></div>`)},
 	"assets/index-abc.js": {Data: []byte("console.log('app')")},
 }
 
@@ -30,6 +30,28 @@ func TestServesTheApp(t *testing.T) {
 		if rec.Header().Get("Cache-Control") != "no-cache" {
 			t.Errorf("%s: index.html must not be cached, got %q", path, rec.Header().Get("Cache-Control"))
 		}
+	}
+}
+
+// Landing-only: the page is marked so the app shows only the landing page,
+// and the app's routes don't exist; the files crawlers read still do.
+func TestLandingOnly(t *testing.T) {
+	h := Landing(app, "https://forgerun.example.com", "")
+	if body := get(h, "/").Body.String(); !strings.Contains(body, `content="landing"`) {
+		t.Errorf("/: %q", body)
+	}
+	for _, path := range []string{"/threads/t-1", "/settings", "/tasks/new"} {
+		if rec := get(h, path); rec.Code != http.StatusNotFound {
+			t.Errorf("%s: %d, want 404", path, rec.Code)
+		}
+	}
+	for _, path := range []string{"/robots.txt", "/sitemap.xml", "/llms.txt", "/assets/index-abc.js"} {
+		if rec := get(h, path); rec.Code != http.StatusOK {
+			t.Errorf("%s: %d", path, rec.Code)
+		}
+	}
+	if body := get(Handler(app, "", ""), "/").Body.String(); !strings.Contains(body, `content="app"`) {
+		t.Errorf("the app's page: %q", body)
 	}
 }
 

@@ -71,6 +71,9 @@ func serveCmd(args []string, orchestratorOnly bool) error {
 		<-ctx.Done()
 		stop()
 	}()
+	if os.Getenv("FORGERUN_LANDING_ONLY") == "true" {
+		return serveLanding(ctx, *addr, log)
+	}
 
 	// Every agent forgerun has an adapter for. Requests choose among them;
 	// credentials are read from the environment only when a task needs one.
@@ -252,6 +255,28 @@ func routes(allow []netip.Prefix, site, analytics string, workers, apiHandler ht
 	mux.Handle("/healthz", apiHandler)
 	mux.Handle("/", webui.Handler(webui.Files(), site, analytics))
 	return api.AllowFrom(allow, mux)
+}
+
+// serveLanding serves only the public landing page (FORGERUN_LANDING_ONLY),
+// with its robots.txt, sitemap and llms.txt: no API, no sign-in, and no
+// database, GitHub token or sandboxes to set up.
+func serveLanding(ctx context.Context, addr string, log *slog.Logger) error {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           webui.Landing(webui.Files(), os.Getenv("FORGERUN_PUBLIC_URL"), os.Getenv("FORGERUN_ANALYTICS_WEBSITE_ID")),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		srv.Shutdown(shutdownCtx)
+	}()
+	log.Info("forgerun serving the landing page only", "addr", addr)
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // tokenWarnBefore is how soon before a GitHub token expires serve warns.
