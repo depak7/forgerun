@@ -1,9 +1,37 @@
-# Deploying forgerun on a server
+# Deploying forgerun
 
-The shape that works best: the **orchestrator** on a small server with a domain and
-HTTPS, and one or more **workers** on machines with virtualization (your Mac is fine).
-Workers dial out to the orchestrator, so nothing needs opening on them, and turns wait in
-the queue while no worker is connected.
+Two ways: everything on one machine, or the orchestrator on a server with workers on
+other machines.
+
+## All on one machine
+
+`forgerun serve` runs the orchestrator and the VMs in one process. To reach it from other
+devices, set your sign-in in its `.env`. It won't listen beyond `127.0.0.1` without it, but
+a tunnel reaches it on `127.0.0.1`, so behind one it can't tell: always set it.
+
+```sh
+FORGERUN_USERNAME=…
+FORGERUN_PASSWORD=…                         # at least 12 characters
+FORGERUN_PUBLIC_URL=https://forgerun.example.com
+```
+
+To reach it only from your own devices, put the machine on Tailscale and skip the
+tunnel below. To share it from your Mac without a server, put HTTPS in front of it with a
+**named** tunnel (a quick tunnel's address changes every run):
+
+```sh
+brew install cloudflared
+cloudflared tunnel login && cloudflared tunnel create forgerun
+cloudflared tunnel route dns forgerun forgerun.example.com
+cloudflared tunnel run --url http://localhost:8080 forgerun
+```
+
+## The orchestrator on a server, workers elsewhere
+
+The **orchestrator** runs on a small server with a domain and HTTPS, and one or more
+**workers** on machines with virtualization (your Mac is fine). Workers dial out to the
+orchestrator, so nothing needs opening on them, and turns wait in the queue while no
+worker is connected.
 
 ```
 browsers ──HTTPS──▶  forgerun server  (VPS: Caddy · forgerun · Postgres)
@@ -11,7 +39,7 @@ browsers ──HTTPS──▶  forgerun server  (VPS: Caddy · forgerun · Postg
                           └── HTTPS, outbound ──  forgerun worker  (your Mac: microVMs)
 ```
 
-## 1. The orchestrator on a server
+### 1. The orchestrator
 
 Any small Linux VPS with Docker works (1 vCPU, 1 GB is plenty: it runs no VMs). Point a
 DNS name at it, for example `forgerun.example.com`, and open ports 80 and 443.
@@ -29,7 +57,7 @@ Caddy gets the HTTPS certificate by itself. Open `https://forgerun.example.com` 
 with `FORGERUN_USERNAME` and `FORGERUN_PASSWORD`. Settings shows "No worker is connected"
 until step 2.
 
-## 2. A worker on your Mac or a Linux machine
+### 2. A worker on your Mac or a Linux machine
 
 The worker needs a Mac with Apple Silicon or a Linux machine. Linux with KVM (`/dev/kvm`)
 runs microVMs; any other Linux machine, such as an ordinary cloud VM, runs gVisor
@@ -42,8 +70,13 @@ runs the worker in the background, now and at every boot:
 curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | sh
 ```
 
-Without a terminal, answer ahead: `FORGERUN_ROLE=worker FORGERUN_SERVER=https://…
-FORGERUN_WORKER_TOKEN=… sh install.sh`. Its settings are in `~/.forgerun-worker.env`.
+Without a terminal, answer ahead:
+
+```sh
+FORGERUN_ROLE=worker FORGERUN_SERVER=https://… FORGERUN_WORKER_TOKEN=… sh install.sh
+```
+
+Its settings are in `~/.forgerun-worker.env`.
 
 Or by hand:
 
@@ -70,7 +103,7 @@ while it's away wait in the queue for it.
 More workers can connect with the same token; each takes turns from the queue, and a
 thread sticks to the worker holding its VM.
 
-## 3. Keeping it to yourself
+### 3. Keeping it to yourself
 
 - **Sign-in.** forgerun has one owner: `FORGERUN_USERNAME` and `FORGERUN_PASSWORD` (at
   least 12 characters). It won't listen on an address other machines can reach without
@@ -136,27 +169,3 @@ The migrations run on the first start. Workers connect as in step 2, with
 - **Sleeping instances:** a connected worker reports in every 2 seconds, which counts as
   traffic. On a database that bills compute time, note that the orchestrator checks the
   queue every few seconds while a worker waits for work.
-
-## All on one machine instead
-
-`forgerun serve` runs the orchestrator and the VMs in one process. To share it from your
-Mac without a server, put HTTPS in front of it with a **named** tunnel (a quick tunnel's
-address changes every run):
-
-```sh
-brew install cloudflared
-cloudflared tunnel login && cloudflared tunnel create forgerun
-cloudflared tunnel route dns forgerun forgerun.example.com
-cloudflared tunnel run --url http://localhost:8080 forgerun
-```
-
-Set `FORGERUN_PUBLIC_URL=https://forgerun.example.com`, and `FORGERUN_USERNAME` and
-`FORGERUN_PASSWORD`: the tunnel makes it reachable from anywhere. To reach it only from
-your own devices, use Tailscale instead and skip the tunnel.
-
-## Just the landing page
-
-`FORGERUN_LANDING_ONLY=true forgerun serve` serves the public landing page, with its
-`robots.txt`, sitemap and `llms.txt`, and nothing else: no API and no sign-in. It needs no
-database, GitHub token or virtualization, so any host that runs the binary (or the
-`Dockerfile`) can serve it. Set `FORGERUN_PUBLIC_URL` to its address.
