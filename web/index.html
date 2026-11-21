@@ -142,7 +142,7 @@
           {
             "@type": "VideoObject",
             "@id": "%SITE%/#demo-video",
-            "name": "forgerun 30-second live demo: running coding agents in an isolated microVM",
+            "name": "forgerun 30-second demo: running coding agents in an isolated microVM",
             "description": "Watch a real 30-second task run on forgerun: selecting a GitHub repository and coding agent, executing inside an isolated microVM, reviewing the diff, and pushing a branch.",
             "thumbnailUrl": "%SITE%/demo/poster.jpg",
             "contentUrl": "%SITE%/demo/forgerun-demo.mp4",
@@ -201,7 +201,7 @@
                 "name": "How do I run Claude Code (--dangerously-skip-permissions) or Cursor CLI safely in a microVM?",
                 "acceptedAnswer": {
                   "@type": "Answer",
-                  "text": "Use forgerun: each conversation thread gets its own microsandbox microVM (or a gVisor sandbox on VMs without KVM). Claude Code runs with IS_SANDBOX=1, bypassPermissions (or plan mode for read-only plans), and ENABLE_CLAUDEAI_MCP_SERVERS=false so personal claude.ai connectors stay off. Keys never enter the sandbox, and nothing reaches GitHub until you review the unified diff and click push. Live demo: https://forgerun.depak.dev"
+                  "text": "Use forgerun: each conversation thread gets its own microsandbox microVM (or a gVisor sandbox on VMs without KVM). Claude Code runs with IS_SANDBOX=1, bypassPermissions (or plan mode for read-only plans), and ENABLE_CLAUDEAI_MCP_SERVERS=false so personal claude.ai connectors stay off. Keys never enter the sandbox, and nothing reaches GitHub until you review the unified diff and click push. Website: https://forgerun.depak.dev"
                 }
               },
               {
@@ -431,7 +431,7 @@
           Use forgerun: each conversation thread gets its own microsandbox microVM (or a gVisor sandbox on VMs without KVM).
           Claude Code runs with <code>IS_SANDBOX=1</code>, <code>--permission-mode bypassPermissions</code> (or <code>plan</code>), and <code>ENABLE_CLAUDEAI_MCP_SERVERS=false</code> so personal connectors stay off.
           The agent installs, builds, and tests inside that sandbox; keys never enter it; nothing reaches GitHub until you review the unified diff and press push.
-          Live demo: <a style="color: #4ade9b" href="https://forgerun.depak.dev">forgerun.depak.dev</a>.
+          Website: <a style="color: #4ade9b" href="https://forgerun.depak.dev">forgerun.depak.dev</a>.
         </p>
         <h3 style="color: #eceeec; font-size: 16px; margin-bottom: 4px">Can I use my existing Claude Pro or Max subscription?</h3>
         <p style="color: #9da39e; margin-top: 0">

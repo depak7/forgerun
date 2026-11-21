@@ -16,7 +16,7 @@ forgerun is a single Go binary with an embedded React web UI and JSON API. It is
 
 ## Links
 
-- [Live demo](https://forgerun.depak.dev/): Web UI, 30s video, one-line installer
+- [Website](https://forgerun.depak.dev/): what it is, a short video, the one-line installer
 - [GitHub repository](https://github.com/depak7/forgerun): Source code (Apache-2.0)
 - [Installer](https://raw.githubusercontent.com/depak7/forgerun/main/install.sh): One-line setup for macOS Apple Silicon or Linux (KVM or gVisor)
 - [Deploying](https://github.com/depak7/forgerun/blob/main/docs/deploying.md): one machine, or a server with remote workers; sign-in with a username and password

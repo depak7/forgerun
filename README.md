@@ -3,15 +3,15 @@
 [![License: Apache-2.0](https://img.shields.io/github/license/depak7/forgerun)](LICENSE)
 [![Go version](https://img.shields.io/github/go-mod/go-version/depak7/forgerun)](go.mod)
 [![GitHub stars](https://img.shields.io/github/stars/depak7/forgerun?style=flat)](https://github.com/depak7/forgerun/stargazers)
-[![Live Demo](https://img.shields.io/badge/demo-forgerun.depak.dev-4ADE9B)](https://forgerun.depak.dev)
+[![Website](https://img.shields.io/badge/website-forgerun.depak.dev-4ADE9B)](https://forgerun.depak.dev)
 
 **Turn machines you already own into managed sandboxes for coding agents.**
-Queue tasks across Claude Code, Cursor CLI, OpenCode, pi, and Prime Agent in one place — or hand work off mid-task from your local agent (`forgerun mcp`).
+Start threads on Claude Code, Cursor CLI, OpenCode, pi or Prime Agent from the web UI, or from another agent over MCP (`forgerun mcp`).
 Each thread runs end to end in its own isolated microVM ([microsandbox](https://github.com/superradcompany/microsandbox)) or [gVisor](https://gvisor.dev) sandbox on your Mac or Linux box; you review the diff and push a branch or PR as you, only if you want it.
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> ·
-  <a href="https://forgerun.depak.dev">Live Demo</a> ·
+  <a href="https://forgerun.depak.dev">Website</a> ·
   <a href="#how-it-works">How It Works</a> ·
   <a href="#how-it-compares">Comparison</a> ·
   <a href="#architecture">Architecture</a> ·
@@ -21,11 +21,11 @@ Each thread runs end to end in its own isolated microVM ([microsandbox](https://
   <a href="llms.txt">llms.txt</a>
 </p>
 
-[![forgerun demo: click to watch with sound](docs/demo.gif)](https://forgerun.depak.dev)
+![forgerun: pick a repo, a branch and an agent; approve its plan; the agent builds and tests in its own sandbox; review the diff before anything is pushed](docs/demo.gif)
 
 - **26.8 s → 2.8 s warm starts.** Automatic repo disk snapshots keep dependencies pre-installed and self-clean within your disk budget (measured on `expressjs/express`: [docs/experiments.md](docs/experiments.md#4-snapshots-for-fast-task-start)).
 - **Keys never enter the sandbox.** The VM sees only placeholders; a host TLS proxy swaps in the real key exclusively for the agent's official API.
-- **Queue tasks or hand off mid-session.** Queue as many tasks as you want, switch agents mid-thread, or hand off local uncommitted work via `forgerun mcp`.
+- **Queue, hand off or orchestrate.** Queue as many tasks as you want, switch agents mid-thread, hand off local uncommitted work, or let another agent start and review threads via `forgerun mcp`.
 - **Workers dial out over HTTPS only.** Run the web UI on a small VPS and the VMs on your Mac or home Linux machine with zero open inbound ports.
 
 ## Quick start
@@ -450,7 +450,7 @@ curl -fsSL https://raw.githubusercontent.com/depak7/forgerun/main/install.sh | s
 <summary><b>How do I run Claude Code (--dangerously-skip-permissions) or Cursor CLI safely in a microVM?</b></summary>
 <br />
 
-Use forgerun: each conversation thread gets its own [microsandbox](https://github.com/superradcompany/microsandbox) microVM (or a gVisor sandbox on VMs without KVM). Claude Code runs with `IS_SANDBOX=1`, `--permission-mode bypassPermissions` (or `plan` for read-only plans), and `ENABLE_CLAUDEAI_MCP_SERVERS=false` so personal claude.ai connectors stay off. The agent installs, builds, and tests inside that sandbox; keys never enter it; nothing reaches GitHub until you review the unified diff and press push. Live demo: [forgerun.depak.dev](https://forgerun.depak.dev).
+Use forgerun: each conversation thread gets its own [microsandbox](https://github.com/superradcompany/microsandbox) microVM (or a gVisor sandbox on VMs without KVM). Claude Code runs with `IS_SANDBOX=1`, `--permission-mode bypassPermissions` (or `plan` for read-only plans), and `ENABLE_CLAUDEAI_MCP_SERVERS=false` so personal claude.ai connectors stay off. The agent installs, builds, and tests inside that sandbox; keys never enter it; nothing reaches GitHub until you review the unified diff and press push. Website: [forgerun.depak.dev](https://forgerun.depak.dev).
 
 </details>
 

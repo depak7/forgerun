@@ -71,7 +71,7 @@ All measurements are documented with reproduction steps in [`docs/experiments.md
 
 ## Links
 
-- [Live demo](https://forgerun.depak.dev/)
+- [Website](https://forgerun.depak.dev/)
 - [GitHub repository](https://github.com/depak7/forgerun)
 - [Short llms.txt](https://raw.githubusercontent.com/depak7/forgerun/main/llms.txt)
 - [Installer](https://raw.githubusercontent.com/depak7/forgerun/main/install.sh)
