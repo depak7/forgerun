@@ -82,6 +82,7 @@ type Env struct {
 
 	Hello      func(ctx context.Context, server, token string) error // the worker token check; ErrTokenRejected if refused
 	Migrations func(ctx context.Context, dbURL string) (applied, total int, err error)
+	Docker     func(ctx context.Context) error // `docker info`: nil = running, ErrDockerNotInstalled = no docker command
 	GitHub     func(ctx context.Context, token string) (login string, expires time.Time, err error)
 	SignIn     func() error // validates the sign-in settings, as serve does at start
 	Agents     []Agent
@@ -116,6 +117,9 @@ func Run(ctx context.Context, role Role, e Env) []Result {
 	}
 	if role == RoleWorker {
 		add(orchestrator(ctx, e))
+	}
+	if role == RoleServe && localDatabase(e) {
+		add(docker(ctx, e))
 	}
 	if role == RoleServe || role == RoleServer {
 		add(database(ctx, e))
@@ -409,6 +413,59 @@ func orchestrator(ctx context.Context, e Env) Result {
 		r.Detail, r.Fix = err.Error(), "check FORGERUN_SERVER, and that the orchestrator is running"
 	}
 	return r
+}
+
+// ErrDockerNotInstalled is what Env.Docker returns when there's no docker
+// command; any other error means Docker is installed but not answering.
+var ErrDockerNotInstalled = errors.New("docker isn't installed")
+
+// docker checks that Docker can run the dev database. Serve keeps its data
+// in Postgres and the dev setup runs it with docker compose, so a dead
+// Docker is usually why the database check can only say "can't connect".
+// A localhost URL doesn't prove Docker runs the database (it may be a
+// native Postgres), so this only ever warns: the database check owns the
+// blocking verdict.
+func docker(ctx context.Context, e Env) Result {
+	r := Result{Name: "docker"}
+	if e.Docker == nil {
+		return skipped(r)
+	}
+	err := e.Docker(ctx)
+	switch {
+	case err == nil:
+		r.Status, r.Detail = Pass, "installed and running"
+	case errors.Is(err, ErrDockerNotInstalled):
+		r.Status, r.Detail = Warn, "not installed"
+		r.Fix = "install Docker (Docker Desktop on a Mac, docker.io or docker-ce on Linux): the dev database runs with docker compose up -d"
+	default:
+		msg, _, _ := strings.Cut(err.Error(), "\n")
+		r.Status, r.Detail = Warn, "installed, but not running: "+msg
+		if e.GOOS == "darwin" {
+			r.Fix = "start Docker Desktop"
+		} else {
+			r.Fix = "start Docker (sudo systemctl start docker), then the database: docker compose up -d"
+		}
+	}
+	return r
+}
+
+// localDatabase reports whether serve's database is on this machine: no URL
+// means the default, the docker compose database on localhost.
+func localDatabase(e Env) bool {
+	raw := cmp.Or(e.Getenv("FORGERUN_DATABASE_URL"), e.Getenv("DATABASE_URL"))
+	if raw == "" {
+		return true
+	}
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return loopback(u.Hostname())
+	}
+	// A key=value DSN instead of a URL.
+	for field := range strings.FieldsSeq(raw) {
+		if k, v, ok := strings.Cut(field, "="); ok && k == "host" {
+			return loopback(v)
+		}
+	}
+	return false
 }
 
 func database(ctx context.Context, e Env) Result {
