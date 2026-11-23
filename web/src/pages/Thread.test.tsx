@@ -75,6 +75,17 @@ const followup = () => screen.getByLabelText("Follow up on this thread") as HTML
 const sendButton = () => screen.getByRole("button", { name: /send/ }) as HTMLButtonElement;
 
 describe("ThreadPage", () => {
+  it("copies the branch name from the header", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.assign(navigator, { clipboard: { writeText } });
+    server([task({})]);
+    renderThread();
+    expect(await screen.findByRole("heading", { name: "Add a test" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "[ copy ]" }));
+    expect(writeText).toHaveBeenCalledWith("forgerun/add-a-test-t1");
+    expect(await screen.findByRole("button", { name: "[ copied ]" })).toBeTruthy();
+  });
+
   it("shows the newest step's output and switches when another step is picked", async () => {
     server([
       task({}),
